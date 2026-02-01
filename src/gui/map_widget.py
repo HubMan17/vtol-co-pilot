@@ -61,12 +61,11 @@ class MapWidget(QWidget):
 <body>
     <div id="map"></div>
     <script>
-        var map = L.map('map').setView([{self.center[0]}, {self.center[1]}], {self.zoom});
+        var map = L.map('map', {{attributionControl: false}}).setView([{self.center[0]}, {self.center[1]}], {self.zoom});
 
         L.tileLayer('https://{{s}}.google.com/vt/lyrs=s,h&x={{x}}&y={{y}}&z={{z}}', {{
             maxZoom: 20,
-            subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
-            attribution: 'Google Hybrid'
+            subdomains: ['mt0', 'mt1', 'mt2', 'mt3']
         }}).addTo(map);
 
         var aircraftSvg = `
