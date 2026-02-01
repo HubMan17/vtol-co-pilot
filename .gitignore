@@ -40,6 +40,11 @@ terrain/
 eeprom.bin
 *.param
 
+# Local development docs (not for repo)
+RULES.md
+PROJECT_PLAN.md
+.claude/
+
 # Temporary files
 *.tmp
 *.temp
