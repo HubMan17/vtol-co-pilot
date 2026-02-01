@@ -1,0 +1,10 @@
+{
+  "rules": [
+    "Write code as a senior developer - clean, efficient, no comments",
+    "Commit messages in English only, no AI/assistant mentions",
+    "At conversation start or after summarization, read RULES.md and current plan",
+    "No unnecessary abstractions or over-engineering",
+    "Follow existing code patterns",
+    "Test critical functionality before commit"
+  ]
+}
