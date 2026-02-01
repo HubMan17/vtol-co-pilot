@@ -44,6 +44,7 @@ eeprom.bin
 RULES.md
 PROJECT_PLAN.md
 .claude/
+config/settings.json
 
 # Temporary files
 *.tmp
