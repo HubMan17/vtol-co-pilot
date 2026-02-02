@@ -36,6 +36,7 @@ class MainWindow(QMainWindow):
         )
         self.route_planner = RoutePlanner()
         self.autopilot = AutopilotManager(self.proxy, config.autopilot)
+        self.autopilot.set_route_planner(self.route_planner)
 
         self._set_position_mode = False
         self._use_dr_position = False
@@ -172,6 +173,7 @@ class MainWindow(QMainWindow):
         self.btn_use_dr.clicked.connect(self._on_use_dr_toggle)
         self.btn_clear_track.clicked.connect(self._on_clear_track)
         self.btn_hdg_hold.clicked.connect(self._on_heading_hold_toggle)
+        self.btn_nav.clicked.connect(self._on_nav_toggle)
 
         self.map_widget.bridge.position_clicked.connect(self._on_map_clicked)
         self.map_widget.set_position_requested.connect(self._on_context_set_position)
@@ -181,6 +183,7 @@ class MainWindow(QMainWindow):
         self.event_bus.subscribe(Event.CONNECTION_LOST, self._on_connection_lost)
         self.event_bus.subscribe(Event.AUTOPILOT_ENGAGE, self._on_autopilot_engage)
         self.event_bus.subscribe(Event.AUTOPILOT_DISENGAGE, self._on_autopilot_disengage)
+        self.event_bus.subscribe(Event.WAYPOINT_REACHED, self._on_waypoint_reached)
 
     def _setup_timer(self):
         self.update_timer = QTimer()
@@ -303,13 +306,40 @@ class MainWindow(QMainWindow):
         else:
             self.autopilot.disengage("Отключено пользователем")
 
+    def _on_nav_toggle(self):
+        if self.btn_nav.isChecked():
+            if self.autopilot.engage_nav():
+                self.btn_nav.setStyleSheet("background-color: #00cc00;")
+                route = self.route_planner.get_route()
+                wp = self.route_planner.get_active_waypoint()
+                if route and wp:
+                    self.statusbar.showMessage(f"Навигация: точка {wp.id}/{len(route.waypoints)}")
+            else:
+                self.btn_nav.setChecked(False)
+                if not self.route_planner.get_route():
+                    self.statusbar.showMessage("Загрузите маршрут для навигации")
+                else:
+                    self.statusbar.showMessage("Не удалось включить навигацию")
+        else:
+            self.autopilot.disengage("Отключено пользователем")
+
     def _on_autopilot_engage(self, data):
         mode = data.get('mode', '')
         if mode == 'HEADING_HOLD':
             self.btn_hdg_hold.setChecked(True)
             self.btn_hdg_hold.setStyleSheet("background-color: #00cc00;")
+            self.btn_nav.setChecked(False)
+            self.btn_nav.setStyleSheet("")
             target = data.get('target', 0)
             self.statusbar.showMessage(f"Удержание курса: {target:.0f}°")
+        elif mode == 'NAV':
+            self.btn_nav.setChecked(True)
+            self.btn_nav.setStyleSheet("background-color: #00cc00;")
+            self.btn_hdg_hold.setChecked(False)
+            self.btn_hdg_hold.setStyleSheet("")
+            wp_id = data.get('waypoint', 0)
+            total = data.get('total', 0)
+            self.statusbar.showMessage(f"Навигация: точка {wp_id}/{total}")
 
     def _on_autopilot_disengage(self, data):
         self.btn_hdg_hold.setChecked(False)
@@ -322,6 +352,12 @@ class MainWindow(QMainWindow):
             self.statusbar.showMessage(f"Автопилот отключён: {reason}")
         else:
             self.statusbar.showMessage("Автопилот отключён")
+
+    def _on_waypoint_reached(self, data):
+        reached = data.get('reached', 0)
+        next_wp = data.get('next', 0)
+        total = self.route_planner.get_waypoint_count()
+        self.statusbar.showMessage(f"Достигнута точка {reached}, следующая: {next_wp}/{total}")
 
     def _update_display(self):
         if not self.proxy.is_connected():

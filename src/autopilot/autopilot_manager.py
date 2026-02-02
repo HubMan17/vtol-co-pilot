@@ -1,11 +1,16 @@
 import time
 from enum import Enum, auto
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from src.mavlink.proxy import MAVLinkProxy
+from src.mavlink.telemetry import LatLon
 from src.core.config import AutopilotConfig
 from src.core.events import EventBus, Event
 from src.autopilot.heading_controller import HeadingController
+from src.navigation.calculations import bearing_to
+
+if TYPE_CHECKING:
+    from src.navigation.route_planner import RoutePlanner
 
 
 class AutopilotMode(Enum):
@@ -29,11 +34,16 @@ class AutopilotManager:
 
         self._mode = AutopilotMode.MANUAL
         self._heading_controller = HeadingController(config)
+        self._route_planner: Optional['RoutePlanner'] = None
 
         self._last_update_time = 0.0
         self._disengage_reason = ""
+        self._active_waypoint_id = -1
 
         self._event_bus.subscribe(Event.CONNECTION_LOST, self._on_connection_lost)
+
+    def set_route_planner(self, route_planner: 'RoutePlanner'):
+        self._route_planner = route_planner
 
     def engage_heading_hold(self, target_heading: float = None) -> bool:
         if not self._proxy.is_connected():
@@ -53,6 +63,35 @@ class AutopilotManager:
         self._event_bus.emit(Event.AUTOPILOT_ENGAGE, {
             'mode': 'HEADING_HOLD',
             'target': target_heading
+        })
+
+        return True
+
+    def engage_nav(self) -> bool:
+        if not self._proxy.is_connected():
+            return False
+
+        if not self._route_planner:
+            return False
+
+        route = self._route_planner.get_route()
+        if not route or not route.waypoints:
+            return False
+
+        wp = self._route_planner.get_active_waypoint()
+        if not wp:
+            return False
+
+        self._heading_controller.reset()
+        self._active_waypoint_id = wp.id
+
+        self._mode = AutopilotMode.NAV
+        self._last_update_time = time.time()
+
+        self._event_bus.emit(Event.AUTOPILOT_ENGAGE, {
+            'mode': 'NAV',
+            'waypoint': wp.id,
+            'total': len(route.waypoints)
         })
 
         return True
@@ -103,6 +142,49 @@ class AutopilotManager:
         dt = current_time - self._last_update_time if self._last_update_time > 0 else 0.05
 
         if self._mode == AutopilotMode.HEADING_HOLD:
+            roll_pwm = self._heading_controller.update(telemetry.heading, dt)
+
+            self._proxy.send_rc_override({
+                1: roll_pwm,
+                2: 0,
+                3: 0,
+                4: 0
+            })
+
+        elif self._mode == AutopilotMode.NAV:
+            if not self._route_planner:
+                self.disengage("Маршрут не задан")
+                return False
+
+            position = telemetry.position
+            if not position:
+                self._last_update_time = current_time
+                return True
+
+            if self._route_planner.is_waypoint_reached(position):
+                old_wp = self._route_planner.get_active_waypoint()
+                self._route_planner.next_waypoint()
+                new_wp = self._route_planner.get_active_waypoint()
+
+                if new_wp and new_wp.id != self._active_waypoint_id:
+                    self._active_waypoint_id = new_wp.id
+                    self._event_bus.emit(Event.WAYPOINT_REACHED, {
+                        'reached': old_wp.id if old_wp else 0,
+                        'next': new_wp.id
+                    })
+
+                if self._route_planner.is_route_complete():
+                    self.disengage("Маршрут завершён")
+                    return False
+
+            wp = self._route_planner.get_active_waypoint()
+            if not wp:
+                self.disengage("Нет активной точки")
+                return False
+
+            target_bearing = bearing_to(position.lat, position.lon, wp.lat, wp.lon)
+            self._heading_controller.set_target_heading(target_bearing)
+
             roll_pwm = self._heading_controller.update(telemetry.heading, dt)
 
             self._proxy.send_rc_override({
