@@ -12,6 +12,7 @@ from src.mavlink.proxy import MAVLinkProxy
 from src.mavlink.telemetry import LatLon
 from src.navigation.dead_reckoning import DeadReckoningEngine
 from src.navigation.route_planner import RoutePlanner
+from src.autopilot.autopilot_manager import AutopilotManager, AutopilotMode
 from src.gui.status_panel import StatusPanel
 from src.gui.map_widget import MapWidget
 
@@ -34,6 +35,7 @@ class MainWindow(QMainWindow):
             drift_coefficient=config.navigation.drift_coefficient
         )
         self.route_planner = RoutePlanner()
+        self.autopilot = AutopilotManager(self.proxy, config.autopilot)
 
         self._set_position_mode = False
         self._use_dr_position = False
@@ -169,6 +171,7 @@ class MainWindow(QMainWindow):
         self.btn_load_route.clicked.connect(self._on_load_route)
         self.btn_use_dr.clicked.connect(self._on_use_dr_toggle)
         self.btn_clear_track.clicked.connect(self._on_clear_track)
+        self.btn_hdg_hold.clicked.connect(self._on_heading_hold_toggle)
 
         self.map_widget.bridge.position_clicked.connect(self._on_map_clicked)
         self.map_widget.set_position_requested.connect(self._on_context_set_position)
@@ -176,6 +179,8 @@ class MainWindow(QMainWindow):
 
         self.event_bus.subscribe(Event.CONNECTION_RESTORED, self._on_connection_restored)
         self.event_bus.subscribe(Event.CONNECTION_LOST, self._on_connection_lost)
+        self.event_bus.subscribe(Event.AUTOPILOT_ENGAGE, self._on_autopilot_engage)
+        self.event_bus.subscribe(Event.AUTOPILOT_DISENGAGE, self._on_autopilot_disengage)
 
     def _setup_timer(self):
         self.update_timer = QTimer()
@@ -286,6 +291,38 @@ class MainWindow(QMainWindow):
         self.map_widget.clear_track()
         self.statusbar.showMessage("Трек очищен")
 
+    def _on_heading_hold_toggle(self):
+        if self.btn_hdg_hold.isChecked():
+            if self.autopilot.engage_heading_hold():
+                self.btn_hdg_hold.setStyleSheet("background-color: #00cc00;")
+                hdg = self.autopilot.get_target_heading()
+                self.statusbar.showMessage(f"Удержание курса: {hdg:.0f}°")
+            else:
+                self.btn_hdg_hold.setChecked(False)
+                self.statusbar.showMessage("Не удалось включить удержание курса")
+        else:
+            self.autopilot.disengage("Отключено пользователем")
+
+    def _on_autopilot_engage(self, data):
+        mode = data.get('mode', '')
+        if mode == 'HEADING_HOLD':
+            self.btn_hdg_hold.setChecked(True)
+            self.btn_hdg_hold.setStyleSheet("background-color: #00cc00;")
+            target = data.get('target', 0)
+            self.statusbar.showMessage(f"Удержание курса: {target:.0f}°")
+
+    def _on_autopilot_disengage(self, data):
+        self.btn_hdg_hold.setChecked(False)
+        self.btn_hdg_hold.setStyleSheet("")
+        self.btn_nav.setChecked(False)
+        self.btn_nav.setStyleSheet("")
+
+        reason = data.get('reason', '')
+        if reason:
+            self.statusbar.showMessage(f"Автопилот отключён: {reason}")
+        else:
+            self.statusbar.showMessage("Автопилот отключён")
+
     def _update_display(self):
         if not self.proxy.is_connected():
             return
@@ -326,6 +363,23 @@ class MainWindow(QMainWindow):
 
                 self.status_panel.update_navigation(wp_idx + 1, wp_total, distance, eta, xtk)
 
+        self.autopilot.update()
+        self._update_autopilot_display()
+
+    def _update_autopilot_display(self):
+        mode = self.autopilot.get_mode()
+        if mode == AutopilotMode.MANUAL:
+            self.status_panel.update_autopilot('MANUAL')
+        elif mode == AutopilotMode.HEADING_HOLD:
+            target = self.autopilot.get_target_heading()
+            error = self.autopilot.get_heading_error()
+            self.status_panel.update_autopilot('HEADING_HOLD', target, error)
+        elif mode == AutopilotMode.NAV:
+            target = self.autopilot.get_target_heading()
+            error = self.autopilot.get_heading_error()
+            self.status_panel.update_autopilot('NAV', target, error)
+
     def closeEvent(self, event):
+        self.autopilot.disengage()
         self.proxy.stop()
         super().closeEvent(event)

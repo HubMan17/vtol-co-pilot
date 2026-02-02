@@ -89,6 +89,33 @@ class StatusPanel(QWidget):
             self.labels[name] = (value_label, unit)
 
         layout.addWidget(nav_frame)
+
+        ap_title = QLabel("АВТОПИЛОТ")
+        ap_title.setFont(QFont("Arial", 10, QFont.Bold))
+        ap_title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(ap_title)
+
+        ap_frame = QFrame()
+        ap_frame.setFrameStyle(QFrame.StyledPanel)
+        ap_layout = QGridLayout(ap_frame)
+
+        ap_layout.addWidget(QLabel("Режим:"), 0, 0)
+        self.lbl_ap_mode = QLabel("РУЧНОЙ")
+        self.lbl_ap_mode.setFont(QFont("Consolas", 12, QFont.Bold))
+        self.lbl_ap_mode.setStyleSheet("color: gray;")
+        ap_layout.addWidget(self.lbl_ap_mode, 0, 1)
+
+        ap_layout.addWidget(QLabel("Целевой курс:"), 1, 0)
+        self.lbl_ap_target = QLabel("---")
+        self.lbl_ap_target.setFont(QFont("Consolas", 12, QFont.Bold))
+        ap_layout.addWidget(self.lbl_ap_target, 1, 1)
+
+        ap_layout.addWidget(QLabel("Ошибка:"), 2, 0)
+        self.lbl_ap_error = QLabel("---")
+        self.lbl_ap_error.setFont(QFont("Consolas", 12, QFont.Bold))
+        ap_layout.addWidget(self.lbl_ap_error, 2, 1)
+
+        layout.addWidget(ap_frame)
         layout.addStretch()
 
     def update_telemetry(self, state: TelemetryState):
@@ -131,3 +158,24 @@ class StatusPanel(QWidget):
 
         sign = "+" if xtk >= 0 else ""
         self.labels["Бок. уклон."][0].setText(f"{sign}{xtk:.0f} м")
+
+    def update_autopilot(self, mode: str, target_heading: float = None, error: float = None):
+        mode_names = {
+            'MANUAL': 'РУЧНОЙ',
+            'HEADING_HOLD': 'КУРС',
+            'NAV': 'НАВИГАЦИЯ'
+        }
+        display_mode = mode_names.get(mode, mode)
+        self.lbl_ap_mode.setText(display_mode)
+
+        if mode == 'MANUAL':
+            self.lbl_ap_mode.setStyleSheet("color: gray;")
+            self.lbl_ap_target.setText("---")
+            self.lbl_ap_error.setText("---")
+        else:
+            self.lbl_ap_mode.setStyleSheet("color: #00ff00; font-weight: bold;")
+            if target_heading is not None:
+                self.lbl_ap_target.setText(f"{target_heading:.0f}°")
+            if error is not None:
+                sign = "+" if error >= 0 else ""
+                self.lbl_ap_error.setText(f"{sign}{error:.1f}°")
