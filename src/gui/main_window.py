@@ -102,7 +102,7 @@ class MainWindow(QMainWindow):
 
         layout.addStretch()
 
-        self.lbl_dr_status = QLabel("СР: ВЫКЛ")
+        self.lbl_dr_status = QLabel("Счисление: ВЫКЛ")
         self.lbl_dr_status.setFont(QFont("Consolas", 10))
         self.lbl_dr_status.setStyleSheet("color: gray;")
         layout.addWidget(self.lbl_dr_status)
@@ -122,12 +122,12 @@ class MainWindow(QMainWindow):
 
         mode_layout = QHBoxLayout()
 
-        self.btn_hdg_hold = QPushButton("УДЕРЖ. КУРСА")
+        self.btn_hdg_hold = QPushButton("Удержание курса")
         self.btn_hdg_hold.setCheckable(True)
         self.btn_hdg_hold.setEnabled(False)
         mode_layout.addWidget(self.btn_hdg_hold)
 
-        self.btn_nav = QPushButton("НАВИГАЦИЯ")
+        self.btn_nav = QPushButton("Навигация")
         self.btn_nav.setCheckable(True)
         self.btn_nav.setEnabled(False)
         mode_layout.addWidget(self.btn_nav)
@@ -136,12 +136,12 @@ class MainWindow(QMainWindow):
 
         action_layout = QHBoxLayout()
 
-        self.btn_set_pos = QPushButton("Уст. позицию")
+        self.btn_set_pos = QPushButton("Установить позицию")
         self.btn_set_pos.setCheckable(True)
         self.btn_set_pos.setEnabled(False)
         action_layout.addWidget(self.btn_set_pos)
 
-        self.btn_load_route = QPushButton("Загр. маршрут")
+        self.btn_load_route = QPushButton("Загрузить маршрут")
         self.btn_load_route.setEnabled(False)
         action_layout.addWidget(self.btn_load_route)
 
@@ -149,12 +149,12 @@ class MainWindow(QMainWindow):
 
         dr_layout = QHBoxLayout()
 
-        self.btn_use_dr = QPushButton("Исп. СР позицию")
+        self.btn_use_dr = QPushButton("Использовать счисление")
         self.btn_use_dr.setCheckable(True)
         self.btn_use_dr.setEnabled(False)
         dr_layout.addWidget(self.btn_use_dr)
 
-        self.btn_clear_track = QPushButton("Очист. трек")
+        self.btn_clear_track = QPushButton("Очистить трек")
         self.btn_clear_track.setEnabled(False)
         dr_layout.addWidget(self.btn_clear_track)
 
@@ -275,10 +275,10 @@ class MainWindow(QMainWindow):
     def _on_use_dr_toggle(self):
         self._use_dr_position = self.btn_use_dr.isChecked()
         if self._use_dr_position:
-            self.lbl_dr_status.setText("СР: ВКЛ")
+            self.lbl_dr_status.setText("Счисление: ВКЛ")
             self.lbl_dr_status.setStyleSheet("color: #00ff00; font-weight: bold;")
         else:
-            self.lbl_dr_status.setText("СР: ВЫКЛ")
+            self.lbl_dr_status.setText("Счисление: ВЫКЛ")
             self.lbl_dr_status.setStyleSheet("color: gray;")
 
     def _on_clear_track(self):

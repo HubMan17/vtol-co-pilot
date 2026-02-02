@@ -25,17 +25,17 @@ class StatusPanel(QWidget):
 
         self.labels = {}
         fields = [
-            ("ПРВ", "м/с", 0, 0),
-            ("ПУТ", "м/с", 0, 1),
-            ("КУРС", "°", 1, 0),
-            ("ТРЕК", "°", 1, 1),
-            ("ВЫС", "м", 2, 0),
-            ("AGL", "м", 2, 1),
-            ("ВЕРТ", "м/с", 3, 0),
-            ("ВЕТЕР", "", 3, 1),
-            ("КРЕН", "°", 4, 0),
-            ("ТАНГАЖ", "°", 4, 1),
-            ("АКБ", "В", 5, 0),
+            ("Приборная", "м/с", 0, 0),
+            ("Путевая", "м/с", 0, 1),
+            ("Курс", "°", 1, 0),
+            ("Трек", "°", 1, 1),
+            ("Высота", "м", 2, 0),
+            ("Высота AGL", "м", 2, 1),
+            ("Верт. скор.", "м/с", 3, 0),
+            ("Ветер", "", 3, 1),
+            ("Крен", "°", 4, 0),
+            ("Тангаж", "°", 4, 1),
+            ("Батарея", "В", 5, 0),
             ("GPS", "", 5, 1),
         ]
 
@@ -61,15 +61,20 @@ class StatusPanel(QWidget):
 
         layout.addLayout(grid)
 
+        nav_title = QLabel("НАВИГАЦИЯ")
+        nav_title.setFont(QFont("Arial", 10, QFont.Bold))
+        nav_title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(nav_title)
+
         nav_frame = QFrame()
         nav_frame.setFrameStyle(QFrame.StyledPanel)
         nav_layout = QGridLayout(nav_frame)
 
         nav_fields = [
-            ("ТЧК", "", 0, 0),
-            ("ДИСТ", "км", 0, 1),
-            ("ВПР", "", 1, 0),
-            ("БУО", "м", 1, 1),
+            ("Точка", "", 0, 0),
+            ("Дистанция", "", 0, 1),
+            ("Время приб.", "", 1, 0),
+            ("Бок. уклон.", "", 1, 1),
         ]
 
         for name, unit, row, col in nav_fields:
@@ -87,22 +92,22 @@ class StatusPanel(QWidget):
         layout.addStretch()
 
     def update_telemetry(self, state: TelemetryState):
-        self._set_value("ПРВ", state.airspeed, 1)
-        self._set_value("ПУТ", state.groundspeed, 1)
-        self._set_value("КУРС", state.heading, 0)
-        self._set_value("ТРЕК", state.heading, 0)
-        self._set_value("ВЫС", state.altitude, 0)
-        self._set_value("AGL", state.altitude_agl, 0)
-        self._set_value("ВЕРТ", state.climb_rate, 1)
+        self._set_value("Приборная", state.airspeed, 1)
+        self._set_value("Путевая", state.groundspeed, 1)
+        self._set_value("Курс", state.heading, 0)
+        self._set_value("Трек", state.heading, 0)
+        self._set_value("Высота", state.altitude, 0)
+        self._set_value("Высота AGL", state.altitude_agl, 0)
+        self._set_value("Верт. скор.", state.climb_rate, 1)
 
-        wind_str = f"{int(state.wind_direction):03d}/{state.wind_speed:.0f}"
-        self.labels["ВЕТЕР"][0].setText(wind_str)
+        wind_str = f"{int(state.wind_direction):03d}° / {state.wind_speed:.0f} м/с"
+        self.labels["Ветер"][0].setText(wind_str)
 
-        self._set_value("КРЕН", math.degrees(state.roll), 1)
-        self._set_value("ТАНГАЖ", math.degrees(state.pitch), 1)
-        self._set_value("АКБ", state.battery_voltage, 1)
+        self._set_value("Крен", math.degrees(state.roll), 1)
+        self._set_value("Тангаж", math.degrees(state.pitch), 1)
+        self._set_value("Батарея", state.battery_voltage, 1)
 
-        gps_str = f"{state.gps_fix}D/{state.satellites}"
+        gps_str = f"{state.gps_fix}D / {state.satellites} спут."
         self.labels["GPS"][0].setText(gps_str)
 
     def _set_value(self, name: str, value: float, decimals: int = 1):
@@ -117,12 +122,12 @@ class StatusPanel(QWidget):
 
     def update_navigation(self, waypoint_idx: int, total_waypoints: int,
                           distance: float, eta_seconds: float, xtk: float):
-        self.labels["ТЧК"][0].setText(f"{waypoint_idx}/{total_waypoints}")
-        self.labels["ДИСТ"][0].setText(f"{distance/1000:.2f} км")
+        self.labels["Точка"][0].setText(f"{waypoint_idx} / {total_waypoints}")
+        self.labels["Дистанция"][0].setText(f"{distance/1000:.2f} км")
 
         minutes = int(eta_seconds // 60)
         seconds = int(eta_seconds % 60)
-        self.labels["ВПР"][0].setText(f"{minutes:02d}:{seconds:02d}")
+        self.labels["Время приб."][0].setText(f"{minutes:02d}:{seconds:02d}")
 
         sign = "+" if xtk >= 0 else ""
-        self.labels["БУО"][0].setText(f"{sign}{xtk:.0f} м")
+        self.labels["Бок. уклон."][0].setText(f"{sign}{xtk:.0f} м")
