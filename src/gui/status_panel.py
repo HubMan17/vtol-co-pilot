@@ -15,7 +15,7 @@ class StatusPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(5, 5, 5, 5)
 
-        title = QLabel("TELEMETRY")
+        title = QLabel("ТЕЛЕМЕТРИЯ")
         title.setFont(QFont("Arial", 10, QFont.Bold))
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
@@ -25,17 +25,17 @@ class StatusPanel(QWidget):
 
         self.labels = {}
         fields = [
-            ("IAS", "m/s", 0, 0),
-            ("GS", "m/s", 0, 1),
-            ("HDG", "°", 1, 0),
-            ("TRK", "°", 1, 1),
-            ("ALT", "m", 2, 0),
-            ("AGL", "m", 2, 1),
-            ("VS", "m/s", 3, 0),
-            ("WIND", "", 3, 1),
-            ("ROLL", "°", 4, 0),
-            ("PITCH", "°", 4, 1),
-            ("BAT", "V", 5, 0),
+            ("ПРВ", "м/с", 0, 0),
+            ("ПУТ", "м/с", 0, 1),
+            ("КУРС", "°", 1, 0),
+            ("ТРЕК", "°", 1, 1),
+            ("ВЫС", "м", 2, 0),
+            ("AGL", "м", 2, 1),
+            ("ВЕРТ", "м/с", 3, 0),
+            ("ВЕТЕР", "", 3, 1),
+            ("КРЕН", "°", 4, 0),
+            ("ТАНГАЖ", "°", 4, 1),
+            ("АКБ", "В", 5, 0),
             ("GPS", "", 5, 1),
         ]
 
@@ -66,10 +66,10 @@ class StatusPanel(QWidget):
         nav_layout = QGridLayout(nav_frame)
 
         nav_fields = [
-            ("WPT", "", 0, 0),
-            ("DIST", "km", 0, 1),
-            ("ETA", "", 1, 0),
-            ("XTK", "m", 1, 1),
+            ("ТЧК", "", 0, 0),
+            ("ДИСТ", "км", 0, 1),
+            ("ВПР", "", 1, 0),
+            ("БУО", "м", 1, 1),
         ]
 
         for name, unit, row, col in nav_fields:
@@ -87,20 +87,20 @@ class StatusPanel(QWidget):
         layout.addStretch()
 
     def update_telemetry(self, state: TelemetryState):
-        self._set_value("IAS", state.airspeed, 1)
-        self._set_value("GS", state.groundspeed, 1)
-        self._set_value("HDG", state.heading, 0)
-        self._set_value("TRK", state.heading, 0)
-        self._set_value("ALT", state.altitude, 0)
+        self._set_value("ПРВ", state.airspeed, 1)
+        self._set_value("ПУТ", state.groundspeed, 1)
+        self._set_value("КУРС", state.heading, 0)
+        self._set_value("ТРЕК", state.heading, 0)
+        self._set_value("ВЫС", state.altitude, 0)
         self._set_value("AGL", state.altitude_agl, 0)
-        self._set_value("VS", state.climb_rate, 1)
+        self._set_value("ВЕРТ", state.climb_rate, 1)
 
         wind_str = f"{int(state.wind_direction):03d}/{state.wind_speed:.0f}"
-        self.labels["WIND"][0].setText(wind_str)
+        self.labels["ВЕТЕР"][0].setText(wind_str)
 
-        self._set_value("ROLL", math.degrees(state.roll), 1)
-        self._set_value("PITCH", math.degrees(state.pitch), 1)
-        self._set_value("BAT", state.battery_voltage, 1)
+        self._set_value("КРЕН", math.degrees(state.roll), 1)
+        self._set_value("ТАНГАЖ", math.degrees(state.pitch), 1)
+        self._set_value("АКБ", state.battery_voltage, 1)
 
         gps_str = f"{state.gps_fix}D/{state.satellites}"
         self.labels["GPS"][0].setText(gps_str)
@@ -117,12 +117,12 @@ class StatusPanel(QWidget):
 
     def update_navigation(self, waypoint_idx: int, total_waypoints: int,
                           distance: float, eta_seconds: float, xtk: float):
-        self.labels["WPT"][0].setText(f"{waypoint_idx}/{total_waypoints}")
-        self.labels["DIST"][0].setText(f"{distance/1000:.2f} km")
+        self.labels["ТЧК"][0].setText(f"{waypoint_idx}/{total_waypoints}")
+        self.labels["ДИСТ"][0].setText(f"{distance/1000:.2f} км")
 
         minutes = int(eta_seconds // 60)
         seconds = int(eta_seconds % 60)
-        self.labels["ETA"][0].setText(f"{minutes:02d}:{seconds:02d}")
+        self.labels["ВПР"][0].setText(f"{minutes:02d}:{seconds:02d}")
 
         sign = "+" if xtk >= 0 else ""
-        self.labels["XTK"][0].setText(f"{sign}{xtk:.0f} m")
+        self.labels["БУО"][0].setText(f"{sign}{xtk:.0f} м")

@@ -110,6 +110,37 @@ class RoutePlanner:
         self._route = None
         self._active_waypoint_idx = 0
 
+    def create_route(self, name: str) -> Route:
+        self._route = Route(name=name, waypoints=[])
+        self._active_waypoint_idx = 0
+        return self._route
+
+    def add_waypoint(self, lat: float, lon: float, altitude: float = 100.0,
+                     radius: float = 50.0, action: str = "FLYTHROUGH") -> Optional[Waypoint]:
+        if not self._route:
+            return None
+        new_id = len(self._route.waypoints) + 1
+        wp = Waypoint(
+            id=new_id,
+            lat=lat,
+            lon=lon,
+            altitude=altitude,
+            radius=radius,
+            action=action
+        )
+        self._route.waypoints.append(wp)
+        return wp
+
+    def remove_waypoint(self, index: int) -> bool:
+        if not self._route or index < 0 or index >= len(self._route.waypoints):
+            return False
+        self._route.waypoints.pop(index)
+        for i, wp in enumerate(self._route.waypoints):
+            wp.id = i + 1
+        if self._active_waypoint_idx >= len(self._route.waypoints):
+            self._active_waypoint_idx = max(0, len(self._route.waypoints) - 1)
+        return True
+
     def get_active_waypoint(self) -> Optional[Waypoint]:
         if not self._route or not self._route.waypoints:
             return None

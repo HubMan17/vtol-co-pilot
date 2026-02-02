@@ -43,7 +43,7 @@ class MainWindow(QMainWindow):
         self._setup_timer()
 
     def _setup_ui(self):
-        self.setWindowTitle("VTOL Co-Pilot")
+        self.setWindowTitle("VTOL Со-Пилот")
         self.setMinimumSize(1200, 800)
 
         central = QWidget()
@@ -77,7 +77,7 @@ class MainWindow(QMainWindow):
 
         self.statusbar = QStatusBar()
         self.setStatusBar(self.statusbar)
-        self.statusbar.showMessage("Disconnected")
+        self.statusbar.showMessage("Отключено")
 
     def _create_toolbar(self) -> QFrame:
         frame = QFrame()
@@ -85,31 +85,31 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout(frame)
         layout.setContentsMargins(10, 5, 10, 5)
 
-        self.btn_connect = QPushButton("Connect")
-        self.btn_connect.setFixedWidth(100)
+        self.btn_connect = QPushButton("Подключить")
+        self.btn_connect.setFixedWidth(120)
         layout.addWidget(self.btn_connect)
 
-        self.btn_disconnect = QPushButton("Disconnect")
-        self.btn_disconnect.setFixedWidth(100)
+        self.btn_disconnect = QPushButton("Отключить")
+        self.btn_disconnect.setFixedWidth(120)
         self.btn_disconnect.setEnabled(False)
         layout.addWidget(self.btn_disconnect)
 
         layout.addStretch()
 
-        self.lbl_mode = QLabel("Mode: ---")
+        self.lbl_mode = QLabel("Режим: ---")
         self.lbl_mode.setFont(QFont("Consolas", 12, QFont.Bold))
         layout.addWidget(self.lbl_mode)
 
         layout.addStretch()
 
-        self.lbl_dr_status = QLabel("DR: OFF")
+        self.lbl_dr_status = QLabel("СР: ВЫКЛ")
         self.lbl_dr_status.setFont(QFont("Consolas", 10))
         self.lbl_dr_status.setStyleSheet("color: gray;")
         layout.addWidget(self.lbl_dr_status)
 
         layout.addSpacing(20)
 
-        self.lbl_status = QLabel("DISCONNECTED")
+        self.lbl_status = QLabel("ОТКЛЮЧЕНО")
         self.lbl_status.setStyleSheet("color: red; font-weight: bold;")
         layout.addWidget(self.lbl_status)
 
@@ -122,12 +122,12 @@ class MainWindow(QMainWindow):
 
         mode_layout = QHBoxLayout()
 
-        self.btn_hdg_hold = QPushButton("HDG HOLD")
+        self.btn_hdg_hold = QPushButton("УДЕРЖ. КУРСА")
         self.btn_hdg_hold.setCheckable(True)
         self.btn_hdg_hold.setEnabled(False)
         mode_layout.addWidget(self.btn_hdg_hold)
 
-        self.btn_nav = QPushButton("NAV")
+        self.btn_nav = QPushButton("НАВИГАЦИЯ")
         self.btn_nav.setCheckable(True)
         self.btn_nav.setEnabled(False)
         mode_layout.addWidget(self.btn_nav)
@@ -136,12 +136,12 @@ class MainWindow(QMainWindow):
 
         action_layout = QHBoxLayout()
 
-        self.btn_set_pos = QPushButton("Set Position")
+        self.btn_set_pos = QPushButton("Уст. позицию")
         self.btn_set_pos.setCheckable(True)
         self.btn_set_pos.setEnabled(False)
         action_layout.addWidget(self.btn_set_pos)
 
-        self.btn_load_route = QPushButton("Load Route")
+        self.btn_load_route = QPushButton("Загр. маршрут")
         self.btn_load_route.setEnabled(False)
         action_layout.addWidget(self.btn_load_route)
 
@@ -149,12 +149,12 @@ class MainWindow(QMainWindow):
 
         dr_layout = QHBoxLayout()
 
-        self.btn_use_dr = QPushButton("Use DR Position")
+        self.btn_use_dr = QPushButton("Исп. СР позицию")
         self.btn_use_dr.setCheckable(True)
         self.btn_use_dr.setEnabled(False)
         dr_layout.addWidget(self.btn_use_dr)
 
-        self.btn_clear_track = QPushButton("Clear Track")
+        self.btn_clear_track = QPushButton("Очист. трек")
         self.btn_clear_track.setEnabled(False)
         dr_layout.addWidget(self.btn_clear_track)
 
@@ -171,6 +171,8 @@ class MainWindow(QMainWindow):
         self.btn_clear_track.clicked.connect(self._on_clear_track)
 
         self.map_widget.bridge.position_clicked.connect(self._on_map_clicked)
+        self.map_widget.set_position_requested.connect(self._on_context_set_position)
+        self.map_widget.add_waypoint_requested.connect(self._on_context_add_waypoint)
 
         self.event_bus.subscribe(Event.CONNECTION_RESTORED, self._on_connection_restored)
         self.event_bus.subscribe(Event.CONNECTION_LOST, self._on_connection_lost)
@@ -181,7 +183,7 @@ class MainWindow(QMainWindow):
         self.update_timer.start(100)
 
     def _on_connect(self):
-        self.statusbar.showMessage("Connecting...")
+        self.statusbar.showMessage("Подключение...")
         if self.proxy.connect():
             self.proxy.start()
             self.proxy.request_data_streams(10)
@@ -199,9 +201,9 @@ class MainWindow(QMainWindow):
         self.btn_load_route.setEnabled(True)
         self.btn_use_dr.setEnabled(True)
         self.btn_clear_track.setEnabled(True)
-        self.lbl_status.setText("CONNECTED")
+        self.lbl_status.setText("ПОДКЛЮЧЕНО")
         self.lbl_status.setStyleSheet("color: green; font-weight: bold;")
-        self.statusbar.showMessage(f"Connected to SITL on port {self.config.mavlink.sitl_port}")
+        self.statusbar.showMessage(f"Подключено к SITL на порту {self.config.mavlink.sitl_port}")
 
     def _on_connection_lost(self, data):
         self.btn_connect.setEnabled(True)
@@ -212,34 +214,53 @@ class MainWindow(QMainWindow):
         self.btn_load_route.setEnabled(False)
         self.btn_use_dr.setEnabled(False)
         self.btn_clear_track.setEnabled(False)
-        self.lbl_status.setText("DISCONNECTED")
+        self.lbl_status.setText("ОТКЛЮЧЕНО")
         self.lbl_status.setStyleSheet("color: red; font-weight: bold;")
-        self.statusbar.showMessage("Disconnected")
+        self.statusbar.showMessage("Отключено")
 
     def _on_set_position_toggle(self):
         self._set_position_mode = self.btn_set_pos.isChecked()
         if self._set_position_mode:
-            self.statusbar.showMessage("Click on map to set position...")
+            self.statusbar.showMessage("Кликните на карте для установки позиции...")
             self.btn_set_pos.setStyleSheet("background-color: #ffcc00;")
         else:
-            self.statusbar.showMessage("Position set mode cancelled")
+            self.statusbar.showMessage("Режим установки позиции отменён")
             self.btn_set_pos.setStyleSheet("")
 
     def _on_map_clicked(self, lat: float, lon: float):
         if self._set_position_mode:
-            self.dead_reckoning.set_position(lat, lon)
-            self._set_position_mode = False
-            self.btn_set_pos.setChecked(False)
-            self.btn_set_pos.setStyleSheet("")
-            self.map_widget.set_aircraft_position(lat, lon)
-            self.statusbar.showMessage(f"Position set to {lat:.6f}, {lon:.6f}")
+            self._set_dr_position(lat, lon)
+
+    def _on_context_set_position(self, lat: float, lon: float):
+        self._set_dr_position(lat, lon)
+
+    def _set_dr_position(self, lat: float, lon: float):
+        self.dead_reckoning.set_position(lat, lon)
+        self._set_position_mode = False
+        self.btn_set_pos.setChecked(False)
+        self.btn_set_pos.setStyleSheet("")
+        self.map_widget.set_aircraft_position(lat, lon)
+        self.statusbar.showMessage(f"Позиция установлена: {lat:.6f}, {lon:.6f}")
+
+    def _on_context_add_waypoint(self, lat: float, lon: float):
+        route = self.route_planner.get_route()
+        if route:
+            new_idx = len(route.waypoints) + 1
+            self.route_planner.add_waypoint(lat, lon, 100.0)
+            self.map_widget.add_waypoint(lat, lon, new_idx)
+            self.statusbar.showMessage(f"Добавлена точка {new_idx}: {lat:.6f}, {lon:.6f}")
+        else:
+            self.route_planner.create_route("Новый маршрут")
+            self.route_planner.add_waypoint(lat, lon, 100.0)
+            self.map_widget.add_waypoint(lat, lon, 1)
+            self.statusbar.showMessage(f"Создан маршрут, добавлена точка 1: {lat:.6f}, {lon:.6f}")
 
     def _on_load_route(self):
         routes_dir = Path(__file__).parent.parent.parent / "routes"
         routes_dir.mkdir(exist_ok=True)
 
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Load Route", str(routes_dir), "JSON Files (*.json)"
+            self, "Загрузить маршрут", str(routes_dir), "JSON файлы (*.json)"
         )
 
         if file_path:
@@ -247,23 +268,23 @@ class MainWindow(QMainWindow):
             if route:
                 waypoints = self.route_planner.get_waypoints_for_display()
                 self.map_widget.set_waypoints(waypoints)
-                self.statusbar.showMessage(f"Loaded route: {route.name} ({len(route.waypoints)} waypoints)")
+                self.statusbar.showMessage(f"Загружен маршрут: {route.name} ({len(route.waypoints)} точек)")
             else:
-                QMessageBox.warning(self, "Error", "Failed to load route file")
+                QMessageBox.warning(self, "Ошибка", "Не удалось загрузить файл маршрута")
 
     def _on_use_dr_toggle(self):
         self._use_dr_position = self.btn_use_dr.isChecked()
         if self._use_dr_position:
-            self.lbl_dr_status.setText("DR: ON")
+            self.lbl_dr_status.setText("СР: ВКЛ")
             self.lbl_dr_status.setStyleSheet("color: #00ff00; font-weight: bold;")
         else:
-            self.lbl_dr_status.setText("DR: OFF")
+            self.lbl_dr_status.setText("СР: ВЫКЛ")
             self.lbl_dr_status.setStyleSheet("color: gray;")
 
     def _on_clear_track(self):
         self.dead_reckoning.clear_track()
         self.map_widget.clear_track()
-        self.statusbar.showMessage("Track cleared")
+        self.statusbar.showMessage("Трек очищен")
 
     def _update_display(self):
         if not self.proxy.is_connected():
@@ -271,7 +292,7 @@ class MainWindow(QMainWindow):
 
         telemetry = self.proxy.get_telemetry()
         self.status_panel.update_telemetry(telemetry)
-        self.lbl_mode.setText(f"Mode: {telemetry.mode}")
+        self.lbl_mode.setText(f"Режим: {telemetry.mode}")
 
         dr_position = self.dead_reckoning.update(telemetry)
 
@@ -295,7 +316,7 @@ class MainWindow(QMainWindow):
                     self.route_planner.next_waypoint()
                     new_idx = self.route_planner.get_active_waypoint_index()
                     if new_idx != old_idx:
-                        self.statusbar.showMessage(f"Reached waypoint {old_idx + 1}, next: {new_idx + 1}")
+                        self.statusbar.showMessage(f"Достигнута точка {old_idx + 1}, следующая: {new_idx + 1}")
 
                 distance = self.route_planner.distance_to_waypoint(display_position)
                 eta = self.route_planner.eta_to_waypoint(display_position, telemetry.groundspeed)

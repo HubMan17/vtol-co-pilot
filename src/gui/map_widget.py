@@ -1,24 +1,35 @@
-from PyQt5.QtWidgets import QWidget, QVBoxLayout
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QMenu, QAction
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 from PyQt5.QtWebChannel import QWebChannel
-from PyQt5.QtCore import QObject, pyqtSlot, pyqtSignal, QUrl
-from pathlib import Path
+from PyQt5.QtCore import QObject, pyqtSlot, pyqtSignal, QPoint
+from PyQt5.QtGui import QCursor
 import json
 
 
 class MapBridge(QObject):
     position_clicked = pyqtSignal(float, float)
+    context_menu_requested = pyqtSignal(float, float, int, int)
 
     @pyqtSlot(float, float)
     def onMapClick(self, lat, lon):
         self.position_clicked.emit(lat, lon)
 
+    @pyqtSlot(float, float, int, int)
+    def onContextMenu(self, lat, lon, screen_x, screen_y):
+        self.context_menu_requested.emit(lat, lon, screen_x, screen_y)
+
 
 class MapWidget(QWidget):
+    set_position_requested = pyqtSignal(float, float)
+    add_waypoint_requested = pyqtSignal(float, float)
+    center_map_requested = pyqtSignal(float, float)
+
     def __init__(self, center: tuple = (59.939, 30.315), zoom: int = 14):
         super().__init__()
         self.center = center
         self.zoom = zoom
+        self._context_lat = 0.0
+        self._context_lon = 0.0
         self._setup_ui()
 
     def _setup_ui(self):
@@ -32,10 +43,50 @@ class MapWidget(QWidget):
         self.channel.registerObject("bridge", self.bridge)
         self.web_view.page().setWebChannel(self.channel)
 
+        self.bridge.context_menu_requested.connect(self._show_context_menu)
+
         html = self._generate_html()
         self.web_view.setHtml(html)
 
         layout.addWidget(self.web_view)
+
+    def _show_context_menu(self, lat: float, lon: float, screen_x: int, screen_y: int):
+        self._context_lat = lat
+        self._context_lon = lon
+
+        menu = QMenu(self)
+
+        action_set_pos = QAction("Установить позицию здесь", self)
+        action_set_pos.triggered.connect(self._on_set_position)
+        menu.addAction(action_set_pos)
+
+        action_add_wp = QAction("Добавить точку маршрута", self)
+        action_add_wp.triggered.connect(self._on_add_waypoint)
+        menu.addAction(action_add_wp)
+
+        menu.addSeparator()
+
+        action_center = QAction("Центрировать карту", self)
+        action_center.triggered.connect(self._on_center_map)
+        menu.addAction(action_center)
+
+        action_clear_track = QAction("Очистить трек", self)
+        action_clear_track.triggered.connect(self._on_clear_track)
+        menu.addAction(action_clear_track)
+
+        menu.exec_(QCursor.pos())
+
+    def _on_set_position(self):
+        self.set_position_requested.emit(self._context_lat, self._context_lon)
+
+    def _on_add_waypoint(self):
+        self.add_waypoint_requested.emit(self._context_lat, self._context_lon)
+
+    def _on_center_map(self):
+        self.center_on(self._context_lat, self._context_lon)
+
+    def _on_clear_track(self):
+        self.clear_track()
 
     def _generate_html(self) -> str:
         return f'''
@@ -156,6 +207,18 @@ class MapWidget(QWidget):
             }}
         }}
 
+        function addWaypoint(lat, lon, index) {{
+            var marker = L.circleMarker([lat, lon], {{
+                radius: 8,
+                fillColor: '#ff6600',
+                color: '#fff',
+                weight: 2,
+                fillOpacity: 0.8
+            }}).addTo(map);
+            marker.bindTooltip(String(index), {{permanent: true, direction: 'center', className: 'wp-label'}});
+            waypointMarkers.push(marker);
+        }}
+
         function centerOn(lat, lon) {{
             map.setView([lat, lon], map.getZoom());
         }}
@@ -168,6 +231,12 @@ class MapWidget(QWidget):
         map.on('click', function(e) {{
             if (bridge) {{
                 bridge.onMapClick(e.latlng.lat, e.latlng.lng);
+            }}
+        }});
+
+        map.on('contextmenu', function(e) {{
+            if (bridge) {{
+                bridge.onContextMenu(e.latlng.lat, e.latlng.lng, e.originalEvent.screenX, e.originalEvent.screenY);
             }}
         }});
     </script>
@@ -187,6 +256,9 @@ class MapWidget(QWidget):
     def set_waypoints(self, waypoints: list):
         wp_json = json.dumps(waypoints)
         self.web_view.page().runJavaScript(f"setWaypoints({wp_json});")
+
+    def add_waypoint(self, lat: float, lon: float, index: int):
+        self.web_view.page().runJavaScript(f"addWaypoint({lat}, {lon}, {index});")
 
     def center_on(self, lat: float, lon: float):
         self.web_view.page().runJavaScript(f"centerOn({lat}, {lon});")
