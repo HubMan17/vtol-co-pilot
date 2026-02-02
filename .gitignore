@@ -39,6 +39,7 @@ env/
 terrain/
 eeprom.bin
 *.param
+sitl/
 
 # Local development docs (not for repo)
 RULES.md

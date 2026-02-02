@@ -32,7 +32,8 @@ class TelemetryState:
     satellites: int = 0
     battery_voltage: float = 0.0
     battery_current: float = 0.0
-    rc_channels: list = field(default_factory=lambda: [0] * 8)
+    rc_channels: list = field(default_factory=lambda: [1500] * 8)
+    rc_channels_raw: list = field(default_factory=lambda: [1500] * 8)
     armed: bool = False
     mode: str = ""
 
@@ -75,6 +76,13 @@ class TelemetryParser:
 
         elif msg_type == "RC_CHANNELS":
             self.state.rc_channels = [
+                msg.chan1_raw, msg.chan2_raw, msg.chan3_raw, msg.chan4_raw,
+                msg.chan5_raw, msg.chan6_raw, msg.chan7_raw, msg.chan8_raw
+            ]
+            updated = True
+
+        elif msg_type == "RC_CHANNELS_RAW":
+            self.state.rc_channels_raw = [
                 msg.chan1_raw, msg.chan2_raw, msg.chan3_raw, msg.chan4_raw,
                 msg.chan5_raw, msg.chan6_raw, msg.chan7_raw, msg.chan8_raw
             ]

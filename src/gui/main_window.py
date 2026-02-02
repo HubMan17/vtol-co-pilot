@@ -399,7 +399,7 @@ class MainWindow(QMainWindow):
 
                 self.status_panel.update_navigation(wp_idx + 1, wp_total, distance, eta, xtk)
 
-        self.autopilot.update()
+        self.autopilot.update(display_position)
         self._update_autopilot_display()
 
     def _update_autopilot_display(self):

@@ -1,8 +1,22 @@
 import time
+import logging
+from pathlib import Path
 from enum import Enum, auto
 from typing import Optional, TYPE_CHECKING
 
 from src.mavlink.proxy import MAVLinkProxy
+
+log_dir = Path(__file__).parent.parent.parent / "logs"
+log_dir.mkdir(exist_ok=True)
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s.%(msecs)03d %(levelname)s: %(message)s',
+    datefmt='%H:%M:%S',
+    handlers=[
+        logging.FileHandler(log_dir / "autopilot.log", mode='w', encoding='utf-8'),
+    ]
+)
+logger = logging.getLogger(__name__)
 from src.mavlink.telemetry import LatLon
 from src.core.config import AutopilotConfig
 from src.core.events import EventBus, Event
@@ -39,6 +53,8 @@ class AutopilotManager:
         self._last_update_time = 0.0
         self._disengage_reason = ""
         self._active_waypoint_id = -1
+        self._stick_override_count = 0
+        self._stick_override_threshold_count = 3
 
         self._event_bus.subscribe(Event.CONNECTION_LOST, self._on_connection_lost)
 
@@ -56,9 +72,12 @@ class AutopilotManager:
 
         self._heading_controller.set_target_heading(target_heading)
         self._heading_controller.reset()
+        self._stick_override_count = 0
 
         self._mode = AutopilotMode.HEADING_HOLD
         self._last_update_time = time.time()
+
+        logger.info(f"ENGAGE HEADING_HOLD: target={target_heading:.1f}")
 
         self._event_bus.emit(Event.AUTOPILOT_ENGAGE, {
             'mode': 'HEADING_HOLD',
@@ -83,10 +102,13 @@ class AutopilotManager:
             return False
 
         self._heading_controller.reset()
+        self._stick_override_count = 0
         self._active_waypoint_id = wp.id
 
         self._mode = AutopilotMode.NAV
         self._last_update_time = time.time()
+
+        logger.info(f"ENGAGE NAV: waypoint={wp.id}/{len(route.waypoints)}")
 
         self._event_bus.emit(Event.AUTOPILOT_ENGAGE, {
             'mode': 'NAV',
@@ -99,6 +121,8 @@ class AutopilotManager:
     def disengage(self, reason: str = ""):
         if self._mode == AutopilotMode.MANUAL:
             return
+
+        logger.info(f"DISENGAGE: reason='{reason}', prev_mode={self._mode.name}")
 
         self._disengage_reason = reason
         prev_mode = self._mode
@@ -119,7 +143,7 @@ class AutopilotManager:
     def is_engaged(self) -> bool:
         return self._mode != AutopilotMode.MANUAL
 
-    def update(self) -> bool:
+    def update(self, override_position: Optional[LatLon] = None) -> bool:
         if self._mode == AutopilotMode.MANUAL:
             return False
 
@@ -130,9 +154,10 @@ class AutopilotManager:
         current_time = time.time()
         telemetry = self._proxy.get_telemetry()
 
-        if self.check_stick_override(telemetry.rc_channels):
-            self.disengage("Пилот взял управление")
-            return False
+        # TODO: временно отключено для тестирования в SITL
+        # if self.check_stick_override(telemetry.rc_channels_raw):
+        #     self.disengage("Пилот взял управление")
+        #     return False
 
         timeout_sec = self._config.timeout_ms / 1000.0
         if self._last_update_time > 0 and (current_time - self._last_update_time) > timeout_sec:
@@ -156,7 +181,7 @@ class AutopilotManager:
                 self.disengage("Маршрут не задан")
                 return False
 
-            position = telemetry.position
+            position = override_position if override_position else telemetry.position
             if not position:
                 self._last_update_time = current_time
                 return True
@@ -199,15 +224,28 @@ class AutopilotManager:
 
     def check_stick_override(self, rc_channels: list) -> bool:
         if len(rc_channels) < 4:
+            logger.warning(f"RC channels too short: {len(rc_channels)}, data: {rc_channels}")
             return False
 
         threshold = self._config.stick_threshold
+        roll = rc_channels[self.CH_ROLL]
+        yaw = rc_channels[self.CH_YAW]
+        roll_diff = abs(roll - self.PWM_CENTER)
+        yaw_diff = abs(yaw - self.PWM_CENTER)
 
-        if abs(rc_channels[self.CH_ROLL] - self.PWM_CENTER) > threshold:
-            return True
+        override_detected = roll_diff > threshold or yaw_diff > threshold
 
-        if abs(rc_channels[self.CH_YAW] - self.PWM_CENTER) > threshold:
-            return True
+        if override_detected:
+            self._stick_override_count += 1
+            logger.debug(f"RC RAW: roll={roll} (diff={roll_diff}), yaw={yaw} (diff={yaw_diff}), count={self._stick_override_count}/{self._stick_override_threshold_count}")
+
+            if self._stick_override_count >= self._stick_override_threshold_count:
+                logger.info(f"STICK OVERRIDE CONFIRMED: roll={roll}, yaw={yaw}, count={self._stick_override_count}")
+                return True
+        else:
+            if self._stick_override_count > 0:
+                logger.debug(f"RC RAW: roll={roll}, yaw={yaw} - reset count from {self._stick_override_count}")
+            self._stick_override_count = 0
 
         return False
 
