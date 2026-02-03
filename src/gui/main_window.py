@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Optional
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QFrame, QSplitter, QStatusBar, QFileDialog, QMessageBox
@@ -40,6 +41,7 @@ class MainWindow(QMainWindow):
 
         self._set_position_mode = False
         self._use_dr_position = False
+        self._home_position: Optional[LatLon] = None
 
         self._setup_ui()
         self._setup_connections()
@@ -170,6 +172,11 @@ class MainWindow(QMainWindow):
         self.btn_follow.setEnabled(False)
         map_layout.addWidget(self.btn_follow)
 
+        self.btn_home = QPushButton("Домой")
+        self.btn_home.setCheckable(True)
+        self.btn_home.setEnabled(False)
+        map_layout.addWidget(self.btn_home)
+
         layout.addLayout(map_layout)
 
         return frame
@@ -184,10 +191,12 @@ class MainWindow(QMainWindow):
         self.btn_hdg_hold.clicked.connect(self._on_heading_hold_toggle)
         self.btn_nav.clicked.connect(self._on_nav_toggle)
         self.btn_follow.clicked.connect(self._on_follow_toggle)
+        self.btn_home.clicked.connect(self._on_home_toggle)
 
         self.map_widget.bridge.position_clicked.connect(self._on_map_clicked)
         self.map_widget.set_position_requested.connect(self._on_context_set_position)
         self.map_widget.add_waypoint_requested.connect(self._on_context_add_waypoint)
+        self.map_widget.set_home_requested.connect(self._on_context_set_home)
 
         self.event_bus.subscribe(Event.CONNECTION_RESTORED, self._on_connection_restored)
         self.event_bus.subscribe(Event.CONNECTION_LOST, self._on_connection_lost)
@@ -220,6 +229,7 @@ class MainWindow(QMainWindow):
         self.btn_use_dr.setEnabled(True)
         self.btn_clear_track.setEnabled(True)
         self.btn_follow.setEnabled(True)
+        self.btn_home.setEnabled(True)
         self.lbl_status.setText("ПОДКЛЮЧЕНО")
         self.lbl_status.setStyleSheet("color: green; font-weight: bold;")
         self.statusbar.showMessage(f"Подключено к SITL на порту {self.config.mavlink.sitl_port}")
@@ -234,6 +244,7 @@ class MainWindow(QMainWindow):
         self.btn_use_dr.setEnabled(False)
         self.btn_clear_track.setEnabled(False)
         self.btn_follow.setEnabled(False)
+        self.btn_home.setEnabled(False)
         self.lbl_status.setText("ОТКЛЮЧЕНО")
         self.lbl_status.setStyleSheet("color: red; font-weight: bold;")
         self.statusbar.showMessage("Отключено")
@@ -323,6 +334,35 @@ class MainWindow(QMainWindow):
             self.btn_follow.setStyleSheet("")
             self.statusbar.showMessage("Слежение отключено")
 
+    def _on_context_set_home(self, lat: float, lon: float):
+        self._home_position = LatLon(lat, lon)
+        self.map_widget.set_home_marker(lat, lon)
+        self.statusbar.showMessage(f"Дом установлен: {lat:.6f}, {lon:.6f}")
+
+    def _on_home_toggle(self):
+        if self.btn_home.isChecked():
+            if not self._home_position:
+                self.btn_home.setChecked(False)
+                self.statusbar.showMessage("Сначала установите точку Дом на карте")
+                return
+
+            self.route_planner.create_route("Home")
+            self.route_planner.clear_waypoints()
+            self.route_planner.add_waypoint(self._home_position.lat, self._home_position.lon, 100.0)
+
+            if self.autopilot.engage_nav():
+                self.btn_home.setStyleSheet("background-color: #ff6600;")
+                self.btn_nav.setChecked(False)
+                self.btn_nav.setStyleSheet("")
+                self.btn_hdg_hold.setChecked(False)
+                self.btn_hdg_hold.setStyleSheet("")
+                self.statusbar.showMessage("Возврат домой активирован")
+            else:
+                self.btn_home.setChecked(False)
+                self.statusbar.showMessage("Не удалось активировать возврат домой")
+        else:
+            self.autopilot.disengage("Отключено пользователем")
+
     def _on_heading_hold_toggle(self):
         if self.btn_hdg_hold.isChecked():
             if self.autopilot.engage_heading_hold():
@@ -375,6 +415,8 @@ class MainWindow(QMainWindow):
         self.btn_hdg_hold.setStyleSheet("")
         self.btn_nav.setChecked(False)
         self.btn_nav.setStyleSheet("")
+        self.btn_home.setChecked(False)
+        self.btn_home.setStyleSheet("")
 
         reason = data.get('reason', '')
         if reason:

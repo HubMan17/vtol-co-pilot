@@ -22,6 +22,7 @@ class MapBridge(QObject):
 class MapWidget(QWidget):
     set_position_requested = pyqtSignal(float, float)
     add_waypoint_requested = pyqtSignal(float, float)
+    set_home_requested = pyqtSignal(float, float)
     center_map_requested = pyqtSignal(float, float)
 
     def __init__(self, center: tuple = (59.939, 30.315), zoom: int = 14):
@@ -64,6 +65,10 @@ class MapWidget(QWidget):
         action_add_wp.triggered.connect(self._on_add_waypoint)
         menu.addAction(action_add_wp)
 
+        action_set_home = QAction("Установить дом", self)
+        action_set_home.triggered.connect(self._on_set_home)
+        menu.addAction(action_set_home)
+
         menu.addSeparator()
 
         action_center = QAction("Центрировать карту", self)
@@ -81,6 +86,9 @@ class MapWidget(QWidget):
 
     def _on_add_waypoint(self):
         self.add_waypoint_requested.emit(self._context_lat, self._context_lon)
+
+    def _on_set_home(self):
+        self.set_home_requested.emit(self._context_lat, self._context_lon)
 
     def _on_center_map(self):
         self.center_on(self._context_lat, self._context_lon)
@@ -230,6 +238,25 @@ class MapWidget(QWidget):
             map.setView([lat, lon], map.getZoom());
         }}
 
+        var homeMarker = null;
+
+        function setHomeMarker(lat, lon) {{
+            if (homeMarker) {{
+                homeMarker.setLatLng([lat, lon]);
+            }} else {{
+                var homeIcon = L.divIcon({{
+                    html: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+                        <path d="M12 3L4 9v12h5v-7h6v7h5V9l-8-6z" fill="#ff0000" stroke="#fff" stroke-width="1"/>
+                    </svg>`,
+                    className: 'home-icon',
+                    iconSize: [24, 24],
+                    iconAnchor: [12, 24]
+                }});
+                homeMarker = L.marker([lat, lon], {{icon: homeIcon, zIndexOffset: 500}}).addTo(map);
+                homeMarker.bindTooltip('Дом', {{permanent: false, direction: 'top'}});
+            }}
+        }}
+
         var bridge = null;
         new QWebChannel(qt.webChannelTransport, function(channel) {{
             bridge = channel.objects.bridge;
@@ -272,3 +299,6 @@ class MapWidget(QWidget):
 
     def set_follow_mode(self, enabled: bool):
         self.web_view.page().runJavaScript(f"setFollowMode({'true' if enabled else 'false'});")
+
+    def set_home_marker(self, lat: float, lon: float):
+        self.web_view.page().runJavaScript(f"setHomeMarker({lat}, {lon});")
