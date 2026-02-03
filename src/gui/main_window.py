@@ -260,6 +260,13 @@ class MainWindow(QMainWindow):
         self.btn_set_pos.setChecked(False)
         self.btn_set_pos.setStyleSheet("")
         self.map_widget.set_aircraft_position(lat, lon)
+
+        if not self._use_dr_position:
+            self._use_dr_position = True
+            self.btn_use_dr.setChecked(True)
+            self.lbl_dr_status.setText("Счисление: ВКЛ")
+            self.lbl_dr_status.setStyleSheet("color: #00ff00; font-weight: bold;")
+
         self.statusbar.showMessage(f"Позиция установлена: {lat:.6f}, {lon:.6f}")
 
     def _on_context_add_waypoint(self, lat: float, lon: float):
