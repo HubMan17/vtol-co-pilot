@@ -74,7 +74,7 @@ class MapWidget(QWidget):
         action_clear_track.triggered.connect(self._on_clear_track)
         menu.addAction(action_clear_track)
 
-        menu.exec_(QCursor.pos())
+        menu.popup(QCursor.pos())
 
     def _on_set_position(self):
         self.set_position_requested.emit(self._context_lat, self._context_lon)
