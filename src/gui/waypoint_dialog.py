@@ -1,6 +1,6 @@
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QLabel, QSpinBox, QDoubleSpinBox, QComboBox,
+    QLabel, QSpinBox, QComboBox, QCheckBox,
     QPushButton, QGroupBox
 )
 from PyQt5.QtCore import Qt
@@ -9,7 +9,6 @@ from PyQt5.QtCore import Qt
 class WaypointDialog(QDialog):
     WAYPOINT_TYPES = [
         ("FLYTHROUGH", "Пролёт"),
-        ("ORBIT_ALTITUDE", "Кружить до высоты"),
         ("ORBIT_TURNS", "Кружить N кругов"),
         ("ORBIT_INFINITE", "Кружить бесконечно"),
     ]
@@ -22,12 +21,14 @@ class WaypointDialog(QDialog):
 
     def _setup_ui(self):
         self.setWindowTitle("Добавить точку маршрута")
-        self.setMinimumWidth(300)
+        self.setMinimumWidth(280)
 
         layout = QVBoxLayout(self)
+        layout.setSpacing(10)
 
         coord_group = QGroupBox("Координаты")
         coord_layout = QFormLayout(coord_group)
+        coord_layout.setSpacing(4)
 
         self.lbl_lat = QLabel(f"{self._lat:.6f}")
         self.lbl_lon = QLabel(f"{self._lon:.6f}")
@@ -38,12 +39,17 @@ class WaypointDialog(QDialog):
 
         params_group = QGroupBox("Параметры")
         params_layout = QFormLayout(params_group)
+        params_layout.setSpacing(6)
 
         self.spin_altitude = QSpinBox()
         self.spin_altitude.setRange(10, 5000)
         self.spin_altitude.setValue(100)
         self.spin_altitude.setSuffix(" м")
         params_layout.addRow("Высота:", self.spin_altitude)
+
+        self.chk_climb_enroute = QCheckBox("Набирать высоту в процессе полёта")
+        self.chk_climb_enroute.setChecked(False)
+        params_layout.addRow("", self.chk_climb_enroute)
 
         self.combo_type = QComboBox()
         for type_id, type_name in self.WAYPOINT_TYPES:
@@ -52,33 +58,27 @@ class WaypointDialog(QDialog):
         params_layout.addRow("Тип:", self.combo_type)
 
         self.spin_radius = QSpinBox()
-        self.spin_radius.setRange(10, 1000)
+        self.spin_radius.setRange(10, 500)
         self.spin_radius.setValue(50)
         self.spin_radius.setSuffix(" м")
-        self.spin_radius.setEnabled(False)
         params_layout.addRow("Радиус принятия:", self.spin_radius)
 
         layout.addWidget(params_group)
 
-        orbit_group = QGroupBox("Параметры кружения")
+        orbit_group = QGroupBox("Кружение")
         orbit_layout = QFormLayout(orbit_group)
+        orbit_layout.setSpacing(6)
 
         self.spin_orbit_radius = QSpinBox()
         self.spin_orbit_radius.setRange(30, 500)
         self.spin_orbit_radius.setValue(100)
         self.spin_orbit_radius.setSuffix(" м")
-        orbit_layout.addRow("Радиус кружения:", self.spin_orbit_radius)
+        orbit_layout.addRow("Радиус:", self.spin_orbit_radius)
 
         self.spin_orbit_turns = QSpinBox()
         self.spin_orbit_turns.setRange(1, 100)
         self.spin_orbit_turns.setValue(1)
-        orbit_layout.addRow("Количество кругов:", self.spin_orbit_turns)
-
-        self.spin_target_altitude = QSpinBox()
-        self.spin_target_altitude.setRange(10, 5000)
-        self.spin_target_altitude.setValue(100)
-        self.spin_target_altitude.setSuffix(" м")
-        orbit_layout.addRow("Целевая высота:", self.spin_target_altitude)
+        orbit_layout.addRow("Кругов:", self.spin_orbit_turns)
 
         self.orbit_group = orbit_group
         self.orbit_group.setVisible(False)
@@ -101,11 +101,9 @@ class WaypointDialog(QDialog):
     def _on_type_changed(self, index):
         type_id = self.combo_type.currentData()
 
-        is_orbit = type_id != "FLYTHROUGH"
+        is_orbit = type_id in ("ORBIT_TURNS", "ORBIT_INFINITE")
         self.orbit_group.setVisible(is_orbit)
-
         self.spin_orbit_turns.setEnabled(type_id == "ORBIT_TURNS")
-        self.spin_target_altitude.setEnabled(type_id == "ORBIT_ALTITUDE")
 
         self.adjustSize()
 
@@ -118,14 +116,13 @@ class WaypointDialog(QDialog):
             'altitude': self.spin_altitude.value(),
             'action': type_id,
             'radius': self.spin_radius.value(),
+            'climb_enroute': self.chk_climb_enroute.isChecked(),
         }
 
-        if type_id != "FLYTHROUGH":
+        if type_id in ("ORBIT_TURNS", "ORBIT_INFINITE"):
             data['orbit_radius'] = self.spin_orbit_radius.value()
 
             if type_id == "ORBIT_TURNS":
                 data['orbit_turns'] = self.spin_orbit_turns.value()
-            elif type_id == "ORBIT_ALTITUDE":
-                data['target_altitude'] = self.spin_target_altitude.value()
 
         return data

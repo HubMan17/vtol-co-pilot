@@ -115,25 +115,24 @@ class MapWidget(QWidget):
             margin-left: -16px;
             margin-top: -16px;
         }}
-        .wp-tooltip {{
-            background: rgba(0, 0, 0, 0.85);
-            border: 1px solid #ff6600;
-            border-radius: 4px;
-            padding: 6px 10px;
-            font-family: Consolas, monospace;
-            font-size: 12px;
-            color: #fff;
-            white-space: nowrap;
-        }}
-        .wp-tooltip-active {{
-            border-color: #00ff00;
-            background: rgba(0, 100, 0, 0.9);
-        }}
         .wp-number {{
-            font-size: 11px;
+            font-size: 10px;
             font-weight: bold;
             color: #fff;
-            text-shadow: 1px 1px 2px #000;
+            text-shadow: 1px 1px 1px #000;
+        }}
+        .leaflet-tooltip {{
+            background: rgba(30, 30, 30, 0.9);
+            border: none;
+            border-radius: 3px;
+            padding: 4px 8px;
+            font-family: Consolas, monospace;
+            font-size: 11px;
+            color: #eee;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+        }}
+        .leaflet-tooltip-top:before {{
+            border-top-color: rgba(30, 30, 30, 0.9);
         }}
     </style>
 </head>
@@ -226,31 +225,25 @@ class MapWidget(QWidget):
         }}
 
         function formatTooltip(wp, index, isActive) {{
-            var actionNames = {{
-                'FLYTHROUGH': 'Пролёт',
-                'ORBIT_ALTITUDE': 'Кружить до высоты',
-                'ORBIT_TURNS': 'Кружить N кругов',
-                'ORBIT_INFINITE': 'Кружить бесконечно'
+            var actionShort = {{
+                'FLYTHROUGH': '',
+                'ORBIT_TURNS': 'Круж. ' + wp.orbit_turns + 'x',
+                'ORBIT_INFINITE': 'Круж. ∞'
             }};
-            var actionName = wp.action_name || actionNames[wp.action] || wp.action;
 
-            var html = '<div class="wp-tooltip' + (isActive ? ' wp-tooltip-active' : '') + '">';
-            html += '<b>Точка ' + (index + 1) + '</b><br>';
-            html += 'Высота: ' + wp.altitude + ' м<br>';
-            html += 'Тип: ' + actionName;
+            var lines = [];
+            lines.push('<b>#' + (index + 1) + '</b> ' + wp.altitude + 'м');
 
-            if (wp.action === 'ORBIT_TURNS') {{
-                html += '<br>Кругов: ' + wp.orbit_turns;
-                html += '<br>Радиус: ' + wp.orbit_radius + ' м';
-            }} else if (wp.action === 'ORBIT_ALTITUDE') {{
-                html += '<br>До высоты: ' + wp.target_altitude + ' м';
-                html += '<br>Радиус: ' + wp.orbit_radius + ' м';
-            }} else if (wp.action === 'ORBIT_INFINITE') {{
-                html += '<br>Радиус: ' + wp.orbit_radius + ' м';
+            var action = actionShort[wp.action] || '';
+            if (action) {{
+                lines.push(action + (wp.orbit_radius ? ' R' + wp.orbit_radius : ''));
             }}
 
-            html += '</div>';
-            return html;
+            if (wp.climb_enroute) {{
+                lines.push('↗ набор');
+            }}
+
+            return lines.join('<br>');
         }}
 
         function setWaypoints(waypoints, activeIdx) {{

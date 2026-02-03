@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Optional
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QFrame, QSplitter, QStatusBar, QFileDialog, QMessageBox
+    QPushButton, QLabel, QFrame, QSplitter, QStatusBar, QFileDialog, QMessageBox, QSpinBox
 )
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont
@@ -180,6 +180,31 @@ class MainWindow(QMainWindow):
 
         layout.addLayout(map_layout)
 
+        wp_nav_layout = QHBoxLayout()
+
+        self.btn_wp_prev = QPushButton("◀")
+        self.btn_wp_prev.setFixedWidth(40)
+        self.btn_wp_prev.setEnabled(False)
+        wp_nav_layout.addWidget(self.btn_wp_prev)
+
+        wp_nav_layout.addWidget(QLabel("Точка:"))
+
+        self.spin_waypoint = QSpinBox()
+        self.spin_waypoint.setMinimum(1)
+        self.spin_waypoint.setMaximum(1)
+        self.spin_waypoint.setEnabled(False)
+        self.spin_waypoint.setFixedWidth(60)
+        wp_nav_layout.addWidget(self.spin_waypoint)
+
+        self.btn_wp_next = QPushButton("▶")
+        self.btn_wp_next.setFixedWidth(40)
+        self.btn_wp_next.setEnabled(False)
+        wp_nav_layout.addWidget(self.btn_wp_next)
+
+        wp_nav_layout.addStretch()
+
+        layout.addLayout(wp_nav_layout)
+
         return frame
 
     def _setup_connections(self):
@@ -193,6 +218,9 @@ class MainWindow(QMainWindow):
         self.btn_nav.clicked.connect(self._on_nav_toggle)
         self.btn_follow.clicked.connect(self._on_follow_toggle)
         self.btn_home.clicked.connect(self._on_home_toggle)
+        self.btn_wp_prev.clicked.connect(self._on_wp_prev)
+        self.btn_wp_next.clicked.connect(self._on_wp_next)
+        self.spin_waypoint.valueChanged.connect(self._on_wp_select)
 
         self.map_widget.bridge.position_clicked.connect(self._on_map_clicked)
         self.map_widget.set_position_requested.connect(self._on_context_set_position)
@@ -299,7 +327,7 @@ class MainWindow(QMainWindow):
             action=wp_data['action'],
             orbit_radius=wp_data.get('orbit_radius', 100.0),
             orbit_turns=wp_data.get('orbit_turns', 1),
-            target_altitude=wp_data.get('target_altitude', 0.0)
+            climb_enroute=wp_data.get('climb_enroute', False)
         )
 
         self._refresh_map_waypoints()
@@ -325,6 +353,42 @@ class MainWindow(QMainWindow):
         waypoints = self.route_planner.get_waypoints_for_display()
         active_idx = self.route_planner.get_active_waypoint_index()
         self.map_widget.set_waypoints(waypoints, active_idx)
+        self._update_waypoint_controls()
+
+    def _update_waypoint_controls(self):
+        wp_count = self.route_planner.get_waypoint_count()
+        has_waypoints = wp_count > 0
+
+        self.btn_wp_prev.setEnabled(has_waypoints)
+        self.btn_wp_next.setEnabled(has_waypoints)
+        self.spin_waypoint.setEnabled(has_waypoints)
+
+        if has_waypoints:
+            self.spin_waypoint.blockSignals(True)
+            self.spin_waypoint.setMaximum(wp_count)
+            self.spin_waypoint.setValue(self.route_planner.get_active_waypoint_index() + 1)
+            self.spin_waypoint.blockSignals(False)
+
+    def _on_wp_prev(self):
+        self.route_planner.prev_waypoint()
+        self._refresh_map_waypoints()
+        wp = self.route_planner.get_active_waypoint()
+        if wp:
+            self.statusbar.showMessage(f"Активная точка: {wp.id}")
+
+    def _on_wp_next(self):
+        self.route_planner.next_waypoint()
+        self._refresh_map_waypoints()
+        wp = self.route_planner.get_active_waypoint()
+        if wp:
+            self.statusbar.showMessage(f"Активная точка: {wp.id}")
+
+    def _on_wp_select(self, value: int):
+        self.route_planner.set_active_waypoint(value - 1)
+        self._refresh_map_waypoints()
+        wp = self.route_planner.get_active_waypoint()
+        if wp:
+            self.statusbar.showMessage(f"Активная точка: {wp.id}")
 
     def _on_use_dr_toggle(self):
         self._use_dr_position = self.btn_use_dr.isChecked()

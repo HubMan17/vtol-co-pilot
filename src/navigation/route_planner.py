@@ -21,7 +21,7 @@ class Waypoint:
     action: str = "FLYTHROUGH"
     orbit_radius: float = 100.0
     orbit_turns: int = 1
-    target_altitude: float = 0.0
+    climb_enroute: bool = False
 
     def to_latlon(self) -> LatLon:
         return LatLon(self.lat, self.lon)
@@ -29,7 +29,6 @@ class Waypoint:
     def get_action_name(self) -> str:
         names = {
             "FLYTHROUGH": "Пролёт",
-            "ORBIT_ALTITUDE": "Кружить до высоты",
             "ORBIT_TURNS": "Кружить N кругов",
             "ORBIT_INFINITE": "Кружить бесконечно",
         }
@@ -71,7 +70,7 @@ class RoutePlanner:
                     action=wp_data.get('action', 'FLYTHROUGH'),
                     orbit_radius=wp_data.get('orbit_radius', 100.0),
                     orbit_turns=wp_data.get('orbit_turns', 1),
-                    target_altitude=wp_data.get('target_altitude', 0.0)
+                    climb_enroute=wp_data.get('climb_enroute', False)
                 )
                 waypoints.append(wp)
 
@@ -106,7 +105,7 @@ class RoutePlanner:
                         'action': wp.action,
                         'orbit_radius': wp.orbit_radius,
                         'orbit_turns': wp.orbit_turns,
-                        'target_altitude': wp.target_altitude
+                        'climb_enroute': wp.climb_enroute
                     }
                     for wp in route.waypoints
                 ]
@@ -141,7 +140,7 @@ class RoutePlanner:
     def add_waypoint(self, lat: float, lon: float, altitude: float = 100.0,
                      radius: float = 50.0, action: str = "FLYTHROUGH",
                      orbit_radius: float = 100.0, orbit_turns: int = 1,
-                     target_altitude: float = 0.0) -> Optional[Waypoint]:
+                     climb_enroute: bool = False) -> Optional[Waypoint]:
         if not self._route:
             return None
         new_id = len(self._route.waypoints) + 1
@@ -154,7 +153,7 @@ class RoutePlanner:
             action=action,
             orbit_radius=orbit_radius,
             orbit_turns=orbit_turns,
-            target_altitude=target_altitude
+            climb_enroute=climb_enroute
         )
         self._route.waypoints.append(wp)
         return wp
@@ -259,7 +258,7 @@ class RoutePlanner:
                 'radius': wp.radius,
                 'orbit_radius': wp.orbit_radius,
                 'orbit_turns': wp.orbit_turns,
-                'target_altitude': wp.target_altitude
+                'climb_enroute': wp.climb_enroute
             }
             for wp in self._route.waypoints
         ]

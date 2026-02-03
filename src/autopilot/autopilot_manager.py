@@ -21,7 +21,8 @@ from src.mavlink.telemetry import LatLon
 from src.core.config import AutopilotConfig
 from src.core.events import EventBus, Event
 from src.autopilot.heading_controller import HeadingController
-from src.navigation.calculations import bearing_to
+from src.navigation.calculations import bearing_to, haversine_distance
+import math
 
 if TYPE_CHECKING:
     from src.navigation.route_planner import RoutePlanner
@@ -55,6 +56,11 @@ class AutopilotManager:
         self._active_waypoint_id = -1
         self._stick_override_count = 0
         self._stick_override_threshold_count = 3
+
+        self._is_orbiting = False
+        self._orbit_turns_completed = 0
+        self._orbit_last_heading = 0.0
+        self._orbit_heading_accumulated = 0.0
 
         self._event_bus.subscribe(Event.CONNECTION_LOST, self._on_connection_lost)
 
@@ -104,6 +110,9 @@ class AutopilotManager:
         self._heading_controller.reset()
         self._stick_override_count = 0
         self._active_waypoint_id = wp.id
+        self._is_orbiting = False
+        self._orbit_turns_completed = 0
+        self._orbit_heading_accumulated = 0.0
 
         self._mode = AutopilotMode.NAV
         self._last_update_time = time.time()
@@ -186,30 +195,52 @@ class AutopilotManager:
                 self._last_update_time = current_time
                 return True
 
-            if self._route_planner.is_waypoint_reached(position):
-                old_wp = self._route_planner.get_active_waypoint()
-                self._route_planner.next_waypoint()
-                new_wp = self._route_planner.get_active_waypoint()
-
-                if new_wp and new_wp.id != self._active_waypoint_id:
-                    self._active_waypoint_id = new_wp.id
-                    self._event_bus.emit(Event.WAYPOINT_REACHED, {
-                        'reached': old_wp.id if old_wp else 0,
-                        'next': new_wp.id
-                    })
-
-                if self._route_planner.is_route_complete():
-                    self.disengage("Маршрут завершён")
-                    return False
-
             wp = self._route_planner.get_active_waypoint()
             if not wp:
                 self.disengage("Нет активной точки")
                 return False
 
-            target_bearing = bearing_to(position.lat, position.lon, wp.lat, wp.lon)
-            self._heading_controller.set_target_heading(target_bearing)
+            distance_to_wp = haversine_distance(position.lat, position.lon, wp.lat, wp.lon)
 
+            if self._is_orbiting:
+                target_bearing = self._calculate_orbit_heading(position, wp, telemetry.heading)
+                self._update_orbit_progress(telemetry.heading)
+
+                if wp.action == "ORBIT_TURNS" and self._orbit_turns_completed >= wp.orbit_turns:
+                    logger.info(f"ORBIT COMPLETE: {self._orbit_turns_completed} turns at WP{wp.id}")
+                    self._finish_orbit_and_advance(wp)
+
+            else:
+                if self._route_planner.is_waypoint_reached(position):
+                    if wp.action in ("ORBIT_TURNS", "ORBIT_INFINITE"):
+                        self._start_orbit(wp, telemetry.heading)
+                        target_bearing = self._calculate_orbit_heading(position, wp, telemetry.heading)
+                    else:
+                        old_wp = wp
+                        self._route_planner.next_waypoint()
+                        new_wp = self._route_planner.get_active_waypoint()
+
+                        if new_wp and new_wp.id != self._active_waypoint_id:
+                            self._active_waypoint_id = new_wp.id
+                            self._event_bus.emit(Event.WAYPOINT_REACHED, {
+                                'reached': old_wp.id if old_wp else 0,
+                                'next': new_wp.id
+                            })
+
+                        if self._route_planner.is_route_complete():
+                            self.disengage("Маршрут завершён")
+                            return False
+
+                        wp = self._route_planner.get_active_waypoint()
+                        if not wp:
+                            self.disengage("Нет активной точки")
+                            return False
+
+                        target_bearing = bearing_to(position.lat, position.lon, wp.lat, wp.lon)
+                else:
+                    target_bearing = bearing_to(position.lat, position.lon, wp.lat, wp.lon)
+
+            self._heading_controller.set_target_heading(target_bearing)
             roll_pwm = self._heading_controller.update(telemetry.heading, dt)
 
             self._proxy.send_rc_override({
@@ -263,6 +294,52 @@ class AutopilotManager:
             'last_update': self._last_update_time,
             'disengage_reason': self._disengage_reason
         }
+
+    def _start_orbit(self, wp, current_heading: float):
+        self._is_orbiting = True
+        self._orbit_turns_completed = 0
+        self._orbit_last_heading = current_heading
+        self._orbit_heading_accumulated = 0.0
+        logger.info(f"START ORBIT at WP{wp.id}: action={wp.action}, radius={wp.orbit_radius}")
+
+    def _calculate_orbit_heading(self, position: LatLon, wp, current_heading: float) -> float:
+        bearing_to_wp = bearing_to(position.lat, position.lon, wp.lat, wp.lon)
+        orbit_heading = (bearing_to_wp + 90) % 360
+        return orbit_heading
+
+    def _update_orbit_progress(self, current_heading: float):
+        heading_diff = current_heading - self._orbit_last_heading
+
+        if heading_diff > 180:
+            heading_diff -= 360
+        elif heading_diff < -180:
+            heading_diff += 360
+
+        self._orbit_heading_accumulated += heading_diff
+        self._orbit_last_heading = current_heading
+
+        new_turns = int(abs(self._orbit_heading_accumulated) / 360)
+        if new_turns > self._orbit_turns_completed:
+            self._orbit_turns_completed = new_turns
+            logger.info(f"ORBIT TURN {self._orbit_turns_completed} completed")
+
+    def _finish_orbit_and_advance(self, old_wp):
+        self._is_orbiting = False
+        self._orbit_turns_completed = 0
+        self._orbit_heading_accumulated = 0.0
+
+        self._route_planner.next_waypoint()
+        new_wp = self._route_planner.get_active_waypoint()
+
+        if new_wp and new_wp.id != self._active_waypoint_id:
+            self._active_waypoint_id = new_wp.id
+            self._event_bus.emit(Event.WAYPOINT_REACHED, {
+                'reached': old_wp.id if old_wp else 0,
+                'next': new_wp.id
+            })
+
+        if self._route_planner.is_route_complete():
+            self.disengage("Маршрут завершён")
 
     def _on_connection_lost(self, data):
         self.disengage("Соединение потеряно")
