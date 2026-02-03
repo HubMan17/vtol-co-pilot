@@ -119,37 +119,36 @@ class MapWidget(QWidget):
             subdomains: ['mt0', 'mt1', 'mt2', 'mt3']
         }}).addTo(map);
 
-        var aircraftSvg = `
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
-                <path d="M16 2 L14 12 L4 14 L4 18 L14 16 L14 26 L10 28 L10 30 L16 28 L22 30 L22 28 L18 26 L18 16 L28 18 L28 14 L18 12 Z"
-                      fill="#00ff00" stroke="#000" stroke-width="1"/>
-            </svg>
-        `;
-
-        var aircraftIcon = L.divIcon({{
-            html: aircraftSvg,
-            className: 'aircraft-icon',
-            iconSize: [32, 32],
-            iconAnchor: [16, 16]
-        }});
-
         var aircraftMarker = null;
         var trackLine = null;
         var trackPoints = [];
         var waypointMarkers = [];
+        var followAircraft = false;
+        var lastHeading = 0;
+
+        function createAircraftIcon(heading) {{
+            return L.divIcon({{
+                html: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" style="transform: rotate(${{heading}}deg);">
+                    <path d="M16 2 L14 12 L4 14 L4 18 L14 16 L14 26 L10 28 L10 30 L16 28 L22 30 L22 28 L18 26 L18 16 L28 18 L28 14 L18 12 Z"
+                          fill="#00ff00" stroke="#000" stroke-width="1"/>
+                </svg>`,
+                className: 'aircraft-icon',
+                iconSize: [32, 32],
+                iconAnchor: [16, 16]
+            }});
+        }}
 
         function updateAircraft(lat, lon, heading) {{
             if (!aircraftMarker) {{
                 aircraftMarker = L.marker([lat, lon], {{
-                    icon: aircraftIcon,
-                    rotationAngle: heading,
-                    rotationOrigin: 'center center'
+                    icon: createAircraftIcon(heading),
+                    zIndexOffset: 1000
                 }}).addTo(map);
             }} else {{
                 aircraftMarker.setLatLng([lat, lon]);
-                var iconEl = aircraftMarker.getElement();
-                if (iconEl) {{
-                    iconEl.style.transform = iconEl.style.transform.replace(/rotate\\([^)]*\\)/, '') + ' rotate(' + heading + 'deg)';
+                if (Math.abs(heading - lastHeading) > 1) {{
+                    aircraftMarker.setIcon(createAircraftIcon(heading));
+                    lastHeading = heading;
                 }}
             }}
 
@@ -161,6 +160,14 @@ class MapWidget(QWidget):
             }} else {{
                 trackLine = L.polyline(trackPoints, {{color: '#00ff00', weight: 2}}).addTo(map);
             }}
+
+            if (followAircraft) {{
+                map.panTo([lat, lon], {{animate: false}});
+            }}
+        }}
+
+        function setFollowMode(enabled) {{
+            followAircraft = enabled;
         }}
 
         function setAircraftPosition(lat, lon) {{
@@ -262,3 +269,6 @@ class MapWidget(QWidget):
 
     def center_on(self, lat: float, lon: float):
         self.web_view.page().runJavaScript(f"centerOn({lat}, {lon});")
+
+    def set_follow_mode(self, enabled: bool):
+        self.web_view.page().runJavaScript(f"setFollowMode({'true' if enabled else 'false'});")

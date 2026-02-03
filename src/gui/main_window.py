@@ -163,6 +163,15 @@ class MainWindow(QMainWindow):
 
         layout.addLayout(dr_layout)
 
+        map_layout = QHBoxLayout()
+
+        self.btn_follow = QPushButton("Следовать")
+        self.btn_follow.setCheckable(True)
+        self.btn_follow.setEnabled(False)
+        map_layout.addWidget(self.btn_follow)
+
+        layout.addLayout(map_layout)
+
         return frame
 
     def _setup_connections(self):
@@ -174,6 +183,7 @@ class MainWindow(QMainWindow):
         self.btn_clear_track.clicked.connect(self._on_clear_track)
         self.btn_hdg_hold.clicked.connect(self._on_heading_hold_toggle)
         self.btn_nav.clicked.connect(self._on_nav_toggle)
+        self.btn_follow.clicked.connect(self._on_follow_toggle)
 
         self.map_widget.bridge.position_clicked.connect(self._on_map_clicked)
         self.map_widget.set_position_requested.connect(self._on_context_set_position)
@@ -209,6 +219,7 @@ class MainWindow(QMainWindow):
         self.btn_load_route.setEnabled(True)
         self.btn_use_dr.setEnabled(True)
         self.btn_clear_track.setEnabled(True)
+        self.btn_follow.setEnabled(True)
         self.lbl_status.setText("ПОДКЛЮЧЕНО")
         self.lbl_status.setStyleSheet("color: green; font-weight: bold;")
         self.statusbar.showMessage(f"Подключено к SITL на порту {self.config.mavlink.sitl_port}")
@@ -222,6 +233,7 @@ class MainWindow(QMainWindow):
         self.btn_load_route.setEnabled(False)
         self.btn_use_dr.setEnabled(False)
         self.btn_clear_track.setEnabled(False)
+        self.btn_follow.setEnabled(False)
         self.lbl_status.setText("ОТКЛЮЧЕНО")
         self.lbl_status.setStyleSheet("color: red; font-weight: bold;")
         self.statusbar.showMessage("Отключено")
@@ -293,6 +305,16 @@ class MainWindow(QMainWindow):
         self.dead_reckoning.clear_track()
         self.map_widget.clear_track()
         self.statusbar.showMessage("Трек очищен")
+
+    def _on_follow_toggle(self):
+        follow = self.btn_follow.isChecked()
+        self.map_widget.set_follow_mode(follow)
+        if follow:
+            self.btn_follow.setStyleSheet("background-color: #00cc00;")
+            self.statusbar.showMessage("Слежение за самолётом включено")
+        else:
+            self.btn_follow.setStyleSheet("")
+            self.statusbar.showMessage("Слежение отключено")
 
     def _on_heading_hold_toggle(self):
         if self.btn_hdg_hold.isChecked():
