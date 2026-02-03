@@ -19,9 +19,21 @@ class Waypoint:
     altitude: float
     radius: float = 50.0
     action: str = "FLYTHROUGH"
+    orbit_radius: float = 100.0
+    orbit_turns: int = 1
+    target_altitude: float = 0.0
 
     def to_latlon(self) -> LatLon:
         return LatLon(self.lat, self.lon)
+
+    def get_action_name(self) -> str:
+        names = {
+            "FLYTHROUGH": "Пролёт",
+            "ORBIT_ALTITUDE": "Кружить до высоты",
+            "ORBIT_TURNS": "Кружить N кругов",
+            "ORBIT_INFINITE": "Кружить бесконечно",
+        }
+        return names.get(self.action, self.action)
 
 
 @dataclass
@@ -56,7 +68,10 @@ class RoutePlanner:
                     lon=wp_data['lon'],
                     altitude=wp_data.get('altitude', wp_data.get('alt', 100)),
                     radius=wp_data.get('radius', 50.0),
-                    action=wp_data.get('action', 'FLYTHROUGH')
+                    action=wp_data.get('action', 'FLYTHROUGH'),
+                    orbit_radius=wp_data.get('orbit_radius', 100.0),
+                    orbit_turns=wp_data.get('orbit_turns', 1),
+                    target_altitude=wp_data.get('target_altitude', 0.0)
                 )
                 waypoints.append(wp)
 
@@ -88,7 +103,10 @@ class RoutePlanner:
                         'lon': wp.lon,
                         'altitude': wp.altitude,
                         'radius': wp.radius,
-                        'action': wp.action
+                        'action': wp.action,
+                        'orbit_radius': wp.orbit_radius,
+                        'orbit_turns': wp.orbit_turns,
+                        'target_altitude': wp.target_altitude
                     }
                     for wp in route.waypoints
                 ]
@@ -110,13 +128,20 @@ class RoutePlanner:
         self._route = None
         self._active_waypoint_idx = 0
 
+    def clear_waypoints(self):
+        if self._route:
+            self._route.waypoints = []
+            self._active_waypoint_idx = 0
+
     def create_route(self, name: str) -> Route:
         self._route = Route(name=name, waypoints=[])
         self._active_waypoint_idx = 0
         return self._route
 
     def add_waypoint(self, lat: float, lon: float, altitude: float = 100.0,
-                     radius: float = 50.0, action: str = "FLYTHROUGH") -> Optional[Waypoint]:
+                     radius: float = 50.0, action: str = "FLYTHROUGH",
+                     orbit_radius: float = 100.0, orbit_turns: int = 1,
+                     target_altitude: float = 0.0) -> Optional[Waypoint]:
         if not self._route:
             return None
         new_id = len(self._route.waypoints) + 1
@@ -126,7 +151,10 @@ class RoutePlanner:
             lon=lon,
             altitude=altitude,
             radius=radius,
-            action=action
+            action=action,
+            orbit_radius=orbit_radius,
+            orbit_turns=orbit_turns,
+            target_altitude=target_altitude
         )
         self._route.waypoints.append(wp)
         return wp
@@ -221,7 +249,18 @@ class RoutePlanner:
         if not self._route:
             return []
         return [
-            {'lat': wp.lat, 'lon': wp.lon, 'id': wp.id, 'altitude': wp.altitude}
+            {
+                'lat': wp.lat,
+                'lon': wp.lon,
+                'id': wp.id,
+                'altitude': wp.altitude,
+                'action': wp.action,
+                'action_name': wp.get_action_name(),
+                'radius': wp.radius,
+                'orbit_radius': wp.orbit_radius,
+                'orbit_turns': wp.orbit_turns,
+                'target_altitude': wp.target_altitude
+            }
             for wp in self._route.waypoints
         ]
 

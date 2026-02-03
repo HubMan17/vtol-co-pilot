@@ -16,6 +16,7 @@ from src.navigation.route_planner import RoutePlanner
 from src.autopilot.autopilot_manager import AutopilotManager, AutopilotMode
 from src.gui.status_panel import StatusPanel
 from src.gui.map_widget import MapWidget
+from src.gui.waypoint_dialog import WaypointDialog
 
 
 class MainWindow(QMainWindow):
@@ -281,17 +282,28 @@ class MainWindow(QMainWindow):
         self.statusbar.showMessage(f"Позиция установлена: {lat:.6f}, {lon:.6f}")
 
     def _on_context_add_waypoint(self, lat: float, lon: float):
-        route = self.route_planner.get_route()
-        if route:
-            new_idx = len(route.waypoints) + 1
-            self.route_planner.add_waypoint(lat, lon, 100.0)
-            self.map_widget.add_waypoint(lat, lon, new_idx)
-            self.statusbar.showMessage(f"Добавлена точка {new_idx}: {lat:.6f}, {lon:.6f}")
-        else:
+        dialog = WaypointDialog(self, lat, lon)
+        if dialog.exec_() != WaypointDialog.Accepted:
+            return
+
+        wp_data = dialog.get_waypoint_data()
+
+        if not self.route_planner.get_route():
             self.route_planner.create_route("Новый маршрут")
-            self.route_planner.add_waypoint(lat, lon, 100.0)
-            self.map_widget.add_waypoint(lat, lon, 1)
-            self.statusbar.showMessage(f"Создан маршрут, добавлена точка 1: {lat:.6f}, {lon:.6f}")
+
+        wp = self.route_planner.add_waypoint(
+            lat=wp_data['lat'],
+            lon=wp_data['lon'],
+            altitude=wp_data['altitude'],
+            radius=wp_data['radius'],
+            action=wp_data['action'],
+            orbit_radius=wp_data.get('orbit_radius', 100.0),
+            orbit_turns=wp_data.get('orbit_turns', 1),
+            target_altitude=wp_data.get('target_altitude', 0.0)
+        )
+
+        self._refresh_map_waypoints()
+        self.statusbar.showMessage(f"Добавлена точка {wp.id}: {lat:.6f}, {lon:.6f}")
 
     def _on_load_route(self):
         routes_dir = Path(__file__).parent.parent.parent / "routes"
@@ -304,11 +316,15 @@ class MainWindow(QMainWindow):
         if file_path:
             route = self.route_planner.load_route(Path(file_path))
             if route:
-                waypoints = self.route_planner.get_waypoints_for_display()
-                self.map_widget.set_waypoints(waypoints)
+                self._refresh_map_waypoints()
                 self.statusbar.showMessage(f"Загружен маршрут: {route.name} ({len(route.waypoints)} точек)")
             else:
                 QMessageBox.warning(self, "Ошибка", "Не удалось загрузить файл маршрута")
+
+    def _refresh_map_waypoints(self):
+        waypoints = self.route_planner.get_waypoints_for_display()
+        active_idx = self.route_planner.get_active_waypoint_index()
+        self.map_widget.set_waypoints(waypoints, active_idx)
 
     def _on_use_dr_toggle(self):
         self._use_dr_position = self.btn_use_dr.isChecked()
@@ -349,6 +365,7 @@ class MainWindow(QMainWindow):
             self.route_planner.create_route("Home")
             self.route_planner.clear_waypoints()
             self.route_planner.add_waypoint(self._home_position.lat, self._home_position.lon, 100.0)
+            self._refresh_map_waypoints()
 
             if self.autopilot.engage_nav():
                 self.btn_home.setStyleSheet("background-color: #ff6600;")
@@ -428,6 +445,7 @@ class MainWindow(QMainWindow):
         reached = data.get('reached', 0)
         next_wp = data.get('next', 0)
         total = self.route_planner.get_waypoint_count()
+        self.map_widget.update_active_waypoint(next_wp - 1)
         self.statusbar.showMessage(f"Достигнута точка {reached}, следующая: {next_wp}/{total}")
 
     def _update_display(self):
@@ -460,6 +478,7 @@ class MainWindow(QMainWindow):
                     self.route_planner.next_waypoint()
                     new_idx = self.route_planner.get_active_waypoint_index()
                     if new_idx != old_idx:
+                        self.map_widget.update_active_waypoint(new_idx)
                         self.statusbar.showMessage(f"Достигнута точка {old_idx + 1}, следующая: {new_idx + 1}")
 
                 distance = self.route_planner.distance_to_waypoint(display_position)

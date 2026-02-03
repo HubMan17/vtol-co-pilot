@@ -115,6 +115,26 @@ class MapWidget(QWidget):
             margin-left: -16px;
             margin-top: -16px;
         }}
+        .wp-tooltip {{
+            background: rgba(0, 0, 0, 0.85);
+            border: 1px solid #ff6600;
+            border-radius: 4px;
+            padding: 6px 10px;
+            font-family: Consolas, monospace;
+            font-size: 12px;
+            color: #fff;
+            white-space: nowrap;
+        }}
+        .wp-tooltip-active {{
+            border-color: #00ff00;
+            background: rgba(0, 100, 0, 0.9);
+        }}
+        .wp-number {{
+            font-size: 11px;
+            font-weight: bold;
+            color: #fff;
+            text-shadow: 1px 1px 2px #000;
+        }}
     </style>
 </head>
 <body>
@@ -131,8 +151,13 @@ class MapWidget(QWidget):
         var trackLine = null;
         var trackPoints = [];
         var waypointMarkers = [];
+        var routeLines = [];
+        var activeWaypointLine = null;
+        var waypointData = [];
+        var activeWaypointIdx = 0;
         var followAircraft = false;
         var lastHeading = 0;
+        var lastAircraftPos = null;
 
         function createAircraftIcon(heading) {{
             return L.divIcon({{
@@ -147,6 +172,8 @@ class MapWidget(QWidget):
         }}
 
         function updateAircraft(lat, lon, heading) {{
+            lastAircraftPos = [lat, lon];
+
             if (!aircraftMarker) {{
                 aircraftMarker = L.marker([lat, lon], {{
                     icon: createAircraftIcon(heading),
@@ -168,6 +195,8 @@ class MapWidget(QWidget):
             }} else {{
                 trackLine = L.polyline(trackPoints, {{color: '#00ff00', weight: 2}}).addTo(map);
             }}
+
+            updateActiveWaypointLine();
 
             if (followAircraft) {{
                 map.panTo([lat, lon], {{animate: false}});
@@ -196,33 +225,148 @@ class MapWidget(QWidget):
             }}
         }}
 
-        function setWaypoints(waypoints) {{
+        function formatTooltip(wp, index, isActive) {{
+            var actionNames = {{
+                'FLYTHROUGH': 'Пролёт',
+                'ORBIT_ALTITUDE': 'Кружить до высоты',
+                'ORBIT_TURNS': 'Кружить N кругов',
+                'ORBIT_INFINITE': 'Кружить бесконечно'
+            }};
+            var actionName = wp.action_name || actionNames[wp.action] || wp.action;
+
+            var html = '<div class="wp-tooltip' + (isActive ? ' wp-tooltip-active' : '') + '">';
+            html += '<b>Точка ' + (index + 1) + '</b><br>';
+            html += 'Высота: ' + wp.altitude + ' м<br>';
+            html += 'Тип: ' + actionName;
+
+            if (wp.action === 'ORBIT_TURNS') {{
+                html += '<br>Кругов: ' + wp.orbit_turns;
+                html += '<br>Радиус: ' + wp.orbit_radius + ' м';
+            }} else if (wp.action === 'ORBIT_ALTITUDE') {{
+                html += '<br>До высоты: ' + wp.target_altitude + ' м';
+                html += '<br>Радиус: ' + wp.orbit_radius + ' м';
+            }} else if (wp.action === 'ORBIT_INFINITE') {{
+                html += '<br>Радиус: ' + wp.orbit_radius + ' м';
+            }}
+
+            html += '</div>';
+            return html;
+        }}
+
+        function setWaypoints(waypoints, activeIdx) {{
             waypointMarkers.forEach(m => map.removeLayer(m));
             waypointMarkers = [];
+            routeLines.forEach(l => map.removeLayer(l));
+            routeLines = [];
+
+            waypointData = waypoints;
+            if (activeIdx !== undefined) activeWaypointIdx = activeIdx;
 
             waypoints.forEach((wp, i) => {{
+                var isPast = i < activeWaypointIdx;
+                var isActive = i === activeWaypointIdx;
+                var isFuture = i > activeWaypointIdx;
+
+                var fillColor = isPast ? '#888888' : (isActive ? '#00ff00' : '#ff6600');
+                var opacity = isPast ? 0.5 : 0.9;
+
                 var marker = L.circleMarker([wp.lat, wp.lon], {{
-                    radius: 8,
-                    fillColor: '#ff6600',
-                    color: '#fff',
-                    weight: 2,
-                    fillOpacity: 0.8
+                    radius: isActive ? 10 : 8,
+                    fillColor: fillColor,
+                    color: isActive ? '#00ff00' : '#fff',
+                    weight: isActive ? 3 : 2,
+                    fillOpacity: opacity
                 }}).addTo(map);
-                marker.bindTooltip(String(i + 1), {{permanent: true, direction: 'center', className: 'wp-label'}});
+
+                var numberIcon = L.divIcon({{
+                    html: '<span class="wp-number">' + (i + 1) + '</span>',
+                    className: '',
+                    iconSize: [20, 20],
+                    iconAnchor: [10, 10]
+                }});
+                var numberMarker = L.marker([wp.lat, wp.lon], {{
+                    icon: numberIcon,
+                    interactive: false
+                }}).addTo(map);
+
+                marker.bindTooltip(formatTooltip(wp, i, isActive), {{
+                    permanent: false,
+                    direction: 'top',
+                    offset: [0, -10],
+                    className: ''
+                }});
+
                 waypointMarkers.push(marker);
+                waypointMarkers.push(numberMarker);
             }});
 
-            if (waypoints.length > 1) {{
-                var routeLine = L.polyline(waypoints.map(wp => [wp.lat, wp.lon]), {{
-                    color: '#ff6600',
-                    weight: 2,
-                    dashArray: '5, 10'
+            for (var i = 0; i < waypoints.length - 1; i++) {{
+                var isPastSegment = i < activeWaypointIdx - 1;
+                var isActiveSegment = i === activeWaypointIdx - 1;
+                var isFutureSegment = i >= activeWaypointIdx;
+
+                var color, weight, opacity, dashArray;
+
+                if (isPastSegment) {{
+                    color = '#888888';
+                    weight = 2;
+                    opacity = 0.4;
+                    dashArray = null;
+                }} else if (isActiveSegment) {{
+                    color = '#00ffff';
+                    weight = 3;
+                    opacity = 0.9;
+                    dashArray = null;
+                }} else {{
+                    color = '#ff6600';
+                    weight = 2;
+                    opacity = 0.7;
+                    dashArray = '8, 8';
+                }}
+
+                var line = L.polyline([
+                    [waypoints[i].lat, waypoints[i].lon],
+                    [waypoints[i + 1].lat, waypoints[i + 1].lon]
+                ], {{
+                    color: color,
+                    weight: weight,
+                    opacity: opacity,
+                    dashArray: dashArray
                 }}).addTo(map);
-                waypointMarkers.push(routeLine);
+                routeLines.push(line);
+            }}
+
+            updateActiveWaypointLine();
+        }}
+
+        function updateActiveWaypoint(idx) {{
+            activeWaypointIdx = idx;
+            if (waypointData.length > 0) {{
+                setWaypoints(waypointData, idx);
             }}
         }}
 
-        function addWaypoint(lat, lon, index) {{
+        function updateActiveWaypointLine() {{
+            if (activeWaypointLine) {{
+                map.removeLayer(activeWaypointLine);
+                activeWaypointLine = null;
+            }}
+
+            if (lastAircraftPos && waypointData.length > activeWaypointIdx) {{
+                var wp = waypointData[activeWaypointIdx];
+                activeWaypointLine = L.polyline([
+                    lastAircraftPos,
+                    [wp.lat, wp.lon]
+                ], {{
+                    color: '#ff00ff',
+                    weight: 2,
+                    opacity: 0.8,
+                    dashArray: '4, 8'
+                }}).addTo(map);
+            }}
+        }}
+
+        function addWaypoint(lat, lon, index, wpData) {{
             var marker = L.circleMarker([lat, lon], {{
                 radius: 8,
                 fillColor: '#ff6600',
@@ -230,8 +374,31 @@ class MapWidget(QWidget):
                 weight: 2,
                 fillOpacity: 0.8
             }}).addTo(map);
-            marker.bindTooltip(String(index), {{permanent: true, direction: 'center', className: 'wp-label'}});
+
+            var tooltip = wpData ? formatTooltip(wpData, index - 1, false) : 'Точка ' + index;
+            marker.bindTooltip(tooltip, {{
+                permanent: false,
+                direction: 'top',
+                offset: [0, -10]
+            }});
+
+            var numberIcon = L.divIcon({{
+                html: '<span class="wp-number">' + index + '</span>',
+                className: '',
+                iconSize: [20, 20],
+                iconAnchor: [10, 10]
+            }});
+            var numberMarker = L.marker([lat, lon], {{
+                icon: numberIcon,
+                interactive: false
+            }}).addTo(map);
+
             waypointMarkers.push(marker);
+            waypointMarkers.push(numberMarker);
+
+            if (wpData) {{
+                waypointData.push(wpData);
+            }}
         }}
 
         function centerOn(lat, lon) {{
@@ -287,12 +454,19 @@ class MapWidget(QWidget):
     def clear_track(self):
         self.web_view.page().runJavaScript("clearTrack();")
 
-    def set_waypoints(self, waypoints: list):
+    def set_waypoints(self, waypoints: list, active_idx: int = 0):
         wp_json = json.dumps(waypoints)
-        self.web_view.page().runJavaScript(f"setWaypoints({wp_json});")
+        self.web_view.page().runJavaScript(f"setWaypoints({wp_json}, {active_idx});")
 
-    def add_waypoint(self, lat: float, lon: float, index: int):
-        self.web_view.page().runJavaScript(f"addWaypoint({lat}, {lon}, {index});")
+    def update_active_waypoint(self, index: int):
+        self.web_view.page().runJavaScript(f"updateActiveWaypoint({index});")
+
+    def add_waypoint(self, lat: float, lon: float, index: int, wp_data: dict = None):
+        if wp_data:
+            wp_json = json.dumps(wp_data)
+            self.web_view.page().runJavaScript(f"addWaypoint({lat}, {lon}, {index}, {wp_json});")
+        else:
+            self.web_view.page().runJavaScript(f"addWaypoint({lat}, {lon}, {index}, null);")
 
     def center_on(self, lat: float, lon: float):
         self.web_view.page().runJavaScript(f"centerOn({lat}, {lon});")
