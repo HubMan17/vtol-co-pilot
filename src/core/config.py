@@ -16,7 +16,7 @@ class MAVLinkConfig:
 @dataclass
 class AutopilotConfig:
     heading_pid: Dict[str, float] = field(default_factory=lambda: {"p": 0.7, "i": 0.08, "d": 0.15})
-    altitude_pid: Dict[str, float] = field(default_factory=lambda: {"p": 0.4, "i": 0.02, "d": 0.8})
+    altitude_pid: Dict[str, float] = field(default_factory=lambda: {"p": 0.8, "i": 0.05, "d": 1.0})
     speed_pid: Dict[str, float] = field(default_factory=lambda: {"p": 50.0, "i": 10.0, "d": 5.0})
     bank_limit: float = 25.0
     pitch_limit_up: float = 12.0

@@ -101,6 +101,7 @@ class AutopilotManager:
         self._is_orbiting = False
         self._orbit_turns_completed = 0
         self._orbit_heading_accumulated = 0.0
+        self._disengage_reason = ""
 
         self._mode = AutopilotMode.NAV
         self._last_update_time = time.time()
@@ -192,10 +193,12 @@ class AutopilotManager:
 
             else:
                 if self._route_planner.is_waypoint_reached(position):
+                    # Set altitude target on arrival if not climbing enroute
+                    if not wp.climb_enroute:
+                        self._altitude_controller.set_target_altitude(wp.altitude)
+
                     if wp.action in ("ORBIT_TURNS", "ORBIT_INFINITE"):
                         self._start_orbit(wp, telemetry.heading)
-                        if not wp.climb_enroute:
-                            self._altitude_controller.set_target_altitude(wp.altitude)
                         target_bearing = self._calculate_orbit_heading(position, wp, telemetry.heading)
                     else:
                         old_wp = wp

@@ -229,8 +229,15 @@ class StatusPanel(QWidget):
 
         if mode == 'MANUAL':
             self.lbl_ap_mode.setStyleSheet("color: gray;")
-            self.lbl_ap_action.setText("---")
-            self.lbl_ap_action.setStyleSheet("color: #888;")
+
+            # Show disengage reason if available
+            if status and status.get('disengage_reason'):
+                self.lbl_ap_action.setText(f"Отключен: {status['disengage_reason']}")
+                self.lbl_ap_action.setStyleSheet("color: #ffaa00;")
+            else:
+                self.lbl_ap_action.setText("---")
+                self.lbl_ap_action.setStyleSheet("color: #888;")
+
             self.lbl_ap_target.setText("---")
             self.lbl_ap_error.setText("---")
             self.lbl_ap_alt_error.setText("---")

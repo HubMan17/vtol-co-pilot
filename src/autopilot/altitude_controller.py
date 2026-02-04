@@ -6,6 +6,7 @@ class AltitudeController:
     PWM_CENTER = 1500
     PWM_RANGE = 500
     MAX_STICK_DEG = 30.0
+    DEADBAND_METERS = 3.0  # Release control when within 3 meters
 
     def __init__(self, config: AutopilotConfig):
         self._config = config
@@ -32,6 +33,11 @@ class AltitudeController:
     def update(self, current_altitude: float, dt: float) -> int:
         error = self._target_altitude - current_altitude
         self._current_error = error
+
+        # Release control when altitude reached - let aircraft maintain itself
+        if abs(error) < self.DEADBAND_METERS:
+            self._pid.reset()
+            return self.PWM_CENTER  # Neutral - let aircraft autopilot maintain
 
         pitch_angle = self._pid.update(error, dt)
 
