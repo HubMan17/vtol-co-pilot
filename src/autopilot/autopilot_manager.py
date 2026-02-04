@@ -94,6 +94,8 @@ class AutopilotManager:
 
         if wp.climb_enroute:
             self._altitude_controller.set_target_altitude(wp.altitude)
+        else:
+            self._altitude_controller.set_target_altitude(telemetry.altitude_agl)
         self._stick_override_count = 0
         self._active_waypoint_id = wp.id
         self._is_orbiting = False
