@@ -203,7 +203,7 @@ class AutopilotManager:
                             if new_wp.climb_enroute:
                                 self._altitude_controller.set_target_altitude(new_wp.altitude)
                             else:
-                                self._altitude_controller.set_target_altitude(old_wp.altitude if old_wp else telemetry.altitude)
+                                self._altitude_controller.set_target_altitude(old_wp.altitude if old_wp else telemetry.altitude_agl)
                             self._event_bus.emit(Event.WAYPOINT_REACHED, {
                                 'reached': old_wp.id if old_wp else 0,
                                 'next': new_wp.id
@@ -224,7 +224,7 @@ class AutopilotManager:
 
             self._heading_controller.set_target_heading(target_bearing)
             roll_pwm = self._heading_controller.update(telemetry.heading, dt)
-            pitch_pwm = self._altitude_controller.update(telemetry.altitude, dt)
+            pitch_pwm = self._altitude_controller.update(telemetry.altitude_agl, dt)
             throttle_pwm = self._speed_controller.update(telemetry.airspeed, dt)
 
             self._proxy.send_rc_override({
