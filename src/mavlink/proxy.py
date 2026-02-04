@@ -180,6 +180,35 @@ class MAVLinkProxy:
     def release_rc_override(self):
         self.send_rc_override({1: 0, 2: 0, 3: 0, 4: 0})
 
+    def set_mode(self, mode_name: str):
+        """Set ArduPilot flight mode (e.g., 'CRUISE', 'MANUAL', 'AUTO')"""
+        if not self._sitl_conn:
+            return
+
+        # ArduPilot plane mode numbers
+        mode_mapping = {
+            'MANUAL': 0,
+            'CIRCLE': 1,
+            'STABILIZE': 2,
+            'TRAINING': 3,
+            'ACRO': 4,
+            'FLY_BY_WIRE_A': 5,
+            'FLY_BY_WIRE_B': 6,
+            'CRUISE': 7,
+            'AUTOTUNE': 8,
+            'AUTO': 10,
+            'RTL': 11,
+            'LOITER': 12,
+            'GUIDED': 15,
+        }
+
+        if mode_name not in mode_mapping:
+            print(f"Unknown mode: {mode_name}")
+            return
+
+        mode_id = mode_mapping[mode_name]
+        self._sitl_conn.set_mode(mode_id)
+
     def on_message(self, callback: Callable):
         self._message_callbacks.append(callback)
 

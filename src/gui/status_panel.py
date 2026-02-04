@@ -266,6 +266,10 @@ class StatusPanel(QWidget):
                     parts = action.split('(')
                     vertical = f" ({parts[1]}" if len(parts) > 1 else ""
                     action_text = f"К точке{vertical}"
+                elif action.startswith('ОЖИДАНИЕ_ВЫСОТЫ'):
+                    parts = action.split('(')
+                    vertical = f" ({parts[1]}" if len(parts) > 1 else ""
+                    action_text = f"Ожидание высоты{vertical}"
                 elif action == 'ORBITING':
                     action_text = "Кружение"
                 elif action == 'IDLE':

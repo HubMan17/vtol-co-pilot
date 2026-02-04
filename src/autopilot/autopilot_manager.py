@@ -64,6 +64,7 @@ class AutopilotManager:
         self._orbit_turns_completed = 0
         self._orbit_last_heading = 0.0
         self._orbit_heading_accumulated = 0.0
+        self._waiting_for_altitude = False
 
         self._event_bus.subscribe(Event.CONNECTION_LOST, self._on_connection_lost)
 
@@ -101,10 +102,14 @@ class AutopilotManager:
         self._is_orbiting = False
         self._orbit_turns_completed = 0
         self._orbit_heading_accumulated = 0.0
+        self._waiting_for_altitude = False
         self._disengage_reason = ""
 
         self._mode = AutopilotMode.NAV
         self._last_update_time = time.time()
+
+        # Set ArduPilot to CRUISE mode for proper altitude/speed control
+        self._proxy.set_mode('CRUISE')
 
         logger.info(f"ENGAGE NAV: waypoint={wp.id}/{len(route.waypoints)}")
 
@@ -127,6 +132,7 @@ class AutopilotManager:
         self._mode = AutopilotMode.MANUAL
 
         self._proxy.release_rc_override()
+        self._proxy.set_mode('MANUAL')
 
         self._heading_controller.reset()
         self._altitude_controller.reset()
@@ -195,37 +201,50 @@ class AutopilotManager:
                 if self._route_planner.is_waypoint_reached(position):
                     # Set altitude target on arrival if not climbing enroute
                     if not wp.climb_enroute:
-                        self._altitude_controller.set_target_altitude(wp.altitude)
+                        if not self._waiting_for_altitude:
+                            self._altitude_controller.set_target_altitude(wp.altitude)
+                            self._waiting_for_altitude = True
+                            logger.info(f"WAITING FOR ALTITUDE: target={wp.altitude}m at WP{wp.id}")
 
-                    if wp.action in ("ORBIT_TURNS", "ORBIT_INFINITE"):
-                        self._start_orbit(wp, telemetry.heading)
-                        target_bearing = self._calculate_orbit_heading(position, wp, telemetry.heading)
-                    else:
-                        old_wp = wp
-                        self._route_planner.next_waypoint()
-                        new_wp = self._route_planner.get_active_waypoint()
+                    # Check if we need to wait for altitude before advancing
+                    if self._waiting_for_altitude:
+                        if self._altitude_controller.is_on_altitude(tolerance=5.0):
+                            logger.info(f"ALTITUDE REACHED at WP{wp.id}")
+                            self._waiting_for_altitude = False
+                        else:
+                            # Still waiting for altitude - orbit around waypoint
+                            target_bearing = self._calculate_orbit_heading(position, wp, telemetry.heading)
 
-                        if new_wp and new_wp.id != self._active_waypoint_id:
-                            self._active_waypoint_id = new_wp.id
-                            if new_wp.climb_enroute:
-                                self._altitude_controller.set_target_altitude(new_wp.altitude)
-                            else:
-                                self._altitude_controller.set_target_altitude(telemetry.altitude_agl)
-                            self._event_bus.emit(Event.WAYPOINT_REACHED, {
-                                'reached': old_wp.id if old_wp else 0,
-                                'next': new_wp.id
-                            })
+                    if not self._waiting_for_altitude:
+                        if wp.action in ("ORBIT_TURNS", "ORBIT_INFINITE"):
+                            self._start_orbit(wp, telemetry.heading)
+                            target_bearing = self._calculate_orbit_heading(position, wp, telemetry.heading)
+                        else:
+                            old_wp = wp
+                            self._route_planner.next_waypoint()
+                            new_wp = self._route_planner.get_active_waypoint()
 
-                        if self._route_planner.is_route_complete():
-                            self.disengage("Маршрут завершён")
-                            return False
+                            if new_wp and new_wp.id != self._active_waypoint_id:
+                                self._active_waypoint_id = new_wp.id
+                                if new_wp.climb_enroute:
+                                    self._altitude_controller.set_target_altitude(new_wp.altitude)
+                                else:
+                                    self._altitude_controller.set_target_altitude(telemetry.altitude_agl)
+                                self._event_bus.emit(Event.WAYPOINT_REACHED, {
+                                    'reached': old_wp.id if old_wp else 0,
+                                    'next': new_wp.id
+                                })
 
-                        wp = self._route_planner.get_active_waypoint()
-                        if not wp:
-                            self.disengage("Нет активной точки")
-                            return False
+                            if self._route_planner.is_route_complete():
+                                self.disengage("Маршрут завершён")
+                                return False
 
-                        target_bearing = bearing_to(position.lat, position.lon, wp.lat, wp.lon)
+                            wp = self._route_planner.get_active_waypoint()
+                            if not wp:
+                                self.disengage("Нет активной точки")
+                                return False
+
+                            target_bearing = bearing_to(position.lat, position.lon, wp.lat, wp.lon)
                 else:
                     target_bearing = bearing_to(position.lat, position.lon, wp.lat, wp.lon)
 
@@ -312,6 +331,9 @@ class AutopilotManager:
                         status['action'] = f'ORBIT_{self._orbit_turns_completed}/{wp.orbit_turns}{vertical_action}'
                     elif wp.action == 'ORBIT_INFINITE':
                         status['action'] = f'ORBIT_INF{vertical_action}'
+                elif self._waiting_for_altitude:
+                    status['action'] = f'ОЖИДАНИЕ_ВЫСОТЫ{vertical_action}'
+                    status['orbit_radius'] = wp.orbit_radius
                 else:
                     status['action'] = f'TO_WAYPOINT{vertical_action}'
                     status['orbit_radius'] = wp.orbit_radius
