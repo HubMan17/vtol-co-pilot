@@ -15,10 +15,13 @@ class MAVLinkConfig:
 
 @dataclass
 class AutopilotConfig:
-    heading_pid: Dict[str, float] = field(default_factory=lambda: {"p": 1.0, "i": 0.1, "d": 0.05})
-    altitude_pid: Dict[str, float] = field(default_factory=lambda: {"p": 0.5, "i": 0.05, "d": 0.1})
+    heading_pid: Dict[str, float] = field(default_factory=lambda: {"p": 0.7, "i": 0.08, "d": 0.15})
+    altitude_pid: Dict[str, float] = field(default_factory=lambda: {"p": 0.4, "i": 0.02, "d": 0.8})
+    speed_pid: Dict[str, float] = field(default_factory=lambda: {"p": 50.0, "i": 10.0, "d": 5.0})
     bank_limit: float = 25.0
-    pitch_limit: float = 15.0
+    pitch_limit_up: float = 12.0
+    pitch_limit_down: float = 15.0
+    target_airspeed: float = 20.0
     stick_threshold: int = 50
     timeout_ms: int = 3000
 
@@ -58,7 +61,12 @@ def load_config(path: Path = None) -> AppConfig:
     if "mavlink" in data:
         config.mavlink = MAVLinkConfig(**data["mavlink"])
     if "autopilot" in data:
-        config.autopilot = AutopilotConfig(**data["autopilot"])
+        ap_data = data["autopilot"].copy()
+        if "pitch_limit" in ap_data:
+            old_limit = ap_data.pop("pitch_limit")
+            ap_data.setdefault("pitch_limit_up", old_limit)
+            ap_data.setdefault("pitch_limit_down", old_limit)
+        config.autopilot = AutopilotConfig(**ap_data)
     if "navigation" in data:
         config.navigation = NavigationConfig(**data["navigation"])
     if "gui" in data:
@@ -84,8 +92,11 @@ def save_config(config: AppConfig, path: Path = None):
         "autopilot": {
             "heading_pid": config.autopilot.heading_pid,
             "altitude_pid": config.autopilot.altitude_pid,
+            "speed_pid": config.autopilot.speed_pid,
             "bank_limit": config.autopilot.bank_limit,
-            "pitch_limit": config.autopilot.pitch_limit,
+            "pitch_limit_up": config.autopilot.pitch_limit_up,
+            "pitch_limit_down": config.autopilot.pitch_limit_down,
+            "target_airspeed": config.autopilot.target_airspeed,
             "stick_threshold": config.autopilot.stick_threshold,
             "timeout_ms": config.autopilot.timeout_ms,
         },

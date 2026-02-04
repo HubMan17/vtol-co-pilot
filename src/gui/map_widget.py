@@ -115,11 +115,20 @@ class MapWidget(QWidget):
             margin-left: -16px;
             margin-top: -16px;
         }}
+        .waypoint-pin {{
+            filter: drop-shadow(0 2px 3px rgba(0,0,0,0.5));
+        }}
+        .waypoint-pin .pin-body {{
+            transition: transform 0.15s ease;
+        }}
+        .waypoint-pin:hover .pin-body {{
+            transform: scale(1.1);
+        }}
         .wp-number {{
-            font-size: 10px;
+            font-family: Arial, sans-serif;
+            font-size: 11px;
             font-weight: bold;
-            color: #fff;
-            text-shadow: 1px 1px 1px #000;
+            fill: #fff;
         }}
         .leaflet-tooltip {{
             background: rgba(30, 30, 30, 0.9);
@@ -246,6 +255,49 @@ class MapWidget(QWidget):
             return lines.join('<br>');
         }}
 
+        function createWaypointIcon(number, isPast, isActive) {{
+            var size = isActive ? 32 : 28;
+            var fillColor, strokeColor, textColor, glowColor;
+
+            if (isPast) {{
+                fillColor = '#6b7280';
+                strokeColor = '#4b5563';
+                textColor = '#d1d5db';
+                glowColor = 'none';
+            }} else if (isActive) {{
+                fillColor = '#10b981';
+                strokeColor = '#059669';
+                textColor = '#ffffff';
+                glowColor = '#10b981';
+            }} else {{
+                fillColor = '#f59e0b';
+                strokeColor = '#d97706';
+                textColor = '#ffffff';
+                glowColor = 'none';
+            }}
+
+            var glowFilter = isActive ? '<filter id="glow"><feGaussianBlur stdDeviation="2" result="coloredBlur"/><feMerge><feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>' : '';
+            var glowAttr = isActive ? 'filter="url(#glow)"' : '';
+
+            var svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 28 36" width="${{size}}" height="${{size * 36/28}}" class="waypoint-pin">
+                <defs>${{glowFilter}}</defs>
+                <g class="pin-body" ${{glowAttr}}>
+                    <path d="M14 0C6.3 0 0 6.3 0 14c0 10.5 14 22 14 22s14-11.5 14-22C28 6.3 21.7 0 14 0z"
+                          fill="${{fillColor}}" stroke="${{strokeColor}}" stroke-width="1.5"/>
+                    <circle cx="14" cy="13" r="9" fill="rgba(255,255,255,0.15)"/>
+                </g>
+                <text x="14" y="17" text-anchor="middle" class="wp-number" fill="${{textColor}}">${{number}}</text>
+            </svg>`;
+
+            return L.divIcon({{
+                html: svg,
+                className: '',
+                iconSize: [size, size * 36/28],
+                iconAnchor: [size/2, size * 36/28],
+                popupAnchor: [0, -size * 36/28]
+            }});
+        }}
+
         function setWaypoints(waypoints, activeIdx) {{
             waypointMarkers.forEach(m => map.removeLayer(m));
             waypointMarkers = [];
@@ -258,39 +310,21 @@ class MapWidget(QWidget):
             waypoints.forEach((wp, i) => {{
                 var isPast = i < activeWaypointIdx;
                 var isActive = i === activeWaypointIdx;
-                var isFuture = i > activeWaypointIdx;
 
-                var fillColor = isPast ? '#888888' : (isActive ? '#00ff00' : '#ff6600');
-                var opacity = isPast ? 0.5 : 0.9;
-
-                var marker = L.circleMarker([wp.lat, wp.lon], {{
-                    radius: isActive ? 10 : 8,
-                    fillColor: fillColor,
-                    color: isActive ? '#00ff00' : '#fff',
-                    weight: isActive ? 3 : 2,
-                    fillOpacity: opacity
-                }}).addTo(map);
-
-                var numberIcon = L.divIcon({{
-                    html: '<span class="wp-number">' + (i + 1) + '</span>',
-                    className: '',
-                    iconSize: [20, 20],
-                    iconAnchor: [10, 10]
-                }});
-                var numberMarker = L.marker([wp.lat, wp.lon], {{
-                    icon: numberIcon,
-                    interactive: false
+                var icon = createWaypointIcon(i + 1, isPast, isActive);
+                var marker = L.marker([wp.lat, wp.lon], {{
+                    icon: icon,
+                    zIndexOffset: isActive ? 100 : (isPast ? -100 : 0)
                 }}).addTo(map);
 
                 marker.bindTooltip(formatTooltip(wp, i, isActive), {{
                     permanent: false,
                     direction: 'top',
-                    offset: [0, -10],
+                    offset: [0, -32],
                     className: ''
                 }});
 
                 waypointMarkers.push(marker);
-                waypointMarkers.push(numberMarker);
             }});
 
             for (var i = 0; i < waypoints.length - 1; i++) {{
@@ -360,34 +394,19 @@ class MapWidget(QWidget):
         }}
 
         function addWaypoint(lat, lon, index, wpData) {{
-            var marker = L.circleMarker([lat, lon], {{
-                radius: 8,
-                fillColor: '#ff6600',
-                color: '#fff',
-                weight: 2,
-                fillOpacity: 0.8
+            var icon = createWaypointIcon(index, false, false);
+            var marker = L.marker([lat, lon], {{
+                icon: icon
             }}).addTo(map);
 
             var tooltip = wpData ? formatTooltip(wpData, index - 1, false) : 'Точка ' + index;
             marker.bindTooltip(tooltip, {{
                 permanent: false,
                 direction: 'top',
-                offset: [0, -10]
+                offset: [0, -32]
             }});
-
-            var numberIcon = L.divIcon({{
-                html: '<span class="wp-number">' + index + '</span>',
-                className: '',
-                iconSize: [20, 20],
-                iconAnchor: [10, 10]
-            }});
-            var numberMarker = L.marker([lat, lon], {{
-                icon: numberIcon,
-                interactive: false
-            }}).addTo(map);
 
             waypointMarkers.push(marker);
-            waypointMarkers.push(numberMarker);
 
             if (wpData) {{
                 waypointData.push(wpData);

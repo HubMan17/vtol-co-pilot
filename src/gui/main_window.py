@@ -126,19 +126,10 @@ class MainWindow(QMainWindow):
         frame.setFrameStyle(QFrame.StyledPanel)
         layout = QVBoxLayout(frame)
 
-        mode_layout = QHBoxLayout()
-
-        self.btn_hdg_hold = QPushButton("Удержание курса")
-        self.btn_hdg_hold.setCheckable(True)
-        self.btn_hdg_hold.setEnabled(False)
-        mode_layout.addWidget(self.btn_hdg_hold)
-
         self.btn_nav = QPushButton("Навигация")
         self.btn_nav.setCheckable(True)
         self.btn_nav.setEnabled(False)
-        mode_layout.addWidget(self.btn_nav)
-
-        layout.addLayout(mode_layout)
+        layout.addWidget(self.btn_nav)
 
         action_layout = QHBoxLayout()
 
@@ -214,7 +205,6 @@ class MainWindow(QMainWindow):
         self.btn_load_route.clicked.connect(self._on_load_route)
         self.btn_use_dr.clicked.connect(self._on_use_dr_toggle)
         self.btn_clear_track.clicked.connect(self._on_clear_track)
-        self.btn_hdg_hold.clicked.connect(self._on_heading_hold_toggle)
         self.btn_nav.clicked.connect(self._on_nav_toggle)
         self.btn_follow.clicked.connect(self._on_follow_toggle)
         self.btn_home.clicked.connect(self._on_home_toggle)
@@ -226,6 +216,10 @@ class MainWindow(QMainWindow):
         self.map_widget.set_position_requested.connect(self._on_context_set_position)
         self.map_widget.add_waypoint_requested.connect(self._on_context_add_waypoint)
         self.map_widget.set_home_requested.connect(self._on_context_set_home)
+
+        self.status_panel.orbit_radius_changed.connect(self._on_orbit_radius_changed)
+        self.status_panel.target_altitude_changed.connect(self._on_target_altitude_changed)
+        self.status_panel.target_airspeed_changed.connect(self._on_target_airspeed_changed)
 
         self.event_bus.subscribe(Event.CONNECTION_RESTORED, self._on_connection_restored)
         self.event_bus.subscribe(Event.CONNECTION_LOST, self._on_connection_lost)
@@ -251,7 +245,6 @@ class MainWindow(QMainWindow):
     def _on_connection_restored(self, data):
         self.btn_connect.setEnabled(False)
         self.btn_disconnect.setEnabled(True)
-        self.btn_hdg_hold.setEnabled(True)
         self.btn_nav.setEnabled(True)
         self.btn_set_pos.setEnabled(True)
         self.btn_load_route.setEnabled(True)
@@ -266,7 +259,6 @@ class MainWindow(QMainWindow):
     def _on_connection_lost(self, data):
         self.btn_connect.setEnabled(True)
         self.btn_disconnect.setEnabled(False)
-        self.btn_hdg_hold.setEnabled(False)
         self.btn_nav.setEnabled(False)
         self.btn_set_pos.setEnabled(False)
         self.btn_load_route.setEnabled(False)
@@ -435,24 +427,10 @@ class MainWindow(QMainWindow):
                 self.btn_home.setStyleSheet("background-color: #ff6600;")
                 self.btn_nav.setChecked(False)
                 self.btn_nav.setStyleSheet("")
-                self.btn_hdg_hold.setChecked(False)
-                self.btn_hdg_hold.setStyleSheet("")
                 self.statusbar.showMessage("Возврат домой активирован")
             else:
                 self.btn_home.setChecked(False)
                 self.statusbar.showMessage("Не удалось активировать возврат домой")
-        else:
-            self.autopilot.disengage("Отключено пользователем")
-
-    def _on_heading_hold_toggle(self):
-        if self.btn_hdg_hold.isChecked():
-            if self.autopilot.engage_heading_hold():
-                self.btn_hdg_hold.setStyleSheet("background-color: #00cc00;")
-                hdg = self.autopilot.get_target_heading()
-                self.statusbar.showMessage(f"Удержание курса: {hdg:.0f}°")
-            else:
-                self.btn_hdg_hold.setChecked(False)
-                self.statusbar.showMessage("Не удалось включить удержание курса")
         else:
             self.autopilot.disengage("Отключено пользователем")
 
@@ -475,25 +453,14 @@ class MainWindow(QMainWindow):
 
     def _on_autopilot_engage(self, data):
         mode = data.get('mode', '')
-        if mode == 'HEADING_HOLD':
-            self.btn_hdg_hold.setChecked(True)
-            self.btn_hdg_hold.setStyleSheet("background-color: #00cc00;")
-            self.btn_nav.setChecked(False)
-            self.btn_nav.setStyleSheet("")
-            target = data.get('target', 0)
-            self.statusbar.showMessage(f"Удержание курса: {target:.0f}°")
-        elif mode == 'NAV':
+        if mode == 'NAV':
             self.btn_nav.setChecked(True)
             self.btn_nav.setStyleSheet("background-color: #00cc00;")
-            self.btn_hdg_hold.setChecked(False)
-            self.btn_hdg_hold.setStyleSheet("")
             wp_id = data.get('waypoint', 0)
             total = data.get('total', 0)
             self.statusbar.showMessage(f"Навигация: точка {wp_id}/{total}")
 
     def _on_autopilot_disengage(self, data):
-        self.btn_hdg_hold.setChecked(False)
-        self.btn_hdg_hold.setStyleSheet("")
         self.btn_nav.setChecked(False)
         self.btn_nav.setStyleSheet("")
         self.btn_home.setChecked(False)
@@ -511,6 +478,18 @@ class MainWindow(QMainWindow):
         total = self.route_planner.get_waypoint_count()
         self.map_widget.update_active_waypoint(next_wp - 1)
         self.statusbar.showMessage(f"Достигнута точка {reached}, следующая: {next_wp}/{total}")
+
+    def _on_orbit_radius_changed(self, radius: int):
+        self.autopilot.set_orbit_radius(float(radius))
+        self.statusbar.showMessage(f"Радиус кружения: {radius} м")
+
+    def _on_target_altitude_changed(self, altitude: int):
+        self.autopilot.set_target_altitude(float(altitude))
+        self.statusbar.showMessage(f"Целевая высота: {altitude} м")
+
+    def _on_target_airspeed_changed(self, speed: int):
+        self.autopilot.set_target_airspeed(float(speed))
+        self.statusbar.showMessage(f"Целевая скорость: {speed} м/с")
 
     def _update_display(self):
         if not self.proxy.is_connected():
@@ -558,16 +537,12 @@ class MainWindow(QMainWindow):
 
     def _update_autopilot_display(self):
         mode = self.autopilot.get_mode()
+        status = self.autopilot.get_status()
+
         if mode == AutopilotMode.MANUAL:
-            self.status_panel.update_autopilot('MANUAL')
-        elif mode == AutopilotMode.HEADING_HOLD:
-            target = self.autopilot.get_target_heading()
-            error = self.autopilot.get_heading_error()
-            self.status_panel.update_autopilot('HEADING_HOLD', target, error)
+            self.status_panel.update_autopilot('MANUAL', status)
         elif mode == AutopilotMode.NAV:
-            target = self.autopilot.get_target_heading()
-            error = self.autopilot.get_heading_error()
-            self.status_panel.update_autopilot('NAV', target, error)
+            self.status_panel.update_autopilot('NAV', status)
 
     def closeEvent(self, event):
         self.autopilot.disengage()

@@ -1,12 +1,16 @@
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QGridLayout, QLabel, QFrame
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QGridLayout, QHBoxLayout, QLabel, QFrame, QSpinBox, QPushButton
 from PyQt5.QtGui import QFont
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, pyqtSignal
 import math
 
 from src.mavlink.telemetry import TelemetryState
 
 
 class StatusPanel(QWidget):
+    orbit_radius_changed = pyqtSignal(int)
+    target_altitude_changed = pyqtSignal(int)
+    target_airspeed_changed = pyqtSignal(int)
+
     def __init__(self):
         super().__init__()
         self._setup_ui()
@@ -105,17 +109,63 @@ class StatusPanel(QWidget):
         self.lbl_ap_mode.setStyleSheet("color: gray;")
         ap_layout.addWidget(self.lbl_ap_mode, 0, 1)
 
-        ap_layout.addWidget(QLabel("Целевой курс:"), 1, 0)
+        ap_layout.addWidget(QLabel("Действие:"), 1, 0)
+        self.lbl_ap_action = QLabel("---")
+        self.lbl_ap_action.setFont(QFont("Consolas", 11, QFont.Bold))
+        self.lbl_ap_action.setStyleSheet("color: #888;")
+        ap_layout.addWidget(self.lbl_ap_action, 1, 1)
+
+        ap_layout.addWidget(QLabel("Целевой курс:"), 2, 0)
         self.lbl_ap_target = QLabel("---")
         self.lbl_ap_target.setFont(QFont("Consolas", 12, QFont.Bold))
-        ap_layout.addWidget(self.lbl_ap_target, 1, 1)
+        ap_layout.addWidget(self.lbl_ap_target, 2, 1)
 
-        ap_layout.addWidget(QLabel("Ошибка:"), 2, 0)
+        ap_layout.addWidget(QLabel("Ошибка курса:"), 3, 0)
         self.lbl_ap_error = QLabel("---")
         self.lbl_ap_error.setFont(QFont("Consolas", 12, QFont.Bold))
-        ap_layout.addWidget(self.lbl_ap_error, 2, 1)
+        ap_layout.addWidget(self.lbl_ap_error, 3, 1)
+
+        ap_layout.addWidget(QLabel("Ошибка высоты:"), 4, 0)
+        self.lbl_ap_alt_error = QLabel("---")
+        self.lbl_ap_alt_error.setFont(QFont("Consolas", 12, QFont.Bold))
+        ap_layout.addWidget(self.lbl_ap_alt_error, 4, 1)
 
         layout.addWidget(ap_frame)
+
+        ap_ctrl_frame = QFrame()
+        ap_ctrl_frame.setFrameStyle(QFrame.StyledPanel)
+        ap_ctrl_layout = QGridLayout(ap_ctrl_frame)
+
+        ap_ctrl_layout.addWidget(QLabel("Цел. высота:"), 0, 0)
+        self.spin_target_alt = QSpinBox()
+        self.spin_target_alt.setRange(10, 5000)
+        self.spin_target_alt.setValue(100)
+        self.spin_target_alt.setSuffix(" м")
+        self.spin_target_alt.setEnabled(False)
+        ap_ctrl_layout.addWidget(self.spin_target_alt, 0, 1)
+
+        ap_ctrl_layout.addWidget(QLabel("Радиус круж.:"), 1, 0)
+        self.spin_orbit_radius = QSpinBox()
+        self.spin_orbit_radius.setRange(30, 500)
+        self.spin_orbit_radius.setValue(100)
+        self.spin_orbit_radius.setSuffix(" м")
+        self.spin_orbit_radius.setEnabled(False)
+        ap_ctrl_layout.addWidget(self.spin_orbit_radius, 1, 1)
+
+        ap_ctrl_layout.addWidget(QLabel("Цел. скорость:"), 2, 0)
+        self.spin_target_speed = QSpinBox()
+        self.spin_target_speed.setRange(15, 35)
+        self.spin_target_speed.setValue(20)
+        self.spin_target_speed.setSuffix(" м/с")
+        self.spin_target_speed.setEnabled(False)
+        ap_ctrl_layout.addWidget(self.spin_target_speed, 2, 1)
+
+        self.btn_apply_params = QPushButton("Установить")
+        self.btn_apply_params.setEnabled(False)
+        self.btn_apply_params.clicked.connect(self._on_apply_params)
+        ap_ctrl_layout.addWidget(self.btn_apply_params, 3, 0, 1, 2)
+
+        layout.addWidget(ap_ctrl_frame)
         layout.addStretch()
 
     def update_telemetry(self, state: TelemetryState):
@@ -134,8 +184,13 @@ class StatusPanel(QWidget):
         self._set_value("Тангаж", math.degrees(state.pitch), 1)
         self._set_value("Батарея", state.battery_voltage, 1)
 
-        gps_str = f"{state.gps_fix}D / {state.satellites} спут."
-        self.labels["GPS"][0].setText(gps_str)
+        gps_label = self.labels["GPS"][0]
+        if state.gps_fix >= 3:
+            gps_label.setText(f"OK ({state.satellites})")
+            gps_label.setStyleSheet("color: #00ff00; font-weight: bold;")
+        else:
+            gps_label.setText(f"OFF ({state.satellites})")
+            gps_label.setStyleSheet("color: #ff3333; font-weight: bold;")
 
     def _set_value(self, name: str, value: float, decimals: int = 1):
         label, unit = self.labels[name]
@@ -159,23 +214,86 @@ class StatusPanel(QWidget):
         sign = "+" if xtk >= 0 else ""
         self.labels["Бок. уклон."][0].setText(f"{sign}{xtk:.0f} м")
 
-    def update_autopilot(self, mode: str, target_heading: float = None, error: float = None):
+    def _on_apply_params(self):
+        self.orbit_radius_changed.emit(self.spin_orbit_radius.value())
+        self.target_altitude_changed.emit(self.spin_target_alt.value())
+        self.target_airspeed_changed.emit(self.spin_target_speed.value())
+
+    def update_autopilot(self, mode: str, status: dict = None):
         mode_names = {
             'MANUAL': 'РУЧНОЙ',
-            'HEADING_HOLD': 'КУРС',
             'NAV': 'НАВИГАЦИЯ'
         }
         display_mode = mode_names.get(mode, mode)
         self.lbl_ap_mode.setText(display_mode)
 
+        action_names = {
+            'IDLE': '---',
+            'TO_WAYPOINT': 'К точке',
+            'ORBITING': 'Кружение',
+            'ORBIT_INF': 'Кружение ∞',
+        }
+
         if mode == 'MANUAL':
             self.lbl_ap_mode.setStyleSheet("color: gray;")
+            self.lbl_ap_action.setText("---")
+            self.lbl_ap_action.setStyleSheet("color: #888;")
             self.lbl_ap_target.setText("---")
             self.lbl_ap_error.setText("---")
+            self.lbl_ap_alt_error.setText("---")
+            self.spin_target_alt.setEnabled(False)
+            self.spin_orbit_radius.setEnabled(False)
+            self.spin_target_speed.setEnabled(False)
+            self.btn_apply_params.setEnabled(False)
         else:
             self.lbl_ap_mode.setStyleSheet("color: #00ff00; font-weight: bold;")
-            if target_heading is not None:
-                self.lbl_ap_target.setText(f"{target_heading:.0f}°")
-            if error is not None:
-                sign = "+" if error >= 0 else ""
-                self.lbl_ap_error.setText(f"{sign}{error:.1f}°")
+
+            if status:
+                action = status.get('action', 'IDLE')
+                if action.startswith('ORBIT_') and '/' in action:
+                    action_text = f"Круг {action.split('_')[1]}"
+                else:
+                    action_text = action_names.get(action, action)
+
+                self.lbl_ap_action.setText(action_text)
+                if status.get('is_orbiting', False):
+                    self.lbl_ap_action.setStyleSheet("color: #ff6600; font-weight: bold;")
+                else:
+                    self.lbl_ap_action.setStyleSheet("color: #00ccff;")
+
+                target_heading = status.get('target_heading')
+                if target_heading is not None:
+                    self.lbl_ap_target.setText(f"{target_heading:.0f}°")
+
+                error = status.get('heading_error')
+                if error is not None:
+                    sign = "+" if error >= 0 else ""
+                    self.lbl_ap_error.setText(f"{sign}{error:.1f}°")
+
+                alt_error = status.get('altitude_error')
+                if alt_error is not None:
+                    sign = "+" if alt_error >= 0 else ""
+                    self.lbl_ap_alt_error.setText(f"{sign}{alt_error:.0f} м")
+
+                self.spin_target_alt.setEnabled(True)
+                self.spin_orbit_radius.setEnabled(True)
+                self.spin_target_speed.setEnabled(True)
+                self.btn_apply_params.setEnabled(True)
+
+                target_alt = status.get('target_altitude', 100)
+                if target_alt > 0:
+                    self.spin_target_alt.blockSignals(True)
+                    self.spin_target_alt.setValue(int(target_alt))
+                    self.spin_target_alt.blockSignals(False)
+
+                orbit_radius = status.get('orbit_radius', 100)
+                if orbit_radius > 0:
+                    self.spin_orbit_radius.blockSignals(True)
+                    self.spin_orbit_radius.setValue(int(orbit_radius))
+                    self.spin_orbit_radius.blockSignals(False)
+
+                target_speed = status.get('target_airspeed', 20)
+                if target_speed > 0:
+                    self.spin_target_speed.blockSignals(True)
+                    self.spin_target_speed.setValue(int(target_speed))
+                    self.spin_target_speed.blockSignals(False)

@@ -21,6 +21,8 @@ from src.mavlink.telemetry import LatLon
 from src.core.config import AutopilotConfig
 from src.core.events import EventBus, Event
 from src.autopilot.heading_controller import HeadingController
+from src.autopilot.altitude_controller import AltitudeController
+from src.autopilot.speed_controller import SpeedController
 from src.navigation.calculations import bearing_to, haversine_distance
 import math
 
@@ -30,7 +32,6 @@ if TYPE_CHECKING:
 
 class AutopilotMode(Enum):
     MANUAL = auto()
-    HEADING_HOLD = auto()
     NAV = auto()
 
 
@@ -49,6 +50,8 @@ class AutopilotManager:
 
         self._mode = AutopilotMode.MANUAL
         self._heading_controller = HeadingController(config)
+        self._altitude_controller = AltitudeController(config)
+        self._speed_controller = SpeedController(config)
         self._route_planner: Optional['RoutePlanner'] = None
 
         self._last_update_time = 0.0
@@ -67,31 +70,6 @@ class AutopilotManager:
     def set_route_planner(self, route_planner: 'RoutePlanner'):
         self._route_planner = route_planner
 
-    def engage_heading_hold(self, target_heading: float = None) -> bool:
-        if not self._proxy.is_connected():
-            return False
-
-        telemetry = self._proxy.get_telemetry()
-
-        if target_heading is None:
-            target_heading = telemetry.heading
-
-        self._heading_controller.set_target_heading(target_heading)
-        self._heading_controller.reset()
-        self._stick_override_count = 0
-
-        self._mode = AutopilotMode.HEADING_HOLD
-        self._last_update_time = time.time()
-
-        logger.info(f"ENGAGE HEADING_HOLD: target={target_heading:.1f}")
-
-        self._event_bus.emit(Event.AUTOPILOT_ENGAGE, {
-            'mode': 'HEADING_HOLD',
-            'target': target_heading
-        })
-
-        return True
-
     def engage_nav(self) -> bool:
         if not self._proxy.is_connected():
             return False
@@ -108,6 +86,14 @@ class AutopilotManager:
             return False
 
         self._heading_controller.reset()
+        self._altitude_controller.reset()
+        self._speed_controller.reset()
+
+        telemetry = self._proxy.get_telemetry()
+        self._speed_controller.initialize_from_current(telemetry.airspeed)
+
+        if wp.climb_enroute:
+            self._altitude_controller.set_target_altitude(wp.altitude)
         self._stick_override_count = 0
         self._active_waypoint_id = wp.id
         self._is_orbiting = False
@@ -140,6 +126,8 @@ class AutopilotManager:
         self._proxy.release_rc_override()
 
         self._heading_controller.reset()
+        self._altitude_controller.reset()
+        self._speed_controller.reset()
 
         self._event_bus.emit(Event.AUTOPILOT_DISENGAGE, {
             'previous_mode': prev_mode.name,
@@ -175,17 +163,7 @@ class AutopilotManager:
 
         dt = current_time - self._last_update_time if self._last_update_time > 0 else 0.05
 
-        if self._mode == AutopilotMode.HEADING_HOLD:
-            roll_pwm = self._heading_controller.update(telemetry.heading, dt)
-
-            self._proxy.send_rc_override({
-                1: roll_pwm,
-                2: 0,
-                3: 0,
-                4: 0
-            })
-
-        elif self._mode == AutopilotMode.NAV:
+        if self._mode == AutopilotMode.NAV:
             if not self._route_planner:
                 self.disengage("Маршрут не задан")
                 return False
@@ -222,6 +200,10 @@ class AutopilotManager:
 
                         if new_wp and new_wp.id != self._active_waypoint_id:
                             self._active_waypoint_id = new_wp.id
+                            if new_wp.climb_enroute:
+                                self._altitude_controller.set_target_altitude(new_wp.altitude)
+                            else:
+                                self._altitude_controller.set_target_altitude(old_wp.altitude if old_wp else telemetry.altitude)
                             self._event_bus.emit(Event.WAYPOINT_REACHED, {
                                 'reached': old_wp.id if old_wp else 0,
                                 'next': new_wp.id
@@ -242,11 +224,13 @@ class AutopilotManager:
 
             self._heading_controller.set_target_heading(target_bearing)
             roll_pwm = self._heading_controller.update(telemetry.heading, dt)
+            pitch_pwm = self._altitude_controller.update(telemetry.altitude, dt)
+            throttle_pwm = self._speed_controller.update(telemetry.airspeed, dt)
 
             self._proxy.send_rc_override({
                 1: roll_pwm,
-                2: 0,
-                3: 0,
+                2: pitch_pwm,
+                3: throttle_pwm,
                 4: 0
             })
 
@@ -287,13 +271,38 @@ class AutopilotManager:
         return self._heading_controller.get_current_error()
 
     def get_status(self) -> dict:
-        return {
+        status = {
             'mode': self._mode.name,
             'target_heading': self._heading_controller.get_target_heading(),
             'heading_error': self._heading_controller.get_current_error(),
+            'target_altitude': self._altitude_controller.get_target_altitude(),
+            'altitude_error': self._altitude_controller.get_current_error(),
+            'target_airspeed': self._speed_controller.get_target_speed(),
+            'airspeed_error': self._speed_controller.get_current_error(),
             'last_update': self._last_update_time,
-            'disengage_reason': self._disengage_reason
+            'disengage_reason': self._disengage_reason,
+            'action': 'IDLE',
+            'is_orbiting': self._is_orbiting,
+            'orbit_turns_completed': self._orbit_turns_completed,
+            'orbit_radius': 0.0,
         }
+
+        if self._mode == AutopilotMode.NAV and self._route_planner:
+            wp = self._route_planner.get_active_waypoint()
+            if wp:
+                status['target_altitude'] = wp.altitude
+                if self._is_orbiting:
+                    status['action'] = 'ORBITING'
+                    status['orbit_radius'] = wp.orbit_radius
+                    if wp.action == 'ORBIT_TURNS':
+                        status['action'] = f'ORBIT_{self._orbit_turns_completed}/{wp.orbit_turns}'
+                    elif wp.action == 'ORBIT_INFINITE':
+                        status['action'] = 'ORBIT_INF'
+                else:
+                    status['action'] = 'TO_WAYPOINT'
+                    status['orbit_radius'] = wp.orbit_radius
+
+        return status
 
     def _start_orbit(self, wp, current_heading: float):
         self._is_orbiting = True
@@ -340,6 +349,25 @@ class AutopilotManager:
 
         if self._route_planner.is_route_complete():
             self.disengage("Маршрут завершён")
+
+    def set_target_altitude(self, altitude: float):
+        self._altitude_controller.set_target_altitude(altitude)
+        if self._route_planner:
+            wp = self._route_planner.get_active_waypoint()
+            if wp:
+                wp.altitude = altitude
+                logger.info(f"TARGET ALTITUDE SET: {altitude}m for WP{wp.id}")
+
+    def set_orbit_radius(self, radius: float):
+        if self._route_planner:
+            wp = self._route_planner.get_active_waypoint()
+            if wp:
+                wp.orbit_radius = radius
+                logger.info(f"ORBIT RADIUS SET: {radius}m for WP{wp.id}")
+
+    def set_target_airspeed(self, speed: float):
+        self._speed_controller.set_target_speed(speed)
+        logger.info(f"TARGET AIRSPEED SET: {speed} m/s")
 
     def _on_connection_lost(self, data):
         self.disengage("Соединение потеряно")

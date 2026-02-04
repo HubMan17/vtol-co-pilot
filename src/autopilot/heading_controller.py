@@ -6,12 +6,13 @@ from src.navigation.calculations import heading_difference, normalize_heading
 class HeadingController:
     PWM_CENTER = 1500
     PWM_RANGE = 500
-    MAX_DEFLECTION_DEG = 45.0
+    MAX_STICK_DEG = 55.0
 
     def __init__(self, config: AutopilotConfig):
         self._config = config
         self._target_heading = 0.0
         self._current_error = 0.0
+        self._bank_limit = config.bank_limit
 
         self._pid = PIDController(
             kp=config.heading_pid['p'],
@@ -33,7 +34,7 @@ class HeadingController:
 
         bank_angle = self._pid.update(error, dt)
 
-        pwm = self.PWM_CENTER + int(bank_angle * self.PWM_RANGE / self.MAX_DEFLECTION_DEG)
+        pwm = self.PWM_CENTER + int(bank_angle * self.PWM_RANGE / self.MAX_STICK_DEG)
         pwm = max(1000, min(2000, pwm))
 
         return pwm
