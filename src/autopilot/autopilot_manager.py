@@ -205,7 +205,7 @@ class AutopilotManager:
                             if new_wp.climb_enroute:
                                 self._altitude_controller.set_target_altitude(new_wp.altitude)
                             else:
-                                self._altitude_controller.set_target_altitude(old_wp.altitude if old_wp else telemetry.altitude_agl)
+                                self._altitude_controller.set_target_altitude(telemetry.altitude_agl)
                             self._event_bus.emit(Event.WAYPOINT_REACHED, {
                                 'reached': old_wp.id if old_wp else 0,
                                 'next': new_wp.id
