@@ -1,11 +1,14 @@
 import socket
 import threading
 import time
+import logging
 from typing import Callable, Optional, List
 from pymavlink import mavutil
 
 from src.mavlink.telemetry import TelemetryParser, TelemetryState
 from src.core.events import EventBus, Event
+
+logger = logging.getLogger(__name__)
 
 
 class MAVLinkProxy:
@@ -183,6 +186,7 @@ class MAVLinkProxy:
     def set_mode(self, mode_name: str):
         """Set ArduPilot flight mode (e.g., 'CRUISE', 'MANUAL', 'AUTO')"""
         if not self._sitl_conn:
+            logger.warning(f"SET MODE FAILED: No SITL connection, mode={mode_name}")
             return
 
         # ArduPilot plane mode numbers
@@ -203,11 +207,13 @@ class MAVLinkProxy:
         }
 
         if mode_name not in mode_mapping:
+            logger.error(f"SET MODE FAILED: Unknown mode={mode_name}")
             print(f"Unknown mode: {mode_name}")
             return
 
         mode_id = mode_mapping[mode_name]
         self._sitl_conn.set_mode(mode_id)
+        logger.info(f"SET MODE: {mode_name} (id={mode_id})")
 
     def on_message(self, callback: Callable):
         self._message_callbacks.append(callback)

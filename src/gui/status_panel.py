@@ -13,6 +13,9 @@ class StatusPanel(QWidget):
 
     def __init__(self):
         super().__init__()
+        self._manual_alt_override = False
+        self._manual_radius_override = False
+        self._manual_speed_override = False
         self._setup_ui()
 
     def _setup_ui(self):
@@ -144,6 +147,12 @@ class StatusPanel(QWidget):
         self.spin_target_alt.setEnabled(False)
         ap_ctrl_layout.addWidget(self.spin_target_alt, 0, 1)
 
+        self.btn_set_altitude = QPushButton("✓")
+        self.btn_set_altitude.setFixedWidth(30)
+        self.btn_set_altitude.setEnabled(False)
+        self.btn_set_altitude.clicked.connect(self._on_set_altitude)
+        ap_ctrl_layout.addWidget(self.btn_set_altitude, 0, 2)
+
         ap_ctrl_layout.addWidget(QLabel("Радиус круж.:"), 1, 0)
         self.spin_orbit_radius = QSpinBox()
         self.spin_orbit_radius.setRange(30, 500)
@@ -151,6 +160,12 @@ class StatusPanel(QWidget):
         self.spin_orbit_radius.setSuffix(" м")
         self.spin_orbit_radius.setEnabled(False)
         ap_ctrl_layout.addWidget(self.spin_orbit_radius, 1, 1)
+
+        self.btn_set_radius = QPushButton("✓")
+        self.btn_set_radius.setFixedWidth(30)
+        self.btn_set_radius.setEnabled(False)
+        self.btn_set_radius.clicked.connect(self._on_set_radius)
+        ap_ctrl_layout.addWidget(self.btn_set_radius, 1, 2)
 
         ap_ctrl_layout.addWidget(QLabel("Цел. скорость:"), 2, 0)
         self.spin_target_speed = QSpinBox()
@@ -160,10 +175,11 @@ class StatusPanel(QWidget):
         self.spin_target_speed.setEnabled(False)
         ap_ctrl_layout.addWidget(self.spin_target_speed, 2, 1)
 
-        self.btn_apply_params = QPushButton("Установить")
-        self.btn_apply_params.setEnabled(False)
-        self.btn_apply_params.clicked.connect(self._on_apply_params)
-        ap_ctrl_layout.addWidget(self.btn_apply_params, 3, 0, 1, 2)
+        self.btn_set_speed = QPushButton("✓")
+        self.btn_set_speed.setFixedWidth(30)
+        self.btn_set_speed.setEnabled(False)
+        self.btn_set_speed.clicked.connect(self._on_set_speed)
+        ap_ctrl_layout.addWidget(self.btn_set_speed, 2, 2)
 
         layout.addWidget(ap_ctrl_frame)
         layout.addStretch()
@@ -214,10 +230,20 @@ class StatusPanel(QWidget):
         sign = "+" if xtk >= 0 else ""
         self.labels["Бок. уклон."][0].setText(f"{sign}{xtk:.0f} м")
 
-    def _on_apply_params(self):
-        self.orbit_radius_changed.emit(self.spin_orbit_radius.value())
+    def _on_set_altitude(self):
+        self._manual_alt_override = True
         self.target_altitude_changed.emit(self.spin_target_alt.value())
+        self.btn_set_altitude.setStyleSheet("background-color: #00cc00;")
+
+    def _on_set_radius(self):
+        self._manual_radius_override = True
+        self.orbit_radius_changed.emit(self.spin_orbit_radius.value())
+        self.btn_set_radius.setStyleSheet("background-color: #00cc00;")
+
+    def _on_set_speed(self):
+        self._manual_speed_override = True
         self.target_airspeed_changed.emit(self.spin_target_speed.value())
+        self.btn_set_speed.setStyleSheet("background-color: #00cc00;")
 
     def update_autopilot(self, mode: str, status: dict = None):
         mode_names = {
@@ -244,7 +270,17 @@ class StatusPanel(QWidget):
             self.spin_target_alt.setEnabled(False)
             self.spin_orbit_radius.setEnabled(False)
             self.spin_target_speed.setEnabled(False)
-            self.btn_apply_params.setEnabled(False)
+            self.btn_set_altitude.setEnabled(False)
+            self.btn_set_radius.setEnabled(False)
+            self.btn_set_speed.setEnabled(False)
+
+            # Reset manual override flags
+            self._manual_alt_override = False
+            self._manual_radius_override = False
+            self._manual_speed_override = False
+            self.btn_set_altitude.setStyleSheet("")
+            self.btn_set_radius.setStyleSheet("")
+            self.btn_set_speed.setStyleSheet("")
         else:
             self.lbl_ap_mode.setStyleSheet("color: #00ff00; font-weight: bold;")
 
@@ -300,22 +336,28 @@ class StatusPanel(QWidget):
                 self.spin_target_alt.setEnabled(True)
                 self.spin_orbit_radius.setEnabled(True)
                 self.spin_target_speed.setEnabled(True)
-                self.btn_apply_params.setEnabled(True)
+                self.btn_set_altitude.setEnabled(True)
+                self.btn_set_radius.setEnabled(True)
+                self.btn_set_speed.setEnabled(True)
 
-                target_alt = status.get('target_altitude', 100)
-                if target_alt > 0:
-                    self.spin_target_alt.blockSignals(True)
-                    self.spin_target_alt.setValue(int(target_alt))
-                    self.spin_target_alt.blockSignals(False)
+                # Only update if not manually overridden
+                if not self._manual_alt_override:
+                    target_alt = status.get('target_altitude', 100)
+                    if target_alt > 0:
+                        self.spin_target_alt.blockSignals(True)
+                        self.spin_target_alt.setValue(int(target_alt))
+                        self.spin_target_alt.blockSignals(False)
 
-                orbit_radius = status.get('orbit_radius', 100)
-                if orbit_radius > 0:
-                    self.spin_orbit_radius.blockSignals(True)
-                    self.spin_orbit_radius.setValue(int(orbit_radius))
-                    self.spin_orbit_radius.blockSignals(False)
+                if not self._manual_radius_override:
+                    orbit_radius = status.get('orbit_radius', 100)
+                    if orbit_radius > 0:
+                        self.spin_orbit_radius.blockSignals(True)
+                        self.spin_orbit_radius.setValue(int(orbit_radius))
+                        self.spin_orbit_radius.blockSignals(False)
 
-                target_speed = status.get('target_airspeed', 20)
-                if target_speed > 0:
-                    self.spin_target_speed.blockSignals(True)
-                    self.spin_target_speed.setValue(int(target_speed))
-                    self.spin_target_speed.blockSignals(False)
+                if not self._manual_speed_override:
+                    target_speed = status.get('target_airspeed', 20)
+                    if target_speed > 0:
+                        self.spin_target_speed.blockSignals(True)
+                        self.spin_target_speed.setValue(int(target_speed))
+                        self.spin_target_speed.blockSignals(False)

@@ -65,11 +65,21 @@ class AutopilotManager:
         self._orbit_last_heading = 0.0
         self._orbit_heading_accumulated = 0.0
         self._waiting_for_altitude = False
+        self._home_position: Optional[LatLon] = None
+        self._returning_home = False
 
         self._event_bus.subscribe(Event.CONNECTION_LOST, self._on_connection_lost)
 
     def set_route_planner(self, route_planner: 'RoutePlanner'):
         self._route_planner = route_planner
+
+    def set_home_position(self, position: Optional[LatLon]):
+        """Set home position for return-to-home after route completion"""
+        self._home_position = position
+        if position:
+            logger.info(f"HOME POSITION SET: lat={position.lat:.6f}, lon={position.lon:.6f}")
+        else:
+            logger.info("HOME POSITION CLEARED")
 
     def engage_nav(self) -> bool:
         if not self._proxy.is_connected():
@@ -182,6 +192,45 @@ class AutopilotManager:
                 self._last_update_time = current_time
                 return True
 
+            # Handle return-to-home mode
+            if self._returning_home and self._home_position:
+                distance_to_home = haversine_distance(position.lat, position.lon,
+                                                      self._home_position.lat, self._home_position.lon)
+
+                # Check if home reached (50m radius)
+                if distance_to_home <= 50.0:
+                    if not self._is_orbiting:
+                        # Start orbiting at home
+                        self._altitude_controller.set_target_altitude(50.0)  # Target 50m altitude
+                        self._is_orbiting = True
+                        self._orbit_turns_completed = 0
+                        self._orbit_heading_accumulated = 0.0
+                        self._orbit_last_heading = telemetry.heading
+                        logger.info(f"HOME REACHED -> ORBITING at 50m altitude")
+
+                    # Continue orbiting
+                    target_bearing = self._calculate_orbit_heading(position, self._home_position, telemetry.heading)
+                    self._update_orbit_progress(telemetry.heading)
+                else:
+                    # Navigate to home
+                    target_bearing = bearing_to(position.lat, position.lon,
+                                               self._home_position.lat, self._home_position.lon)
+
+                self._heading_controller.set_target_heading(target_bearing)
+                roll_pwm = self._heading_controller.update(telemetry.heading, dt)
+                pitch_pwm = self._altitude_controller.update(telemetry.altitude_agl, dt)
+                throttle_pwm = self._speed_controller.update(telemetry.airspeed, dt)
+
+                self._proxy.send_rc_override({
+                    1: roll_pwm,
+                    2: pitch_pwm,
+                    3: throttle_pwm,
+                    4: 0
+                })
+
+                self._last_update_time = current_time
+                return True
+
             wp = self._route_planner.get_active_waypoint()
             if not wp:
                 self.disengage("Нет активной точки")
@@ -228,16 +277,21 @@ class AutopilotManager:
                                 self._active_waypoint_id = new_wp.id
                                 if new_wp.climb_enroute:
                                     self._altitude_controller.set_target_altitude(new_wp.altitude)
+                                    self._waiting_for_altitude = False
+                                    logger.info(f"CLIMB ENROUTE to WP{new_wp.id}: target={new_wp.altitude}m")
                                 else:
+                                    # Keep current altitude during flight, will adjust on arrival
                                     self._altitude_controller.set_target_altitude(telemetry.altitude_agl)
+                                    self._waiting_for_altitude = False
+                                    logger.info(f"MAINTAIN ALTITUDE to WP{new_wp.id}: current={telemetry.altitude_agl}m, will adjust to {new_wp.altitude}m on arrival")
                                 self._event_bus.emit(Event.WAYPOINT_REACHED, {
                                     'reached': old_wp.id if old_wp else 0,
                                     'next': new_wp.id
                                 })
 
                             if self._route_planner.is_route_complete():
-                                self.disengage("Маршрут завершён")
-                                return False
+                                self._handle_route_completion()
+                                return True
 
                             wp = self._route_planner.get_active_waypoint()
                             if not wp:
@@ -311,9 +365,25 @@ class AutopilotManager:
             'is_orbiting': self._is_orbiting,
             'orbit_turns_completed': self._orbit_turns_completed,
             'orbit_radius': 0.0,
+            'returning_home': self._returning_home,
         }
 
-        if self._mode == AutopilotMode.NAV and self._route_planner:
+        if self._returning_home and self._home_position:
+            alt_error = self._altitude_controller.get_current_error()
+            vertical_action = ''
+            if abs(alt_error) > 5.0:
+                if alt_error > 0:
+                    vertical_action = ' (набор)'
+                else:
+                    vertical_action = ' (снижение)'
+
+            if self._is_orbiting:
+                status['action'] = f'ВОЗВРАТ_ДОМОЙ_ОРБИТА{vertical_action}'
+            else:
+                status['action'] = f'ВОЗВРАТ_ДОМОЙ{vertical_action}'
+            status['orbit_radius'] = 100.0
+
+        elif self._mode == AutopilotMode.NAV and self._route_planner:
             wp = self._route_planner.get_active_waypoint()
             if wp:
                 alt_error = self._altitude_controller.get_current_error()
@@ -378,13 +448,26 @@ class AutopilotManager:
 
         if new_wp and new_wp.id != self._active_waypoint_id:
             self._active_waypoint_id = new_wp.id
+
+            # Set altitude target for new waypoint
+            telemetry = self._proxy.get_telemetry()
+            if new_wp.climb_enroute:
+                self._altitude_controller.set_target_altitude(new_wp.altitude)
+                self._waiting_for_altitude = False
+                logger.info(f"ORBIT COMPLETE -> CLIMB ENROUTE to WP{new_wp.id}: target={new_wp.altitude}m")
+            else:
+                # Keep current altitude during flight, will adjust on arrival
+                self._altitude_controller.set_target_altitude(telemetry.altitude_agl)
+                self._waiting_for_altitude = False
+                logger.info(f"ORBIT COMPLETE -> MAINTAIN ALTITUDE to WP{new_wp.id}: current={telemetry.altitude_agl}m, will adjust to {new_wp.altitude}m on arrival")
+
             self._event_bus.emit(Event.WAYPOINT_REACHED, {
                 'reached': old_wp.id if old_wp else 0,
                 'next': new_wp.id
             })
 
         if self._route_planner.is_route_complete():
-            self.disengage("Маршрут завершён")
+            self._handle_route_completion()
 
     def set_target_altitude(self, altitude: float):
         self._altitude_controller.set_target_altitude(altitude)
@@ -404,6 +487,26 @@ class AutopilotManager:
     def set_target_airspeed(self, speed: float):
         self._speed_controller.set_target_speed(speed)
         logger.info(f"TARGET AIRSPEED SET: {speed} m/s")
+
+    def _handle_route_completion(self):
+        """Handle route completion: return home or orbit indefinitely"""
+        if self._home_position:
+            logger.info("ROUTE COMPLETE -> RETURNING HOME")
+            self._returning_home = True
+            # Don't start orbiting yet, will navigate to home first
+        else:
+            logger.info("ROUTE COMPLETE -> ORBITING INDEFINITELY (no home position)")
+            # Switch last waypoint to infinite orbit
+            if self._route_planner:
+                # Go back to last waypoint
+                wp_count = self._route_planner.get_waypoint_count()
+                if wp_count > 0:
+                    self._route_planner.set_active_waypoint(wp_count - 1)
+                    wp = self._route_planner.get_active_waypoint()
+                    if wp and not self._is_orbiting:
+                        telemetry = self._proxy.get_telemetry()
+                        self._start_orbit(wp, telemetry.heading)
+                        logger.info(f"INFINITE ORBIT started at WP{wp.id}")
 
     def _on_connection_lost(self, data):
         self.disengage("Соединение потеряно")

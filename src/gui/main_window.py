@@ -41,6 +41,7 @@ class MainWindow(QMainWindow):
         self.autopilot.set_route_planner(self.route_planner)
 
         self._set_position_mode = False
+        self._set_home_mode = False
         self._use_dr_position = False
         self._home_position: Optional[LatLon] = None
 
@@ -138,6 +139,11 @@ class MainWindow(QMainWindow):
         self.btn_set_pos.setEnabled(False)
         action_layout.addWidget(self.btn_set_pos)
 
+        self.btn_set_home = QPushButton("Установить дом")
+        self.btn_set_home.setCheckable(True)
+        self.btn_set_home.setEnabled(False)
+        action_layout.addWidget(self.btn_set_home)
+
         self.btn_load_route = QPushButton("Загрузить маршрут")
         self.btn_load_route.setEnabled(False)
         action_layout.addWidget(self.btn_load_route)
@@ -202,6 +208,7 @@ class MainWindow(QMainWindow):
         self.btn_connect.clicked.connect(self._on_connect)
         self.btn_disconnect.clicked.connect(self._on_disconnect)
         self.btn_set_pos.clicked.connect(self._on_set_position_toggle)
+        self.btn_set_home.clicked.connect(self._on_set_home_toggle)
         self.btn_load_route.clicked.connect(self._on_load_route)
         self.btn_use_dr.clicked.connect(self._on_use_dr_toggle)
         self.btn_clear_track.clicked.connect(self._on_clear_track)
@@ -247,6 +254,7 @@ class MainWindow(QMainWindow):
         self.btn_disconnect.setEnabled(True)
         self.btn_nav.setEnabled(True)
         self.btn_set_pos.setEnabled(True)
+        self.btn_set_home.setEnabled(True)
         self.btn_load_route.setEnabled(True)
         self.btn_use_dr.setEnabled(True)
         self.btn_clear_track.setEnabled(True)
@@ -261,6 +269,7 @@ class MainWindow(QMainWindow):
         self.btn_disconnect.setEnabled(False)
         self.btn_nav.setEnabled(False)
         self.btn_set_pos.setEnabled(False)
+        self.btn_set_home.setEnabled(False)
         self.btn_load_route.setEnabled(False)
         self.btn_use_dr.setEnabled(False)
         self.btn_clear_track.setEnabled(False)
@@ -279,9 +288,20 @@ class MainWindow(QMainWindow):
             self.statusbar.showMessage("Режим установки позиции отменён")
             self.btn_set_pos.setStyleSheet("")
 
+    def _on_set_home_toggle(self):
+        self._set_home_mode = self.btn_set_home.isChecked()
+        if self._set_home_mode:
+            self.statusbar.showMessage("Кликните на карте для установки точки дома...")
+            self.btn_set_home.setStyleSheet("background-color: #00cc00;")
+        else:
+            self.statusbar.showMessage("Режим установки дома отменён")
+            self.btn_set_home.setStyleSheet("")
+
     def _on_map_clicked(self, lat: float, lon: float):
         if self._set_position_mode:
             self._set_dr_position(lat, lon)
+        elif self._set_home_mode:
+            self._set_home_position(lat, lon)
 
     def _on_context_set_position(self, lat: float, lon: float):
         self._set_dr_position(lat, lon)
@@ -407,8 +427,15 @@ class MainWindow(QMainWindow):
             self.statusbar.showMessage("Слежение отключено")
 
     def _on_context_set_home(self, lat: float, lon: float):
+        self._set_home_position(lat, lon)
+
+    def _set_home_position(self, lat: float, lon: float):
         self._home_position = LatLon(lat, lon)
+        self.autopilot.set_home_position(self._home_position)
         self.map_widget.set_home_marker(lat, lon)
+        self._set_home_mode = False
+        self.btn_set_home.setChecked(False)
+        self.btn_set_home.setStyleSheet("")
         self.statusbar.showMessage(f"Дом установлен: {lat:.6f}, {lon:.6f}")
 
     def _on_home_toggle(self):
