@@ -227,13 +227,6 @@ class StatusPanel(QWidget):
         display_mode = mode_names.get(mode, mode)
         self.lbl_ap_mode.setText(display_mode)
 
-        action_names = {
-            'IDLE': '---',
-            'TO_WAYPOINT': 'К точке',
-            'ORBITING': 'Кружение',
-            'ORBIT_INF': 'Кружение ∞',
-        }
-
         if mode == 'MANUAL':
             self.lbl_ap_mode.setStyleSheet("color: gray;")
             self.lbl_ap_action.setText("---")
@@ -250,10 +243,28 @@ class StatusPanel(QWidget):
 
             if status:
                 action = status.get('action', 'IDLE')
+
+                # Parse action and vertical movement
                 if action.startswith('ORBIT_') and '/' in action:
-                    action_text = f"Круг {action.split('_')[1]}"
+                    # Format: ORBIT_1/3 (набор) or ORBIT_1/3
+                    parts = action.split('(')
+                    orbit_part = parts[0].strip()
+                    vertical = f" ({parts[1]}" if len(parts) > 1 else ""
+                    action_text = f"Круг {orbit_part.split('_')[1]}{vertical}"
+                elif action.startswith('ORBIT_INF'):
+                    parts = action.split('(')
+                    vertical = f" ({parts[1]}" if len(parts) > 1 else ""
+                    action_text = f"Кружение ∞{vertical}"
+                elif action.startswith('TO_WAYPOINT'):
+                    parts = action.split('(')
+                    vertical = f" ({parts[1]}" if len(parts) > 1 else ""
+                    action_text = f"К точке{vertical}"
+                elif action == 'ORBITING':
+                    action_text = "Кружение"
+                elif action == 'IDLE':
+                    action_text = "---"
                 else:
-                    action_text = action_names.get(action, action)
+                    action_text = action
 
                 self.lbl_ap_action.setText(action_text)
                 if status.get('is_orbiting', False):

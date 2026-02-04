@@ -194,6 +194,8 @@ class AutopilotManager:
                 if self._route_planner.is_waypoint_reached(position):
                     if wp.action in ("ORBIT_TURNS", "ORBIT_INFINITE"):
                         self._start_orbit(wp, telemetry.heading)
+                        if not wp.climb_enroute:
+                            self._altitude_controller.set_target_altitude(wp.altitude)
                         target_bearing = self._calculate_orbit_heading(position, wp, telemetry.heading)
                     else:
                         old_wp = wp
@@ -292,16 +294,23 @@ class AutopilotManager:
         if self._mode == AutopilotMode.NAV and self._route_planner:
             wp = self._route_planner.get_active_waypoint()
             if wp:
-                status['target_altitude'] = wp.altitude
+                alt_error = self._altitude_controller.get_current_error()
+                vertical_action = ''
+                if abs(alt_error) > 5.0:
+                    if alt_error > 0:
+                        vertical_action = ' (набор)'
+                    else:
+                        vertical_action = ' (снижение)'
+
                 if self._is_orbiting:
                     status['action'] = 'ORBITING'
                     status['orbit_radius'] = wp.orbit_radius
                     if wp.action == 'ORBIT_TURNS':
-                        status['action'] = f'ORBIT_{self._orbit_turns_completed}/{wp.orbit_turns}'
+                        status['action'] = f'ORBIT_{self._orbit_turns_completed}/{wp.orbit_turns}{vertical_action}'
                     elif wp.action == 'ORBIT_INFINITE':
-                        status['action'] = 'ORBIT_INF'
+                        status['action'] = f'ORBIT_INF{vertical_action}'
                 else:
-                    status['action'] = 'TO_WAYPOINT'
+                    status['action'] = f'TO_WAYPOINT{vertical_action}'
                     status['orbit_radius'] = wp.orbit_radius
 
         return status
