@@ -74,6 +74,9 @@ class AutopilotManager:
         self._saved_airspeed_cruise: Optional[float] = None  # original AIRSPEED_CRUISE to restore
         self._loiter_alt_transition = False  # GUIDED altitude transition during LOITER orbit
         self._orbit_advance_handled = False  # prevent repeated _finish_orbit_and_advance calls
+        self._orbit_reposition_sent = False  # DO_REPOSITION sent for current orbit
+        self._orbit_ccw = False  # orbit direction: False=CW, True=CCW
+        self._use_dr = False  # pilot toggled "Использовать счисление"
 
         # Throttle GUIDED target sends: ArduPlane resets altitude path interpolation
         # (prev_WP_loc = current_loc) on every mission_item_int(current=2).
@@ -98,6 +101,11 @@ class AutopilotManager:
             logger.info(f"HOME POSITION SET: lat={position.lat:.6f}, lon={position.lon:.6f}")
         else:
             logger.info("HOME POSITION CLEARED")
+
+    def set_use_dr(self, enabled: bool):
+        if enabled != self._use_dr:
+            self._use_dr = enabled
+            logger.info(f"USE DR: {'ON' if enabled else 'OFF'}")
 
     def engage_nav(self) -> bool:
         if not self._proxy.is_connected():
@@ -131,9 +139,16 @@ class AutopilotManager:
         self._stick_override_count = 0
         self._throttle_baseline = telemetry.rc_channels[self.CH_THROTTLE]
         self._active_waypoint_id = wp.id
+        # Restore cruise airspeed if re-engaging from orbit
+        if self._saved_airspeed_cruise is not None:
+            self._proxy.set_cruise_airspeed(self._saved_airspeed_cruise)
+            self._saved_airspeed_cruise = None
+        self._proxy.set_param('THROTTLE_NUDGE', 1)
+
         self._is_orbiting = False
         self._orbit_turns_completed = 0
         self._orbit_heading_accumulated = 0.0
+        self._orbit_reposition_sent = False
         self._waiting_for_altitude = False
         self._returning_home = False
         self._loiter_alt_transition = False
@@ -145,7 +160,8 @@ class AutopilotManager:
         self._last_update_time = now
         self._engage_time = now
 
-        # GUIDED mode: target position + speed via MAVLink commands
+        # Force re-enter GUIDED to clear any DO_REPOSITION orbit radius
+        self._proxy.set_mode('FBWA')
         self._proxy.set_mode('GUIDED')
         self._proxy.send_speed(self._speed_controller.get_target_speed())
         # Send initial target towards waypoint
@@ -166,6 +182,70 @@ class AutopilotManager:
             'total': len(route.waypoints)
         })
 
+        return True
+
+    def engage_home(self) -> bool:
+        """Engage return-to-home: fly to home at current altitude, orbit and descend to 50m."""
+        if not self._proxy.is_connected():
+            return False
+        if not self._home_position:
+            return False
+
+        self._heading_controller.reset()
+        self._altitude_controller.reset()
+        self._speed_controller.reset()
+
+        telemetry = self._proxy.get_telemetry()
+
+        # Keep current altitude during flight to home
+        self._altitude_controller.set_target_altitude(telemetry.altitude_agl)
+        self._stick_override_count = 0
+        self._throttle_baseline = telemetry.rc_channels[self.CH_THROTTLE]
+        # Sync active_waypoint_id with current route to prevent false redirect detection
+        if self._route_planner:
+            wp = self._route_planner.get_active_waypoint()
+            self._active_waypoint_id = wp.id if wp else -1
+        else:
+            self._active_waypoint_id = -1
+
+        # Restore cruise airspeed if re-engaging from orbit
+        if self._saved_airspeed_cruise is not None:
+            self._proxy.set_cruise_airspeed(self._saved_airspeed_cruise)
+            self._saved_airspeed_cruise = None
+        self._proxy.set_param('THROTTLE_NUDGE', 1)
+
+        self._is_orbiting = False
+        self._orbit_turns_completed = 0
+        self._orbit_heading_accumulated = 0.0
+        self._orbit_reposition_sent = False
+        self._waiting_for_altitude = False
+        self._returning_home = True
+        self._loiter_alt_transition = False
+        self._disengage_reason = ""
+        self._guided_send_time = 0.0
+
+        now = time.time()
+        self._mode = AutopilotMode.NAV
+        self._last_update_time = now
+        self._engage_time = now
+
+        # Force re-enter GUIDED to clear any DO_REPOSITION orbit radius
+        self._proxy.set_mode('FBWA')
+        self._proxy.set_mode('GUIDED')
+        self._proxy.send_speed(self._speed_controller.get_target_speed())
+
+        # Send initial target towards home
+        if telemetry.position:
+            init_bearing = bearing_to(telemetry.position.lat, telemetry.position.lon,
+                                       self._home_position.lat, self._home_position.lon)
+            tgt_lat, tgt_lon = project_point(telemetry.position.lat, telemetry.position.lon,
+                                              init_bearing, 2000.0)
+            self._proxy.send_guided_target(tgt_lat, tgt_lon, telemetry.altitude_agl)
+
+        logger.info(f"ENGAGE HOME: lat={self._home_position.lat:.6f} lon={self._home_position.lon:.6f} "
+                     f"alt={telemetry.altitude_agl:.1f}m")
+
+        self._event_bus.emit(Event.AUTOPILOT_ENGAGE, {'mode': 'HOME'})
         return True
 
     def disengage(self, reason: str = ""):
@@ -242,14 +322,12 @@ class AutopilotManager:
             # GPS monitoring and GPS_INPUT injection
             gps_ok = telemetry.gps_fix >= 3
 
-            # If in LOITER and GPS lost — switch to GUIDED (LOITER needs GPS)
-            if not gps_ok and self._is_orbiting and telemetry.mode == 'LOITER':
-                logger.warning("GPS LOST while in LOITER -> switching to GUIDED")
-                self._proxy.set_mode('GUIDED')
+            # DR or GPS loss → need heading-based GUIDED orbit instead of DO_REPOSITION orbit
+            need_guided_orbit = not gps_ok
 
             # If ArduPilot exited our mode unexpectedly
             # Skip check for first 2 seconds after engage (mode takes time to update via HEARTBEAT)
-            expected_modes = {'GUIDED', 'LOITER'}
+            expected_modes = {'GUIDED'}
             time_since_engage = current_time - self._engage_time if self._engage_time > 0 else 0
             if time_since_engage > 2.0 and telemetry.mode and telemetry.mode not in expected_modes:
                 logger.warning(f"MODE CHECK FAILED: telemetry.mode='{telemetry.mode}' not in {expected_modes}")
@@ -279,62 +357,63 @@ class AutopilotManager:
                 distance_to_home = haversine_distance(position.lat, position.lon,
                                                       self._home_position.lat, self._home_position.lon)
 
-                # Check if home reached (50m radius)
-                if distance_to_home <= 50.0:
+                # Check if home reached (50m radius), or already orbiting (orbit radius > 50m)
+                if distance_to_home <= 50.0 or self._is_orbiting:
                     if not self._is_orbiting:
-                        # Start orbiting at home
-                        self._altitude_controller.set_target_altitude(50.0)
+                        # Start orbiting at home — enter orbit, descend to 50m via DO_REPOSITION
                         self._is_orbiting = True
                         self._orbit_turns_completed = 0
                         self._orbit_heading_accumulated = 0.0
                         self._orbit_last_heading = telemetry.heading
-                        # Enter LOITER if GPS available
+                        # Choose efficient orbit direction
+                        self._orbit_ccw = self._choose_orbit_direction_ccw(
+                            position, self._home_position.lat, self._home_position.lon, telemetry.heading
+                        )
+                        # Enter orbit via DO_REPOSITION with target alt=50m
+                        # ArduPlane descends while orbiting — no need for alt transition
                         if gps_ok:
                             if self._saved_airspeed_cruise is None:
                                 self._saved_airspeed_cruise = telemetry.airspeed if telemetry.airspeed > 0 else 25.0
                             self._proxy.set_cruise_airspeed(self._speed_controller.get_target_speed())
                             self._proxy.send_speed(self._speed_controller.get_target_speed())
                             self._proxy.set_param('THROTTLE_NUDGE', 0)
-                            self._proxy.set_param('WP_LOITER_RAD', 100.0)
-                            self._proxy.send_loiter_unlim(self._home_position.lat, self._home_position.lon, 50.0, 100.0)
-
-                        # Check if altitude transition needed (LOITER locks current altitude)
-                        self._altitude_controller.update(telemetry.altitude_agl)
-                        if not self._altitude_controller.is_on_altitude(tolerance=5.0):
-                            self._loiter_alt_transition = True
-                            self._guided_send_time = 0.0  # force immediate send
-                            self._proxy.send_guided_change_altitude(50.0)
-                            logger.info(f"HOME REACHED -> ORBITING + ALT TRANSITION: target=50m, current={telemetry.altitude_agl:.1f}m")
+                            self._proxy.set_param('WP_LOITER_RAD', 150.0)
+                            self._proxy.send_loiter_unlim(self._home_position.lat, self._home_position.lon, 50.0, 150.0, ccw=self._orbit_ccw)
+                            self._orbit_reposition_sent = True
                         else:
-                            logger.info(f"HOME REACHED -> ORBITING at 50m altitude (altitude OK)")
+                            self._orbit_reposition_sent = False
 
-                    # Orbit: LOITER handles everything, speed via TRIM_ARSPD_CM param
+                        self._altitude_controller.set_target_altitude(50.0)
+                        self._proxy.send_guided_change_altitude(50.0)
+                        logger.info(f"HOME REACHED -> ORBITING + DESCENDING: current={telemetry.altitude_agl:.1f}m -> 50m "
+                                     f"{'CCW' if self._orbit_ccw else 'CW'}")
+
+                    # Orbit: DO_REPOSITION handles orbit + altitude, we track progress
                     self._update_orbit_progress(telemetry.heading)
                     self._altitude_controller.update(telemetry.altitude_agl)
                     self._speed_controller.update(telemetry.airspeed)
 
-                    if self._loiter_alt_transition:
-                        if telemetry.mode != 'GUIDED':
-                            self._proxy.set_mode('GUIDED')
+                    if need_guided_orbit:
+                        # DR active or GPS lost — orbit via GUIDED heading targets around home
+                        self._orbit_reposition_sent = False
                         now = time.time()
                         if now - self._guided_send_time >= self._GUIDED_RESEND_INTERVAL:
-                            target_alt = self._altitude_controller.get_target_altitude()
-                            tgt_lat, tgt_lon = project_point(
-                                position.lat, position.lon, telemetry.heading, 300.0
+                            orbit_heading = self._calculate_orbit_heading_for_point(
+                                position, self._home_position, 150.0, telemetry.heading
                             )
+                            tgt_lat, tgt_lon = project_point(
+                                position.lat, position.lon, orbit_heading, 300.0
+                            )
+                            target_alt = self._altitude_controller.get_target_altitude()
                             self._proxy.send_guided_target(tgt_lat, tgt_lon, target_alt)
                             self._proxy.send_speed(self._speed_controller.get_target_speed())
                             self._guided_send_time = now
-                        if self._altitude_controller.is_on_altitude(tolerance=10.0):
-                            self._loiter_alt_transition = False
-                            self._proxy.set_param('THROTTLE_NUDGE', 0)
-                            self._proxy.set_param('WP_LOITER_RAD', 100.0)
-                            self._proxy.send_loiter_unlim(self._home_position.lat, self._home_position.lon, 50.0, 100.0)
-                            logger.info(f"HOME LOITER ALT TRANSITION DONE: alt={telemetry.altitude_agl:.1f}m")
+                            logger.debug(f"GUIDED ORBIT HOME (DR): hdg={orbit_heading:.1f} alt={target_alt:.1f}")
                     else:
-                        # Re-send LOITER if ArduPilot hasn't switched yet
-                        if telemetry.mode != 'LOITER' and gps_ok:
-                            self._proxy.send_loiter_unlim(self._home_position.lat, self._home_position.lon, 50.0, 100.0)
+                        # GPS OK, no DR — orbit via DO_REPOSITION (GUIDED with radius)
+                        if not self._orbit_reposition_sent:
+                            self._proxy.send_loiter_unlim(self._home_position.lat, self._home_position.lon, 50.0, 150.0, ccw=self._orbit_ccw)
+                            self._orbit_reposition_sent = True
                 else:
                     # Navigate to home
                     target_bearing = bearing_to(position.lat, position.lon,
@@ -378,20 +457,37 @@ class AutopilotManager:
                         self._guided_send_time = now
                     if self._altitude_controller.is_on_altitude(tolerance=self._config.altitude_tolerance):
                         self._loiter_alt_transition = False
-                        radius = getattr(wp, 'orbit_radius', 150.0)
-                        if radius <= 0:
-                            radius = 150.0
-                        self._proxy.set_param('THROTTLE_NUDGE', 0)
-                        self._proxy.set_param('WP_LOITER_RAD', radius)
-                        self._proxy.send_loiter_unlim(wp.lat, wp.lon, wp.altitude, radius)
+                        if not need_guided_orbit:
+                            radius = getattr(wp, 'orbit_radius', 150.0)
+                            if radius <= 0:
+                                radius = 150.0
+                            self._proxy.set_param('THROTTLE_NUDGE', 0)
+                            self._proxy.set_param('WP_LOITER_RAD', radius)
+                            self._proxy.send_loiter_unlim(wp.lat, wp.lon, wp.altitude, radius, ccw=self._orbit_ccw)
+                            self._orbit_reposition_sent = True
                         logger.info(f"LOITER ALT TRANSITION DONE: alt={telemetry.altitude_agl:.1f}m")
+                elif need_guided_orbit:
+                    # DR active or GPS lost — orbit via GUIDED heading targets around orbit center
+                    self._orbit_reposition_sent = False
+                    now = time.time()
+                    if now - self._guided_send_time >= self._GUIDED_RESEND_INTERVAL:
+                        orbit_heading = self._calculate_orbit_heading(position, wp, telemetry.heading)
+                        tgt_lat, tgt_lon = project_point(
+                            position.lat, position.lon, orbit_heading, 300.0
+                        )
+                        target_alt = self._altitude_controller.get_target_altitude()
+                        self._proxy.send_guided_target(tgt_lat, tgt_lon, target_alt)
+                        self._proxy.send_speed(self._speed_controller.get_target_speed())
+                        self._guided_send_time = now
+                        logger.debug(f"GUIDED ORBIT (DR): hdg={orbit_heading:.1f} alt={target_alt:.1f}")
                 else:
-                    # Re-send LOITER mode if ArduPilot hasn't switched yet
-                    if telemetry.mode != 'LOITER':
+                    # GPS OK, no DR — orbit via DO_REPOSITION (GUIDED with radius)
+                    if not self._orbit_reposition_sent:
                         radius = getattr(wp, 'orbit_radius', 150.0)
                         if radius <= 0:
                             radius = 150.0
-                        self._proxy.send_loiter_unlim(wp.lat, wp.lon, wp.altitude, radius)
+                        self._proxy.send_loiter_unlim(wp.lat, wp.lon, wp.altitude, radius, ccw=self._orbit_ccw)
+                        self._orbit_reposition_sent = True
 
                 # ALTITUDE: auto-advance when target altitude reached during orbit
                 if wp.action == "ALTITUDE" and not self._loiter_alt_transition and not self._orbit_advance_handled:
@@ -711,7 +807,10 @@ class AutopilotManager:
             self._saved_airspeed_cruise = None
         self._proxy.set_param('THROTTLE_NUDGE', 1)
 
+        # Force re-enter GUIDED to clear DO_REPOSITION orbit radius
+        self._proxy.set_mode('FBWA')
         self._proxy.set_mode('GUIDED')
+        self._orbit_reposition_sent = False
         logger.info("EXITED ORBIT -> GUIDED")
 
     def _start_orbit(self, wp, current_heading: float):
@@ -727,6 +826,14 @@ class AutopilotManager:
 
         telemetry = self._proxy.get_telemetry()
 
+        # Choose efficient orbit direction based on approach angle
+        if telemetry.position:
+            self._orbit_ccw = self._choose_orbit_direction_ccw(
+                telemetry.position, wp.lat, wp.lon, current_heading
+            )
+        else:
+            self._orbit_ccw = False
+
         # Set AIRSPEED_CRUISE so LOITER uses our target speed (LOITER reads this param directly)
         target_speed = self._speed_controller.get_target_speed()
         if self._saved_airspeed_cruise is None:
@@ -735,23 +842,23 @@ class AutopilotManager:
             logger.info(f"SAVED AIRSPEED_CRUISE={self._saved_airspeed_cruise:.1f} for restore")
         self._proxy.set_cruise_airspeed(target_speed)
         if telemetry.gps_fix >= 3:
-            # Normal LOITER — ArduPilot handles the orbit
-            # Send DO_CHANGE_SPEED to clear any persistent speed override from GUIDED
+            # DO_REPOSITION: enters GUIDED with orbit center + radius (like LOITER but exact center)
             self._proxy.send_speed(target_speed)
-            # Disable THROTTLE_NUDGE so pilot's throttle stick doesn't scale up target speed
             self._proxy.set_param('THROTTLE_NUDGE', 0)
             self._proxy.set_param('WP_LOITER_RAD', radius)
-            # NAV_LOITER_UNLIM via MISSION_ITEM_INT(current=2) atomically enters LOITER
-            # at the exact waypoint center with the correct radius
-            self._proxy.send_loiter_unlim(wp.lat, wp.lon, wp.altitude, radius)
-            logger.info(f"START ORBIT (LOITER) at WP{wp.id}: radius={radius}, speed={target_speed}")
+            self._proxy.send_loiter_unlim(wp.lat, wp.lon, wp.altitude, radius, ccw=self._orbit_ccw)
+            self._orbit_reposition_sent = True
+            logger.info(f"START ORBIT (DO_REPOSITION) at WP{wp.id}: radius={radius}, speed={target_speed}, "
+                         f"{'CCW' if self._orbit_ccw else 'CW'}")
         else:
             # No GPS — orbit via GUIDED heading commands
+            self._orbit_reposition_sent = False
             logger.warning(f"START ORBIT (GUIDED fallback) at WP{wp.id}: radius={radius} — NO GPS")
 
     def _calculate_orbit_heading_for_point(self, position: LatLon, center: LatLon,
                                               orbit_radius: float, current_heading: float) -> float:
-        """Calculate orbit tangent heading for arbitrary center point and radius."""
+        """Calculate orbit tangent heading for arbitrary center point and radius.
+        Respects self._orbit_ccw: CW = bearing+90, CCW = bearing-90."""
         bearing_to_center = bearing_to(position.lat, position.lon, center.lat, center.lon)
         distance_to_center = haversine_distance(position.lat, position.lon, center.lat, center.lon)
 
@@ -761,7 +868,12 @@ class AutopilotManager:
         # Correction angle via atan — naturally limits to ~±90°
         correction = math.degrees(math.atan2(radius_error, orbit_radius))
 
-        orbit_heading = (bearing_to_center + 90 - correction) % 360
+        # CW: tangent = bearing + 90, correction inward when too far
+        # CCW: tangent = bearing - 90, correction inward when too far
+        if self._orbit_ccw:
+            orbit_heading = (bearing_to_center - 90 + correction) % 360
+        else:
+            orbit_heading = (bearing_to_center + 90 - correction) % 360
         return orbit_heading
 
     def _calculate_orbit_heading(self, position: LatLon, wp, current_heading: float) -> float:
@@ -770,6 +882,22 @@ class AutopilotManager:
             orbit_radius = 150.0
         center = LatLon(wp.lat, wp.lon)
         return self._calculate_orbit_heading_for_point(position, center, orbit_radius, current_heading)
+
+    def _choose_orbit_direction_ccw(self, position: LatLon, center_lat: float,
+                                     center_lon: float, heading: float) -> bool:
+        """Choose most efficient orbit direction based on approach angle.
+        Returns True for CCW, False for CW.
+        If the orbit center is to the right of the aircraft → CW is efficient.
+        If the orbit center is to the left → CCW is efficient.
+        """
+        bearing_to_center = bearing_to(position.lat, position.lon, center_lat, center_lon)
+        # Relative bearing: 0-180 = center is to the right, 180-360 = center is to the left
+        relative = (bearing_to_center - heading + 360) % 360
+        ccw = relative >= 180  # center to the left → turn left (CCW)
+        direction_str = "CCW" if ccw else "CW"
+        logger.info(f"ORBIT DIRECTION: bearing_to_center={bearing_to_center:.0f} heading={heading:.0f} "
+                     f"relative={relative:.0f} -> {direction_str}")
+        return ccw
 
     def _update_orbit_progress(self, current_heading: float):
         heading_diff = current_heading - self._orbit_last_heading
@@ -849,6 +977,8 @@ class AutopilotManager:
                 wp.orbit_radius = radius
                 if self._is_orbiting:
                     self._proxy.set_param('WP_LOITER_RAD', radius)
+                    # Force re-send DO_REPOSITION with new radius on next cycle
+                    self._orbit_reposition_sent = False
                 logger.info(f"ORBIT RADIUS SET: {radius}m for WP{wp.id}")
 
     def set_target_airspeed(self, speed: float):

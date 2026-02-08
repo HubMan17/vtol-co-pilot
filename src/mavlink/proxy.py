@@ -322,30 +322,39 @@ class MAVLinkProxy:
         )
         logger.info(f"POSITION_TARGET: lat={lat:.6f} lon={lon:.6f} alt={alt:.1f}")
 
-    def send_loiter_unlim(self, lat: float, lon: float, alt: float, radius: float):
-        """Enter LOITER at specified center via MISSION_ITEM_INT(current=2, NAV_LOITER_UNLIM).
-        Atomically switches to LOITER mode AND sets the orbit center + radius.
-        radius: positive=CW, negative=CCW (meters).
+    # L1 controller orbit radius compensation: ArduPlane's L1 navigation
+    # tracks outside the commanded radius. This factor reduces the sent radius
+    # so the actual orbit matches the requested radius.
+    ORBIT_RADIUS_COMPENSATION = 0.85
+
+    def send_loiter_unlim(self, lat: float, lon: float, alt: float, radius: float,
+                          ccw: bool = False):
+        """Orbit at specified center via MAV_CMD_DO_REPOSITION (COMMAND_INT).
+        Enters GUIDED mode and orbits the point with the given radius.
+        ArduPlane's GUIDED with radius is functionally identical to LOITER.
+        radius: orbit radius in meters (always positive).
+        ccw: True for counter-clockwise, False for clockwise.
         """
         if not self._sitl_conn:
             return
-        self._sitl_conn.mav.mission_item_int_send(
+        compensated = abs(radius) * self.ORBIT_RADIUS_COMPENSATION
+        self._sitl_conn.mav.command_int_send(
             self._sitl_conn.target_system,
             self._sitl_conn.target_component,
-            0,                                              # seq
             mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT,  # frame
-            mavutil.mavlink.MAV_CMD_NAV_LOITER_UNLIM,       # command
-            2,                                              # current = 2 means guided/immediate
-            0,                                              # autocontinue
-            0,                                              # param1: unused
-            0,                                              # param2: unused
-            radius,                                         # param3: radius (positive=CW, negative=CCW)
-            float('nan'),                                   # param4: yaw (NaN = current heading)
-            int(lat * 1e7),                                 # lat (degE7)
-            int(lon * 1e7),                                 # lon (degE7)
-            alt                                             # alt (meters, relative)
+            mavutil.mavlink.MAV_CMD_DO_REPOSITION,           # command 192
+            0, 0,                                            # current, autocontinue
+            -1,                                              # param1: ground speed (-1 = no change)
+            1,                                               # param2: MAV_DO_REPOSITION_FLAGS_CHANGE_MODE
+            compensated,                                     # param3: loiter radius (compensated)
+            1 if ccw else 0,                                 # param4: direction (0=CW, 1=CCW)
+            int(lat * 1e7),                                  # x: lat (degE7)
+            int(lon * 1e7),                                  # y: lon (degE7)
+            alt                                              # z: alt (meters, relative)
         )
-        logger.info(f"LOITER_UNLIM: lat={lat:.6f} lon={lon:.6f} alt={alt:.1f} radius={radius:.0f}")
+        direction_str = "CCW" if ccw else "CW"
+        logger.info(f"DO_REPOSITION: lat={lat:.6f} lon={lon:.6f} alt={alt:.1f} "
+                     f"radius={radius:.0f}(cmd={compensated:.0f}) {direction_str}")
 
     def send_gps_input(self, lat: float, lon: float, alt: float,
                        vn: float, ve: float, vd: float, heading: float,

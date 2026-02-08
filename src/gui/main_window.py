@@ -11,6 +11,7 @@ from src.core.config import AppConfig
 from src.core.events import EventBus, Event
 from src.mavlink.proxy import MAVLinkProxy
 from src.mavlink.telemetry import LatLon
+from src.navigation.calculations import haversine_distance, eta_seconds
 from src.navigation.dead_reckoning import DeadReckoningEngine
 from src.navigation.route_planner import RoutePlanner
 from src.autopilot.autopilot_manager import AutopilotManager, AutopilotMode
@@ -325,6 +326,7 @@ class MainWindow(QMainWindow):
         if not self._use_dr_position:
             self._use_dr_position = True
             self.btn_use_dr.setChecked(True)
+            self.autopilot.set_use_dr(True)
             self.lbl_dr_status.setText("Счисление: ВКЛ")
             self.lbl_dr_status.setStyleSheet("color: #00ff00; font-weight: bold;")
 
@@ -420,6 +422,7 @@ class MainWindow(QMainWindow):
 
     def _on_use_dr_toggle(self):
         self._use_dr_position = self.btn_use_dr.isChecked()
+        self.autopilot.set_use_dr(self._use_dr_position)
         if self._use_dr_position:
             self.lbl_dr_status.setText("Счисление: ВКЛ")
             self.lbl_dr_status.setStyleSheet("color: #00ff00; font-weight: bold;")
@@ -461,12 +464,7 @@ class MainWindow(QMainWindow):
                 self.statusbar.showMessage("Сначала установите точку Дом на карте")
                 return
 
-            self.route_planner.create_route("Home")
-            self.route_planner.clear_waypoints()
-            self.route_planner.add_waypoint(self._home_position.lat, self._home_position.lon, 100.0)
-            self._refresh_map_waypoints()
-
-            if self.autopilot.engage_nav():
+            if self.autopilot.engage_home():
                 self.btn_home.setStyleSheet("background-color: #ff6600;")
                 self.btn_nav.setChecked(False)
                 self.btn_nav.setStyleSheet("")
@@ -576,9 +574,22 @@ class MainWindow(QMainWindow):
                 telemetry.heading
             )
 
-            if self.route_planner.get_route():
-                # Only advance waypoints from GUI when autopilot is NOT engaged
-                # (autopilot manages its own waypoint advancement)
+            ap_status = self.autopilot.get_status()
+            if ap_status.get('returning_home', False) and self._home_position:
+                # RTH mode: show distance/ETA to home position
+                distance = haversine_distance(
+                    display_position.lat, display_position.lon,
+                    self._home_position.lat, self._home_position.lon
+                )
+                eta = eta_seconds(distance, telemetry.groundspeed)
+                minutes = int(eta // 60) if eta != float('inf') else 99
+                seconds = int(eta % 60) if eta != float('inf') else 99
+                self.status_panel.labels["Точка"][0].setText("Дом")
+                self.status_panel.labels["Дистанция"][0].setText(f"{distance / 1000:.2f} км")
+                self.status_panel.labels["Время приб."][0].setText(f"{minutes:02d}:{seconds:02d}")
+                self.status_panel.labels["Бок. уклон."][0].setText("--- м")
+            elif self.route_planner.get_route():
+                # Normal route: show distance/ETA to active waypoint
                 if not self.autopilot.is_engaged():
                     if self.route_planner.is_waypoint_reached(display_position):
                         old_idx = self.route_planner.get_active_waypoint_index()
