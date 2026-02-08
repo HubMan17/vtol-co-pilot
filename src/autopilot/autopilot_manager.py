@@ -420,14 +420,16 @@ class AutopilotManager:
                 else:
                     # Navigate to home
                     if distance_to_home <= 300.0:
-                        # Tangent approach: aim for a point on orbit circle offset 90° in orbit direction
-                        # This curves the aircraft to enter the orbit tangentially instead of head-on
+                        # Tangent approach: aim for geometric tangent point on orbit circle
+                        # Angle = arccos(R/D) — the angle at circle center between the line to aircraft
+                        # and the line to the tangent point. At D=300m, R=150m → 60°. At D=150m → 0°.
                         bearing_from_home = bearing_to(self._home_position.lat, self._home_position.lon,
                                                        position.lat, position.lon)
+                        angle_deg = math.degrees(math.acos(min(150.0 / distance_to_home, 1.0)))
                         if self._orbit_ccw:
-                            tangent_bearing = (bearing_from_home + 90) % 360
+                            tangent_bearing = (bearing_from_home - angle_deg) % 360
                         else:
-                            tangent_bearing = (bearing_from_home - 90) % 360
+                            tangent_bearing = (bearing_from_home + angle_deg) % 360
                         tgt_lat, tgt_lon = project_point(self._home_position.lat, self._home_position.lon,
                                                           tangent_bearing, 150.0)
                         target_bearing = bearing_to(position.lat, position.lon, tgt_lat, tgt_lon)
