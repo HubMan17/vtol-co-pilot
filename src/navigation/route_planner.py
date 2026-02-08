@@ -17,9 +17,9 @@ class Waypoint:
     lat: float
     lon: float
     altitude: float
-    radius: float = 50.0
+    radius: float = 150.0
     action: str = "FLYTHROUGH"
-    orbit_radius: float = 100.0
+    orbit_radius: float = 150.0
     orbit_turns: int = 1
     climb_enroute: bool = False
 
@@ -66,9 +66,9 @@ class RoutePlanner:
                     lat=wp_data['lat'],
                     lon=wp_data['lon'],
                     altitude=wp_data.get('altitude', wp_data.get('alt', 100)),
-                    radius=wp_data.get('radius', 50.0),
+                    radius=wp_data.get('radius', 150.0),
                     action=wp_data.get('action', 'FLYTHROUGH'),
-                    orbit_radius=wp_data.get('orbit_radius', 100.0),
+                    orbit_radius=wp_data.get('orbit_radius', 150.0),
                     orbit_turns=wp_data.get('orbit_turns', 1),
                     climb_enroute=wp_data.get('climb_enroute', False)
                 )

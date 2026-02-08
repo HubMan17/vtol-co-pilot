@@ -24,13 +24,15 @@ class AutopilotConfig:
     pitch_limit_up: float = 12.0
     pitch_limit_down: float = 15.0
     target_airspeed: float = 20.0
+    guided_yaw_rate: float = 25.0
     stick_threshold: int = 50
     timeout_ms: int = 3000
+    altitude_tolerance: float = 3.0
 
 
 @dataclass
 class NavigationConfig:
-    waypoint_radius: float = 50.0
+    waypoint_radius: float = 150.0
     drift_coefficient: float = 1.0
 
 
@@ -101,8 +103,10 @@ def save_config(config: AppConfig, path: Path = None):
             "pitch_limit_up": config.autopilot.pitch_limit_up,
             "pitch_limit_down": config.autopilot.pitch_limit_down,
             "target_airspeed": config.autopilot.target_airspeed,
+            "guided_yaw_rate": config.autopilot.guided_yaw_rate,
             "stick_threshold": config.autopilot.stick_threshold,
             "timeout_ms": config.autopilot.timeout_ms,
+            "altitude_tolerance": config.autopilot.altitude_tolerance,
         },
         "navigation": {
             "waypoint_radius": config.navigation.waypoint_radius,

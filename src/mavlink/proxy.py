@@ -228,6 +228,127 @@ class MAVLinkProxy:
         self._sitl_conn.set_mode(mode_id)
         logger.info(f"SET MODE: {mode_name} (id={mode_id})")
 
+    def send_guided_target(self, lat: float, lon: float, alt: float):
+        """Send a target position for ArduPlane GUIDED mode.
+        Uses MISSION_ITEM_INT with current=2, which is the standard way
+        to set a GUIDED target in ArduPlane (like 'fly to here' in Mission Planner).
+        """
+        if not self._sitl_conn:
+            return
+        self._sitl_conn.mav.mission_item_int_send(
+            self._sitl_conn.target_system,
+            self._sitl_conn.target_component,
+            0,                                              # seq
+            mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT,  # frame
+            mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,           # command
+            2,                                              # current = 2 means GUIDED target
+            0,                                              # autocontinue
+            0, 0, 0, 0,                                     # params 1-4 (unused for NAV_WAYPOINT guided)
+            int(lat * 1e7),                                 # lat (degE7)
+            int(lon * 1e7),                                 # lon (degE7)
+            alt                                             # alt (meters, relative)
+        )
+
+    def send_speed(self, airspeed_ms: float):
+        """Send MAV_CMD_DO_CHANGE_SPEED — works in GUIDED/AUTO. NOT reliable in LOITER (use set_cruise_airspeed)."""
+        if not self._sitl_conn:
+            return
+        self._sitl_conn.mav.command_long_send(
+            self._sitl_conn.target_system,
+            self._sitl_conn.target_component,
+            mavutil.mavlink.MAV_CMD_DO_CHANGE_SPEED,
+            0,
+            0,               # param1: 0=airspeed
+            airspeed_ms,     # param2: speed (m/s)
+            -1,              # param3: throttle (-1=no change)
+            0, 0, 0, 0
+        )
+
+    def send_guided_change_altitude(self, altitude_m: float, rate_ms: float = 0):
+        """Send MAV_CMD_GUIDED_CHANGE_ALTITUDE (43001) via COMMAND_INT.
+        Changes altitude in GUIDED mode WITHOUT resetting navigation path interpolation.
+        This is the preferred way to change altitude — it overrides waypoint-based altitude
+        with a direct target that TECS tracks independently.
+        altitude_m: target altitude (meters, relative to home)
+        rate_ms: climb/descent rate (m/s), 0 = maximum rate
+        """
+        if not self._sitl_conn:
+            return
+        self._sitl_conn.mav.command_int_send(
+            self._sitl_conn.target_system,
+            self._sitl_conn.target_component,
+            mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT,  # frame 6
+            43001,           # MAV_CMD_GUIDED_CHANGE_ALTITUDE
+            0, 0,            # current, autocontinue
+            0,               # param1: empty
+            0,               # param2: empty
+            rate_ms,         # param3: rate (m/s), 0=max
+            0,               # param4: empty
+            0, 0,            # x, y: not used
+            altitude_m       # z: target altitude (meters, relative)
+        )
+        logger.info(f"GUIDED_CHANGE_ALT: target={altitude_m:.1f}m rate={rate_ms:.1f}m/s")
+
+    def set_cruise_airspeed(self, speed_ms: float):
+        """Set cruise airspeed parameter for LOITER/CRUISE modes.
+        Sets both TRIM_ARSPD_CM (ArduPlane <=4.4, cm/s) and AIRSPEED_CRUISE (4.5+, m/s)
+        so that one of them will work regardless of firmware version.
+        """
+        self.set_param('TRIM_ARSPD_CM', speed_ms * 100.0)
+        self.set_param('AIRSPEED_CRUISE', speed_ms)
+
+    def send_reposition(self, lat: float, lon: float, alt: float):
+        """Change target position/altitude in LOITER via SET_POSITION_TARGET_GLOBAL_INT."""
+        if not self._sitl_conn:
+            return
+        # type_mask: use position only, ignore velocity/acceleration/yaw
+        type_mask = (
+            0x0008 | 0x0010 | 0x0020 |  # ignore vx, vy, vz
+            0x0040 | 0x0080 | 0x0100 |  # ignore ax, ay, az
+            0x0400 | 0x0800             # ignore yaw, yaw_rate
+        )
+        self._sitl_conn.mav.set_position_target_global_int_send(
+            0,                                              # time_boot_ms
+            self._sitl_conn.target_system,
+            self._sitl_conn.target_component,
+            mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+            type_mask,
+            int(lat * 1e7),          # lat (degE7)
+            int(lon * 1e7),          # lon (degE7)
+            alt,                     # alt (meters, relative)
+            0, 0, 0,                 # velocity (ignored)
+            0, 0, 0,                 # acceleration (ignored)
+            0, 0                     # yaw, yaw_rate (ignored)
+        )
+        logger.info(f"POSITION_TARGET: lat={lat:.6f} lon={lon:.6f} alt={alt:.1f}")
+
+    def send_gps_input(self, lat: float, lon: float, alt: float,
+                       vn: float, ve: float, vd: float, heading: float,
+                       horiz_accuracy: float = 10.0, speed_accuracy: float = 2.0):
+        """Send GPS_INPUT with DR position as second GPS slot (GPS_TYPE2=14 MAV)."""
+        if not self._sitl_conn:
+            return
+        import time as _time
+        self._sitl_conn.mav.gps_input_send(
+            int(_time.time() * 1e6),   # time_usec
+            1,                          # gps_id=1 → GPS_TYPE2
+            0,                          # ignore_flags: all fields valid
+            0,                          # time_week_ms
+            0,                          # time_week
+            3,                          # fix_type: 3D fix
+            int(lat * 1e7),             # lat (degE7)
+            int(lon * 1e7),             # lon (degE7)
+            alt,                        # alt (meters)
+            horiz_accuracy / 5.0,       # hdop
+            3.0,                        # vdop
+            vn, ve, vd,                 # velocity NED (m/s)
+            speed_accuracy,             # speed_accuracy
+            horiz_accuracy,             # horiz_accuracy (meters)
+            5.0,                        # vert_accuracy
+            8,                          # satellites_visible
+            int(heading * 100)          # yaw (centidegrees)
+        )
+
     def on_message(self, callback: Callable):
         self._message_callbacks.append(callback)
 

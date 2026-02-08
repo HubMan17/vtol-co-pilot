@@ -44,6 +44,10 @@ class MainWindow(QMainWindow):
         self._set_home_mode = False
         self._use_dr_position = False
         self._home_position: Optional[LatLon] = None
+        self._manual_wind_enabled = False
+        self._manual_wind_dir = 0
+        self._manual_wind_speed = 0
+        self._manual_drift_coeff = config.navigation.drift_coefficient
 
         self._setup_ui()
         self._setup_connections()
@@ -227,6 +231,7 @@ class MainWindow(QMainWindow):
         self.status_panel.orbit_radius_changed.connect(self._on_orbit_radius_changed)
         self.status_panel.target_altitude_changed.connect(self._on_target_altitude_changed)
         self.status_panel.target_airspeed_changed.connect(self._on_target_airspeed_changed)
+        self.status_panel.manual_wind_changed.connect(self._on_manual_wind_changed)
 
         self.event_bus.subscribe(Event.CONNECTION_RESTORED, self._on_connection_restored)
         self.event_bus.subscribe(Event.CONNECTION_LOST, self._on_connection_lost)
@@ -263,6 +268,10 @@ class MainWindow(QMainWindow):
         self.lbl_status.setText("ПОДКЛЮЧЕНО")
         self.lbl_status.setStyleSheet("color: green; font-weight: bold;")
         self.statusbar.showMessage(f"Подключено к SITL на порту {self.config.mavlink.sitl_port}")
+
+        self.btn_follow.setChecked(True)
+        self.btn_follow.setStyleSheet("background-color: #00cc00;")
+        self.map_widget.set_follow_mode(True)
 
     def _on_connection_lost(self, data):
         self.btn_connect.setEnabled(True)
@@ -337,10 +346,17 @@ class MainWindow(QMainWindow):
             altitude=wp_data['altitude'],
             radius=wp_data['radius'],
             action=wp_data['action'],
-            orbit_radius=wp_data.get('orbit_radius', 100.0),
+            orbit_radius=wp_data.get('orbit_radius', 150.0),
             orbit_turns=wp_data.get('orbit_turns', 1),
             climb_enroute=wp_data.get('climb_enroute', False)
         )
+
+        # If autopilot is orbiting or returning home, redirect to the newly added waypoint
+        if self.autopilot.is_engaged():
+            status = self.autopilot.get_status()
+            if status.get('is_orbiting') or status.get('returning_home'):
+                new_idx = self.route_planner.get_waypoint_count() - 1
+                self.route_planner.set_active_waypoint(new_idx)
 
         self._refresh_map_waypoints()
         self.statusbar.showMessage(f"Добавлена точка {wp.id}: {lat:.6f}, {lon:.6f}")
@@ -518,11 +534,29 @@ class MainWindow(QMainWindow):
         self.autopilot.set_target_airspeed(float(speed))
         self.statusbar.showMessage(f"Целевая скорость: {speed} м/с")
 
+    def _on_manual_wind_changed(self, enabled: bool, direction: int, speed: int, drift_coeff: float):
+        self._manual_wind_enabled = enabled
+        self._manual_wind_dir = direction
+        self._manual_wind_speed = speed
+        self._manual_drift_coeff = drift_coeff
+        self.dead_reckoning.set_drift_coefficient(drift_coeff)
+        if enabled:
+            self.statusbar.showMessage(f"Ручной ветер: {direction}° / {speed} м/с, дрейф: {drift_coeff:.2f}")
+        else:
+            self.dead_reckoning.set_drift_coefficient(self.config.navigation.drift_coefficient)
+            self.statusbar.showMessage("Ветер: автоматический (от ArduPilot)")
+
     def _update_display(self):
         if not self.proxy.is_connected():
             return
 
         telemetry = self.proxy.get_telemetry()
+
+        # Override wind for DR engine when manual wind is active
+        if self._manual_wind_enabled:
+            telemetry.wind_direction = float(self._manual_wind_dir)
+            telemetry.wind_speed = float(self._manual_wind_speed)
+
         self.status_panel.update_telemetry(telemetry)
         self.lbl_mode.setText(f"Режим: {telemetry.mode}")
 

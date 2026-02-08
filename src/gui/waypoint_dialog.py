@@ -59,7 +59,7 @@ class WaypointDialog(QDialog):
 
         self.spin_radius = QSpinBox()
         self.spin_radius.setRange(10, 500)
-        self.spin_radius.setValue(50)
+        self.spin_radius.setValue(150)
         self.spin_radius.setSuffix(" м")
         params_layout.addRow("Радиус принятия:", self.spin_radius)
 
@@ -71,7 +71,7 @@ class WaypointDialog(QDialog):
 
         self.spin_orbit_radius = QSpinBox()
         self.spin_orbit_radius.setRange(30, 500)
-        self.spin_orbit_radius.setValue(100)
+        self.spin_orbit_radius.setValue(150)
         self.spin_orbit_radius.setSuffix(" м")
         orbit_layout.addRow("Радиус:", self.spin_orbit_radius)
 

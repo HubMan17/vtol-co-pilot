@@ -76,3 +76,18 @@ def heading_difference(h1: float, h2: float) -> float:
     while diff < -180:
         diff += 360
     return diff
+
+
+def project_point(lat: float, lon: float, bearing_deg: float, distance_m: float) -> Tuple[float, float]:
+    """Project a point at given bearing and distance from current position.
+    Returns (lat, lon) in degrees."""
+    d = distance_m / EARTH_RADIUS
+    brg = math.radians(bearing_deg)
+    lat1 = math.radians(lat)
+    lon1 = math.radians(lon)
+
+    lat2 = math.asin(math.sin(lat1) * math.cos(d) + math.cos(lat1) * math.sin(d) * math.cos(brg))
+    lon2 = lon1 + math.atan2(math.sin(brg) * math.sin(d) * math.cos(lat1),
+                              math.cos(d) - math.sin(lat1) * math.sin(lat2))
+
+    return math.degrees(lat2), math.degrees(lon2)
