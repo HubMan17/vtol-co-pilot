@@ -234,6 +234,12 @@ class AutopilotManager:
         self._proxy.set_mode('GUIDED')
         self._proxy.send_speed(self._speed_controller.get_target_speed())
 
+        # Pre-choose orbit direction for smooth tangent approach
+        if telemetry.position:
+            self._orbit_ccw = self._choose_orbit_direction_ccw(
+                telemetry.position, self._home_position.lat, self._home_position.lon, telemetry.heading
+            )
+
         # Send initial target towards home
         if telemetry.position:
             init_bearing = bearing_to(telemetry.position.lat, telemetry.position.lon,
@@ -365,10 +371,7 @@ class AutopilotManager:
                         self._orbit_turns_completed = 0
                         self._orbit_heading_accumulated = 0.0
                         self._orbit_last_heading = telemetry.heading
-                        # Choose efficient orbit direction
-                        self._orbit_ccw = self._choose_orbit_direction_ccw(
-                            position, self._home_position.lat, self._home_position.lon, telemetry.heading
-                        )
+                        # Orbit direction already chosen in engage_home() for tangent approach
                         # Enter orbit via DO_REPOSITION with target alt=50m
                         # ArduPlane descends while orbiting — no need for alt transition
                         if gps_ok:
@@ -416,8 +419,21 @@ class AutopilotManager:
                             self._orbit_reposition_sent = True
                 else:
                     # Navigate to home
-                    target_bearing = bearing_to(position.lat, position.lon,
-                                               self._home_position.lat, self._home_position.lon)
+                    if distance_to_home <= 300.0:
+                        # Tangent approach: aim for a point on orbit circle offset 90° in orbit direction
+                        # This curves the aircraft to enter the orbit tangentially instead of head-on
+                        bearing_from_home = bearing_to(self._home_position.lat, self._home_position.lon,
+                                                       position.lat, position.lon)
+                        if self._orbit_ccw:
+                            tangent_bearing = (bearing_from_home + 90) % 360
+                        else:
+                            tangent_bearing = (bearing_from_home - 90) % 360
+                        tgt_lat, tgt_lon = project_point(self._home_position.lat, self._home_position.lon,
+                                                          tangent_bearing, 150.0)
+                        target_bearing = bearing_to(position.lat, position.lon, tgt_lat, tgt_lon)
+                    else:
+                        target_bearing = bearing_to(position.lat, position.lon,
+                                                   self._home_position.lat, self._home_position.lon)
                     self._heading_controller.set_target_heading(target_bearing)
                     self._heading_controller.update(telemetry.heading)
                     self._altitude_controller.update(telemetry.altitude_agl)
