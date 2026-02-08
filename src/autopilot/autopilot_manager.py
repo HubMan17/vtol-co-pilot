@@ -76,6 +76,7 @@ class AutopilotManager:
         self._orbit_advance_handled = False  # prevent repeated _finish_orbit_and_advance calls
         self._orbit_reposition_sent = False  # DO_REPOSITION sent for current orbit
         self._orbit_ccw = False  # orbit direction: False=CW, True=CCW
+        self._tangent_approach_wp_id = -1  # waypoint ID for which orbit direction was pre-chosen
         self._use_dr = False  # pilot toggled "Использовать счисление"
 
         # Throttle GUIDED target sends: ArduPlane resets altitude path interpolation
@@ -274,6 +275,7 @@ class AutopilotManager:
         self._waiting_for_altitude = False
         self._returning_home = False
         self._loiter_alt_transition = False
+        self._tangent_approach_wp_id = -1
 
         # Restore cruise airspeed and THROTTLE_NUDGE if we modified them for LOITER
         if self._saved_airspeed_cruise is not None:
@@ -612,7 +614,29 @@ class AutopilotManager:
                             self._send_guided_commands(target_bearing, position)
                 else:
                     # Flying to waypoint — send GUIDED target
-                    target_bearing = bearing_to(position.lat, position.lon, wp.lat, wp.lon)
+                    has_orbit = wp.action in ("ORBIT_TURNS", "ORBIT_INFINITE", "ALTITUDE")
+                    orbit_radius = getattr(wp, 'orbit_radius', 150.0)
+                    if orbit_radius <= 0:
+                        orbit_radius = 150.0
+
+                    if has_orbit and distance_to_wp <= orbit_radius * 2:
+                        # Tangent approach: curve into orbit circle instead of flying head-on
+                        if self._tangent_approach_wp_id != wp.id:
+                            self._orbit_ccw = self._choose_orbit_direction_ccw(
+                                position, wp.lat, wp.lon, telemetry.heading
+                            )
+                            self._tangent_approach_wp_id = wp.id
+                        bearing_from_wp = bearing_to(wp.lat, wp.lon, position.lat, position.lon)
+                        angle_deg = math.degrees(math.acos(min(orbit_radius / distance_to_wp, 1.0)))
+                        if self._orbit_ccw:
+                            tangent_bearing = (bearing_from_wp - angle_deg) % 360
+                        else:
+                            tangent_bearing = (bearing_from_wp + angle_deg) % 360
+                        tgt_lat, tgt_lon = project_point(wp.lat, wp.lon, tangent_bearing, orbit_radius)
+                        target_bearing = bearing_to(position.lat, position.lon, tgt_lat, tgt_lon)
+                    else:
+                        target_bearing = bearing_to(position.lat, position.lon, wp.lat, wp.lon)
+
                     self._heading_controller.set_target_heading(target_bearing)
                     self._heading_controller.update(telemetry.heading)
                     self._altitude_controller.update(telemetry.altitude_agl)
@@ -844,8 +868,10 @@ class AutopilotManager:
 
         telemetry = self._proxy.get_telemetry()
 
-        # Choose efficient orbit direction based on approach angle
-        if telemetry.position:
+        # Choose orbit direction — skip if already pre-chosen by tangent approach
+        if self._tangent_approach_wp_id == wp.id:
+            self._tangent_approach_wp_id = -1  # consumed
+        elif telemetry.position:
             self._orbit_ccw = self._choose_orbit_direction_ccw(
                 telemetry.position, wp.lat, wp.lon, current_heading
             )
