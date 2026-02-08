@@ -5,14 +5,15 @@ from src.navigation.calculations import heading_difference, normalize_heading
 
 class HeadingController:
     PWM_CENTER = 1500
-    PWM_RANGE = 500
-    MAX_STICK_DEG = 55.0
 
     def __init__(self, config: AutopilotConfig):
         self._config = config
         self._target_heading = 0.0
         self._current_error = 0.0
         self._bank_limit = config.bank_limit
+
+        # FBWA: full stick (RC_MAX) = roll_limit_deg of actual bank
+        self._pwm_per_deg = (config.rc_roll_max - self.PWM_CENTER) / config.roll_limit_deg
 
         self._pid = PIDController(
             kp=config.heading_pid['p'],
@@ -32,12 +33,10 @@ class HeadingController:
         error = heading_difference(current_heading, self._target_heading)
         self._current_error = error
 
+        # No deadband — PID always runs, no gaps where plane levels out
         bank_angle = self._pid.update(error, dt)
-
-        pwm = self.PWM_CENTER + int(bank_angle * self.PWM_RANGE / self.MAX_STICK_DEG)
-        pwm = max(1000, min(2000, pwm))
-
-        return pwm
+        pwm = self.PWM_CENTER + int(bank_angle * self._pwm_per_deg)
+        return max(1000, min(2000, pwm))
 
     def reset(self):
         self._pid.reset()

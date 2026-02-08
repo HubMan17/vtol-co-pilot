@@ -15,10 +15,12 @@ class MAVLinkConfig:
 
 @dataclass
 class AutopilotConfig:
-    heading_pid: Dict[str, float] = field(default_factory=lambda: {"p": 0.7, "i": 0.08, "d": 0.15})
+    heading_pid: Dict[str, float] = field(default_factory=lambda: {"p": 1.5, "i": 0.08, "d": 0.15})
     altitude_pid: Dict[str, float] = field(default_factory=lambda: {"p": 0.8, "i": 0.05, "d": 1.0})
     speed_pid: Dict[str, float] = field(default_factory=lambda: {"p": 50.0, "i": 10.0, "d": 5.0})
-    bank_limit: float = 25.0
+    bank_limit: float = 27.0
+    roll_limit_deg: float = 30.0
+    rc_roll_max: int = 1886
     pitch_limit_up: float = 12.0
     pitch_limit_down: float = 15.0
     target_airspeed: float = 20.0
@@ -94,6 +96,8 @@ def save_config(config: AppConfig, path: Path = None):
             "altitude_pid": config.autopilot.altitude_pid,
             "speed_pid": config.autopilot.speed_pid,
             "bank_limit": config.autopilot.bank_limit,
+            "roll_limit_deg": config.autopilot.roll_limit_deg,
+            "rc_roll_max": config.autopilot.rc_roll_max,
             "pitch_limit_up": config.autopilot.pitch_limit_up,
             "pitch_limit_down": config.autopilot.pitch_limit_down,
             "target_airspeed": config.autopilot.target_airspeed,

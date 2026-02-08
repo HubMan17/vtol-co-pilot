@@ -5,7 +5,7 @@ from src.autopilot.pid import PIDController
 class SpeedController:
     PWM_MIN = 1000
     PWM_MAX = 2000
-    PWM_IDLE = 1100
+    PWM_CRUISE = 1300  # baseline throttle for level cruise at target airspeed
 
     def __init__(self, config: AutopilotConfig):
         self._config = config
@@ -14,13 +14,15 @@ class SpeedController:
         self._enabled = True
 
         speed_pid = getattr(config, 'speed_pid', {'p': 50.0, 'i': 10.0, 'd': 5.0})
+        # PID outputs offset from PWM_CRUISE (not raw PWM)
         self._pid = PIDController(
             kp=speed_pid['p'],
             ki=speed_pid['i'],
             kd=speed_pid['d'],
-            output_min=self.PWM_MIN,
-            output_max=self.PWM_MAX
+            output_min=self.PWM_MIN - self.PWM_CRUISE,   # -300
+            output_max=self.PWM_MAX - self.PWM_CRUISE     # +700
         )
+        self._pid.set_integral_limit(30)  # max I term = ki*30 = 300 PWM
 
     def set_target_speed(self, speed: float):
         self._target_speed = max(15.0, min(35.0, speed))
@@ -37,9 +39,7 @@ class SpeedController:
         return self._enabled
 
     def initialize_from_current(self, current_airspeed: float):
-        """Initialize controller with current airspeed to avoid sudden throttle changes"""
-        if current_airspeed > self._target_speed + 2.0:
-            self._target_speed = current_airspeed
+        """Reset PID for clean start (target stays at configured airspeed)"""
         self._pid.reset()
 
     def update(self, current_airspeed: float, dt: float) -> int:
@@ -49,11 +49,8 @@ class SpeedController:
         error = self._target_speed - current_airspeed
         self._current_error = error
 
-        # Gradually reduce target speed to 20 m/s if above
-        if self._target_speed > 20.0:
-            self._target_speed = max(20.0, self._target_speed - 0.5 * dt)
-
-        throttle_pwm = int(self._pid.update(error, dt))
+        offset = self._pid.update(error, dt)
+        throttle_pwm = int(self.PWM_CRUISE + offset)
         throttle_pwm = max(self.PWM_MIN, min(self.PWM_MAX, throttle_pwm))
 
         return throttle_pwm

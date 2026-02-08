@@ -14,6 +14,7 @@ logging.basicConfig(
     datefmt='%H:%M:%S',
     handlers=[
         logging.FileHandler(log_dir / "autopilot.log", mode='w', encoding='utf-8'),
+        logging.StreamHandler(),
     ]
 )
 logger = logging.getLogger(__name__)
@@ -68,6 +69,8 @@ class AutopilotManager:
         self._home_position: Optional[LatLon] = None
         self._returning_home = False
 
+        self._log_counter = 0
+
         self._event_bus.subscribe(Event.CONNECTION_LOST, self._on_connection_lost)
 
     def set_route_planner(self, route_planner: 'RoutePlanner'):
@@ -118,8 +121,8 @@ class AutopilotManager:
         self._mode = AutopilotMode.NAV
         self._last_update_time = time.time()
 
-        # Set ArduPilot to CRUISE mode for proper altitude/speed control
-        self._proxy.set_mode('CRUISE')
+        # FBWA mode: CH1=bank angle, CH2=pitch angle, CH3=throttle
+        self._proxy.set_mode('FBWA')
 
         logger.info(f"ENGAGE NAV: waypoint={wp.id}/{len(route.waypoints)}")
 
@@ -142,7 +145,7 @@ class AutopilotManager:
         self._mode = AutopilotMode.MANUAL
 
         self._proxy.release_rc_override()
-        self._proxy.set_mode('MANUAL')
+        self._proxy.set_mode('CRUISE')
 
         self._heading_controller.reset()
         self._altitude_controller.reset()
@@ -314,6 +317,18 @@ class AutopilotManager:
                 4: 0
             })
 
+            # Diagnostic logging every ~2 seconds
+            self._log_counter += 1
+            if self._log_counter >= 20:
+                self._log_counter = 0
+                logger.info(
+                    f"RC_OVR: roll={roll_pwm} pitch={pitch_pwm} thr={throttle_pwm} | "
+                    f"hdg={telemetry.heading:.0f}->tgt={target_bearing:.0f} err={self._heading_controller.get_current_error():.1f} | "
+                    f"alt={telemetry.altitude_agl:.1f} tgt={self._altitude_controller.get_target_altitude():.1f} err={self._altitude_controller.get_current_error():.1f} | "
+                    f"spd={telemetry.airspeed:.1f} tgt={self._speed_controller.get_target_speed():.1f} | "
+                    f"mode={telemetry.mode} armed={telemetry.armed}"
+                )
+
         self._last_update_time = current_time
         return True
 
@@ -419,7 +434,20 @@ class AutopilotManager:
 
     def _calculate_orbit_heading(self, position: LatLon, wp, current_heading: float) -> float:
         bearing_to_wp = bearing_to(position.lat, position.lon, wp.lat, wp.lon)
-        orbit_heading = (bearing_to_wp + 90) % 360
+        distance_to_wp = haversine_distance(position.lat, position.lon, wp.lat, wp.lon)
+
+        orbit_radius = getattr(wp, 'orbit_radius', 100.0)
+        if orbit_radius <= 0:
+            orbit_radius = 100.0
+
+        # Radius error: positive = too far from center, negative = too close
+        radius_error = distance_to_wp - orbit_radius
+
+        # Correction angle via atan — naturally limits to ~±90°
+        # Positive correction turns more toward center, negative turns away
+        correction = math.degrees(math.atan2(radius_error, orbit_radius))
+
+        orbit_heading = (bearing_to_wp + 90 - correction) % 360
         return orbit_heading
 
     def _update_orbit_progress(self, current_heading: float):

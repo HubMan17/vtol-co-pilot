@@ -168,7 +168,9 @@ class MAVLinkProxy:
         if not self._sitl_conn:
             return
 
-        ch = [0] * 8
+        # 65535 = don't touch this channel (leave as-is)
+        # Only override the channels we explicitly pass in
+        ch = [65535] * 8
         for i, val in channels.items():
             if 1 <= i <= 8:
                 ch[i - 1] = val
@@ -181,7 +183,16 @@ class MAVLinkProxy:
         self._event_bus.emit(Event.RC_OVERRIDE_SENT, channels)
 
     def release_rc_override(self):
-        self.send_rc_override({1: 0, 2: 0, 3: 0, 4: 0})
+        """Release only control channels (1-3), leave aux channels untouched"""
+        if not self._sitl_conn:
+            return
+        # 0 = release channel back to RC input
+        # 65535 = don't touch (leave aux channels like CH7 ArmDisarm alone)
+        self._sitl_conn.mav.rc_channels_override_send(
+            self._sitl_conn.target_system,
+            self._sitl_conn.target_component,
+            0, 0, 0, 65535, 65535, 65535, 65535, 65535
+        )
 
     def set_mode(self, mode_name: str):
         """Set ArduPilot flight mode (e.g., 'CRUISE', 'MANUAL', 'AUTO')"""
@@ -197,7 +208,9 @@ class MAVLinkProxy:
             'TRAINING': 3,
             'ACRO': 4,
             'FLY_BY_WIRE_A': 5,
+            'FBWA': 5,
             'FLY_BY_WIRE_B': 6,
+            'FBWB': 6,
             'CRUISE': 7,
             'AUTOTUNE': 8,
             'AUTO': 10,
@@ -223,6 +236,21 @@ class MAVLinkProxy:
 
     def is_connected(self) -> bool:
         return self._connected
+
+    def set_param(self, name: str, value: float, param_type: int = None):
+        """Set an ArduPilot parameter via MAVLink"""
+        if not self._sitl_conn:
+            return
+        if param_type is None:
+            param_type = mavutil.mavlink.MAV_PARAM_TYPE_REAL32
+        self._sitl_conn.mav.param_set_send(
+            self._sitl_conn.target_system,
+            self._sitl_conn.target_component,
+            name.encode('utf-8'),
+            value,
+            param_type
+        )
+        logger.info(f"SET PARAM: {name} = {value}")
 
     def request_data_streams(self, rate: int = 4):
         if not self._sitl_conn:

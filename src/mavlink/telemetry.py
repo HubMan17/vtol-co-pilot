@@ -99,6 +99,9 @@ class TelemetryParser:
             updated = True
 
         elif msg_type == "HEARTBEAT":
+            # Ignore GCS heartbeats (MAV_TYPE_GCS=6), only process autopilot
+            if msg.type == 6:
+                return False
             self.state.armed = (msg.base_mode & 128) != 0
             mode_mapping = {
                 0: "MANUAL", 1: "CIRCLE", 2: "STABILIZE", 3: "TRAINING",

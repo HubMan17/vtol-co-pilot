@@ -243,7 +243,7 @@ class MainWindow(QMainWindow):
         self.statusbar.showMessage("Подключение...")
         if self.proxy.connect():
             self.proxy.start()
-            self.proxy.request_data_streams(10)
+            self.proxy.request_data_streams(4)
 
     def _on_disconnect(self):
         self.proxy.stop()
@@ -543,13 +543,16 @@ class MainWindow(QMainWindow):
             )
 
             if self.route_planner.get_route():
-                if self.route_planner.is_waypoint_reached(display_position):
-                    old_idx = self.route_planner.get_active_waypoint_index()
-                    self.route_planner.next_waypoint()
-                    new_idx = self.route_planner.get_active_waypoint_index()
-                    if new_idx != old_idx:
-                        self.map_widget.update_active_waypoint(new_idx)
-                        self.statusbar.showMessage(f"Достигнута точка {old_idx + 1}, следующая: {new_idx + 1}")
+                # Only advance waypoints from GUI when autopilot is NOT engaged
+                # (autopilot manages its own waypoint advancement)
+                if not self.autopilot.is_engaged():
+                    if self.route_planner.is_waypoint_reached(display_position):
+                        old_idx = self.route_planner.get_active_waypoint_index()
+                        self.route_planner.next_waypoint()
+                        new_idx = self.route_planner.get_active_waypoint_index()
+                        if new_idx != old_idx:
+                            self.map_widget.update_active_waypoint(new_idx)
+                            self.statusbar.showMessage(f"Достигнута точка {old_idx + 1}, следующая: {new_idx + 1}")
 
                 distance = self.route_planner.distance_to_waypoint(display_position)
                 eta = self.route_planner.eta_to_waypoint(display_position, telemetry.groundspeed)
