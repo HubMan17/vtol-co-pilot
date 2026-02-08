@@ -357,8 +357,8 @@ class AutopilotManager:
                 distance_to_home = haversine_distance(position.lat, position.lon,
                                                       self._home_position.lat, self._home_position.lon)
 
-                # Check if home reached (50m radius), or already orbiting (orbit radius > 50m)
-                if distance_to_home <= 50.0 or self._is_orbiting:
+                # Start orbit when aircraft reaches orbit radius — smooth entry from edge
+                if distance_to_home <= 150.0 or self._is_orbiting:
                     if not self._is_orbiting:
                         # Start orbiting at home — enter orbit, descend to 50m via DO_REPOSITION
                         self._is_orbiting = True
