@@ -461,32 +461,7 @@ class AutopilotManager:
                 self._speed_controller.update(telemetry.airspeed)
                 target_bearing = telemetry.heading  # for logging only
 
-                if self._loiter_alt_transition:
-                    # GUIDED altitude transition — throttled for TECS convergence
-                    if telemetry.mode != 'GUIDED':
-                        self._proxy.set_mode('GUIDED')
-                    now = time.time()
-                    if now - self._guided_send_time >= self._GUIDED_RESEND_INTERVAL:
-                        target_alt = self._altitude_controller.get_target_altitude()
-                        orbit_heading = self._calculate_orbit_heading(position, wp, telemetry.heading)
-                        tgt_lat, tgt_lon = project_point(
-                            position.lat, position.lon, orbit_heading, 300.0
-                        )
-                        self._proxy.send_guided_target(tgt_lat, tgt_lon, target_alt)
-                        self._proxy.send_speed(self._speed_controller.get_target_speed())
-                        self._guided_send_time = now
-                    if self._altitude_controller.is_on_altitude(tolerance=self._config.altitude_tolerance):
-                        self._loiter_alt_transition = False
-                        if not need_guided_orbit:
-                            radius = getattr(wp, 'orbit_radius', 150.0)
-                            if radius <= 0:
-                                radius = 150.0
-                            self._proxy.set_param('THROTTLE_NUDGE', 0)
-                            self._proxy.set_param('WP_LOITER_RAD', radius)
-                            self._proxy.send_loiter_unlim(wp.lat, wp.lon, wp.altitude, radius, ccw=self._orbit_ccw)
-                            self._orbit_reposition_sent = True
-                        logger.info(f"LOITER ALT TRANSITION DONE: alt={telemetry.altitude_agl:.1f}m")
-                elif need_guided_orbit:
+                if need_guided_orbit:
                     # DR active or GPS lost — orbit via GUIDED heading targets around orbit center
                     self._orbit_reposition_sent = False
                     now = time.time()
@@ -510,7 +485,7 @@ class AutopilotManager:
                         self._orbit_reposition_sent = True
 
                 # ALTITUDE: auto-advance when target altitude reached during orbit
-                if wp.action == "ALTITUDE" and not self._loiter_alt_transition and not self._orbit_advance_handled:
+                if wp.action == "ALTITUDE" and not self._orbit_advance_handled:
                     if self._altitude_controller.is_on_altitude(tolerance=5.0):
                         self._orbit_advance_handled = True
                         logger.info(f"ALTITUDE REACHED at WP{wp.id}: alt={telemetry.altitude_agl:.1f}m target={wp.altitude}m")
@@ -529,13 +504,12 @@ class AutopilotManager:
                         self._altitude_controller.update(telemetry.altitude_agl)  # refresh error before checking
 
                         if wp.action in ("ORBIT_TURNS", "ORBIT_INFINITE", "ALTITUDE"):
-                            # Orbit waypoints: start LOITER immediately, adjust altitude during orbit
+                            # Orbit waypoints: start DO_REPOSITION orbit immediately
+                            # Altitude handled by send_guided_change_altitude (COMMAND_INT) — TECS tracks independently
                             self._start_orbit(wp, telemetry.heading)
                             if not self._altitude_controller.is_on_altitude(tolerance=5.0):
-                                self._loiter_alt_transition = True
-                                self._guided_send_time = 0.0  # force immediate send
                                 self._proxy.send_guided_change_altitude(wp.altitude)
-                                logger.info(f"ORBIT + ALT TRANSITION at WP{wp.id}: target={wp.altitude}m")
+                                logger.info(f"ORBIT + ALT CHANGE at WP{wp.id}: target={wp.altitude}m")
                             else:
                                 logger.info(f"START ORBIT at WP{wp.id} (altitude OK)")
                             target_bearing = telemetry.heading
@@ -1009,10 +983,8 @@ class AutopilotManager:
         if self._mode != AutopilotMode.MANUAL:
             self._proxy.send_guided_change_altitude(altitude)
 
-        # If orbiting in LOITER, transition to GUIDED to climb/descend then re-enter LOITER
-        if self._is_orbiting:
-            self._loiter_alt_transition = True
-            logger.info(f"LOITER ALT TRANSITION START: target={altitude}m")
+        # send_guided_change_altitude (COMMAND_INT) handles altitude independently of orbit
+        # DO_REPOSITION orbit continues uninterrupted — no need for GUIDED alt transition
 
     def set_orbit_radius(self, radius: float):
         if self._route_planner:
