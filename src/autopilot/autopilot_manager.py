@@ -366,7 +366,8 @@ class AutopilotManager:
                                                       self._home_position.lat, self._home_position.lon)
 
                 # Start orbit when aircraft reaches orbit radius — smooth entry from edge
-                if distance_to_home <= 150.0 or self._is_orbiting:
+                # Use 160m threshold (orbit radius + 10m margin) so tangent approach can trigger entry
+                if distance_to_home <= 160.0 or self._is_orbiting:
                     if not self._is_orbiting:
                         # Start orbiting at home — enter orbit, descend to 50m via DO_REPOSITION
                         self._is_orbiting = True
@@ -1014,6 +1015,23 @@ class AutopilotManager:
         if self._home_position:
             logger.info("ROUTE COMPLETE -> RETURNING HOME")
             self._returning_home = True
+            self._waiting_for_altitude = False
+            self._guided_send_time = 0.0
+
+            telemetry = self._proxy.get_telemetry()
+            self._altitude_controller.set_target_altitude(telemetry.altitude_agl)
+
+            # Pre-choose orbit direction for smooth tangent approach
+            if telemetry.position:
+                self._orbit_ccw = self._choose_orbit_direction_ccw(
+                    telemetry.position, self._home_position.lat, self._home_position.lon, telemetry.heading
+                )
+                # Send initial GUIDED target toward home
+                init_bearing = bearing_to(telemetry.position.lat, telemetry.position.lon,
+                                           self._home_position.lat, self._home_position.lon)
+                tgt_lat, tgt_lon = project_point(telemetry.position.lat, telemetry.position.lon,
+                                                  init_bearing, 2000.0)
+                self._proxy.send_guided_target(tgt_lat, tgt_lon, telemetry.altitude_agl)
         else:
             logger.info("ROUTE COMPLETE -> ORBITING INDEFINITELY (no home position)")
             if self._route_planner:
