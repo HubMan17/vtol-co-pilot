@@ -497,7 +497,16 @@ class AutopilotManager:
                     self._finish_orbit_and_advance(wp)
 
             else:
-                if self._route_planner.is_waypoint_reached(position):
+                # For orbit waypoints with tangent approach, also trigger entry at orbit_radius
+                # (tangent approach guides aircraft along orbit circle boundary, so
+                #  is_waypoint_reached alone may not trigger if wp.radius == orbit_radius)
+                has_orbit = wp.action in ("ORBIT_TURNS", "ORBIT_INFINITE", "ALTITUDE")
+                orbit_radius = getattr(wp, 'orbit_radius', 150.0)
+                if orbit_radius <= 0:
+                    orbit_radius = 150.0
+                tangent_orbit_entry = has_orbit and distance_to_wp <= orbit_radius
+
+                if self._route_planner.is_waypoint_reached(position) or tangent_orbit_entry:
                     # Set altitude target on arrival if not climbing enroute
                     if not wp.climb_enroute and not self._waiting_for_altitude:
                         self._altitude_controller.set_target_altitude(wp.altitude)
@@ -588,11 +597,6 @@ class AutopilotManager:
                             self._send_guided_commands(target_bearing, position)
                 else:
                     # Flying to waypoint — send GUIDED target
-                    has_orbit = wp.action in ("ORBIT_TURNS", "ORBIT_INFINITE", "ALTITUDE")
-                    orbit_radius = getattr(wp, 'orbit_radius', 150.0)
-                    if orbit_radius <= 0:
-                        orbit_radius = 150.0
-
                     if has_orbit and distance_to_wp <= orbit_radius * 2:
                         # Tangent approach: curve into orbit circle instead of flying head-on
                         if self._tangent_approach_wp_id != wp.id:
