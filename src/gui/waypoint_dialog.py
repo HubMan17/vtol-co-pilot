@@ -11,6 +11,7 @@ class WaypointDialog(QDialog):
         ("FLYTHROUGH", "Пролёт"),
         ("ORBIT_TURNS", "Кружить N кругов"),
         ("ORBIT_INFINITE", "Кружить бесконечно"),
+        ("ALTITUDE", "Набор/смена высоты"),
     ]
 
     def __init__(self, parent=None, lat: float = 0.0, lon: float = 0.0):
@@ -101,7 +102,7 @@ class WaypointDialog(QDialog):
     def _on_type_changed(self, index):
         type_id = self.combo_type.currentData()
 
-        is_orbit = type_id in ("ORBIT_TURNS", "ORBIT_INFINITE")
+        is_orbit = type_id in ("ORBIT_TURNS", "ORBIT_INFINITE", "ALTITUDE")
         self.orbit_group.setVisible(is_orbit)
         self.spin_orbit_turns.setEnabled(type_id == "ORBIT_TURNS")
 
@@ -119,7 +120,7 @@ class WaypointDialog(QDialog):
             'climb_enroute': self.chk_climb_enroute.isChecked(),
         }
 
-        if type_id in ("ORBIT_TURNS", "ORBIT_INFINITE"):
+        if type_id in ("ORBIT_TURNS", "ORBIT_INFINITE", "ALTITUDE"):
             data['orbit_radius'] = self.spin_orbit_radius.value()
 
             if type_id == "ORBIT_TURNS":

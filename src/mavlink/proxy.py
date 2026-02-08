@@ -322,6 +322,31 @@ class MAVLinkProxy:
         )
         logger.info(f"POSITION_TARGET: lat={lat:.6f} lon={lon:.6f} alt={alt:.1f}")
 
+    def send_loiter_unlim(self, lat: float, lon: float, alt: float, radius: float):
+        """Enter LOITER at specified center via MISSION_ITEM_INT(current=2, NAV_LOITER_UNLIM).
+        Atomically switches to LOITER mode AND sets the orbit center + radius.
+        radius: positive=CW, negative=CCW (meters).
+        """
+        if not self._sitl_conn:
+            return
+        self._sitl_conn.mav.mission_item_int_send(
+            self._sitl_conn.target_system,
+            self._sitl_conn.target_component,
+            0,                                              # seq
+            mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT,  # frame
+            mavutil.mavlink.MAV_CMD_NAV_LOITER_UNLIM,       # command
+            2,                                              # current = 2 means guided/immediate
+            0,                                              # autocontinue
+            0,                                              # param1: unused
+            0,                                              # param2: unused
+            radius,                                         # param3: radius (positive=CW, negative=CCW)
+            float('nan'),                                   # param4: yaw (NaN = current heading)
+            int(lat * 1e7),                                 # lat (degE7)
+            int(lon * 1e7),                                 # lon (degE7)
+            alt                                             # alt (meters, relative)
+        )
+        logger.info(f"LOITER_UNLIM: lat={lat:.6f} lon={lon:.6f} alt={alt:.1f} radius={radius:.0f}")
+
     def send_gps_input(self, lat: float, lon: float, alt: float,
                        vn: float, ve: float, vd: float, heading: float,
                        horiz_accuracy: float = 10.0, speed_accuracy: float = 2.0):

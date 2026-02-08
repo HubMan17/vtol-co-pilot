@@ -31,6 +31,7 @@ class Waypoint:
             "FLYTHROUGH": "Пролёт",
             "ORBIT_TURNS": "Кружить N кругов",
             "ORBIT_INFINITE": "Кружить бесконечно",
+            "ALTITUDE": "Набор/смена высоты",
         }
         return names.get(self.action, self.action)
 

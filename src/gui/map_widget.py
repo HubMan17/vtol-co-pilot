@@ -237,7 +237,8 @@ class MapWidget(QWidget):
             var actionShort = {{
                 'FLYTHROUGH': '',
                 'ORBIT_TURNS': 'Круж. ' + wp.orbit_turns + 'x',
-                'ORBIT_INFINITE': 'Круж. ∞'
+                'ORBIT_INFINITE': 'Круж. ∞',
+                'ALTITUDE': '↕ Высота'
             }};
 
             var lines = [];

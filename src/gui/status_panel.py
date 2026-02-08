@@ -527,6 +527,10 @@ class StatusPanel(QWidget):
                     parts = action.split('(')
                     vertical = f" ({parts[1]}" if len(parts) > 1 else ""
                     action_text = f"Кружение ∞{vertical}"
+                elif action.startswith('ALTITUDE_ORBIT'):
+                    parts = action.split('(')
+                    vertical = f" ({parts[1]}" if len(parts) > 1 else ""
+                    action_text = f"Набор высоты{vertical}"
                 elif action.startswith('TO_WAYPOINT'):
                     parts = action.split('(')
                     vertical = f" ({parts[1]}" if len(parts) > 1 else ""

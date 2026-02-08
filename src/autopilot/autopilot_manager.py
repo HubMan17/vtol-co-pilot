@@ -62,6 +62,7 @@ class AutopilotManager:
         self._active_waypoint_id = -1
         self._stick_override_count = 0
         self._stick_override_threshold_count = 3
+        self._throttle_baseline = 0  # PWM газа при engage
 
         self._is_orbiting = False
         self._orbit_turns_completed = 0
@@ -128,6 +129,7 @@ class AutopilotManager:
         else:
             self._altitude_controller.set_target_altitude(telemetry.altitude_agl)
         self._stick_override_count = 0
+        self._throttle_baseline = telemetry.rc_channels[self.CH_THROTTLE]
         self._active_waypoint_id = wp.id
         self._is_orbiting = False
         self._orbit_turns_completed = 0
@@ -216,10 +218,11 @@ class AutopilotManager:
         current_time = time.time()
         telemetry = self._proxy.get_telemetry()
 
-        # TODO: временно отключено для тестирования в SITL
-        # if self.check_stick_override(telemetry.rc_channels_raw):
-        #     self.disengage("Пилот взял управление")
-        #     return False
+        time_since_engage = current_time - self._engage_time if self._engage_time > 0 else 0
+        if time_since_engage > 2.0:
+            if self.check_stick_override(telemetry.rc_channels):
+                self.disengage("Пилот взял управление")
+                return False
 
         timeout_sec = self._config.timeout_ms / 1000.0
         if self._last_update_time > 0 and (current_time - self._last_update_time) > timeout_sec:
@@ -290,11 +293,20 @@ class AutopilotManager:
                             if self._saved_airspeed_cruise is None:
                                 self._saved_airspeed_cruise = telemetry.airspeed if telemetry.airspeed > 0 else 25.0
                             self._proxy.set_cruise_airspeed(self._speed_controller.get_target_speed())
-                            self._proxy.set_param('WP_LOITER_RAD', 100.0)
                             self._proxy.send_speed(self._speed_controller.get_target_speed())
                             self._proxy.set_param('THROTTLE_NUDGE', 0)
-                            self._proxy.set_mode('LOITER')
-                        logger.info(f"HOME REACHED -> ORBITING at 50m altitude")
+                            self._proxy.set_param('WP_LOITER_RAD', 100.0)
+                            self._proxy.send_loiter_unlim(self._home_position.lat, self._home_position.lon, 50.0, 100.0)
+
+                        # Check if altitude transition needed (LOITER locks current altitude)
+                        self._altitude_controller.update(telemetry.altitude_agl)
+                        if not self._altitude_controller.is_on_altitude(tolerance=5.0):
+                            self._loiter_alt_transition = True
+                            self._guided_send_time = 0.0  # force immediate send
+                            self._proxy.send_guided_change_altitude(50.0)
+                            logger.info(f"HOME REACHED -> ORBITING + ALT TRANSITION: target=50m, current={telemetry.altitude_agl:.1f}m")
+                        else:
+                            logger.info(f"HOME REACHED -> ORBITING at 50m altitude (altitude OK)")
 
                     # Orbit: LOITER handles everything, speed via TRIM_ARSPD_CM param
                     self._update_orbit_progress(telemetry.heading)
@@ -315,14 +327,14 @@ class AutopilotManager:
                             self._guided_send_time = now
                         if self._altitude_controller.is_on_altitude(tolerance=10.0):
                             self._loiter_alt_transition = False
-                            self._proxy.set_param('WP_LOITER_RAD', 100.0)
                             self._proxy.set_param('THROTTLE_NUDGE', 0)
-                            self._proxy.set_mode('LOITER')
+                            self._proxy.set_param('WP_LOITER_RAD', 100.0)
+                            self._proxy.send_loiter_unlim(self._home_position.lat, self._home_position.lon, 50.0, 100.0)
                             logger.info(f"HOME LOITER ALT TRANSITION DONE: alt={telemetry.altitude_agl:.1f}m")
                     else:
                         # Re-send LOITER if ArduPilot hasn't switched yet
                         if telemetry.mode != 'LOITER' and gps_ok:
-                            self._proxy.set_mode('LOITER')
+                            self._proxy.send_loiter_unlim(self._home_position.lat, self._home_position.lon, 50.0, 100.0)
                 else:
                     # Navigate to home
                     target_bearing = bearing_to(position.lat, position.lon,
@@ -369,14 +381,24 @@ class AutopilotManager:
                         radius = getattr(wp, 'orbit_radius', 150.0)
                         if radius <= 0:
                             radius = 150.0
-                        self._proxy.set_param('WP_LOITER_RAD', radius)
                         self._proxy.set_param('THROTTLE_NUDGE', 0)
-                        self._proxy.set_mode('LOITER')
+                        self._proxy.set_param('WP_LOITER_RAD', radius)
+                        self._proxy.send_loiter_unlim(wp.lat, wp.lon, wp.altitude, radius)
                         logger.info(f"LOITER ALT TRANSITION DONE: alt={telemetry.altitude_agl:.1f}m")
                 else:
                     # Re-send LOITER mode if ArduPilot hasn't switched yet
                     if telemetry.mode != 'LOITER':
-                        self._proxy.set_mode('LOITER')
+                        radius = getattr(wp, 'orbit_radius', 150.0)
+                        if radius <= 0:
+                            radius = 150.0
+                        self._proxy.send_loiter_unlim(wp.lat, wp.lon, wp.altitude, radius)
+
+                # ALTITUDE: auto-advance when target altitude reached during orbit
+                if wp.action == "ALTITUDE" and not self._loiter_alt_transition and not self._orbit_advance_handled:
+                    if self._altitude_controller.is_on_altitude(tolerance=5.0):
+                        self._orbit_advance_handled = True
+                        logger.info(f"ALTITUDE REACHED at WP{wp.id}: alt={telemetry.altitude_agl:.1f}m target={wp.altitude}m")
+                        self._finish_orbit_and_advance(wp)
 
                 # ORBIT_TURNS: auto-advance when turns complete (if there's somewhere to go)
                 if wp.action == "ORBIT_TURNS" and self._orbit_turns_completed >= wp.orbit_turns and not self._orbit_advance_handled:
@@ -390,7 +412,7 @@ class AutopilotManager:
                         self._altitude_controller.set_target_altitude(wp.altitude)
                         self._altitude_controller.update(telemetry.altitude_agl)  # refresh error before checking
 
-                        if wp.action in ("ORBIT_TURNS", "ORBIT_INFINITE"):
+                        if wp.action in ("ORBIT_TURNS", "ORBIT_INFINITE", "ALTITUDE"):
                             # Orbit waypoints: start LOITER immediately, adjust altitude during orbit
                             self._start_orbit(wp, telemetry.heading)
                             if not self._altitude_controller.is_on_altitude(tolerance=5.0):
@@ -429,7 +451,7 @@ class AutopilotManager:
                             target_bearing = telemetry.heading
 
                     if not self._waiting_for_altitude:
-                        if wp.action in ("ORBIT_TURNS", "ORBIT_INFINITE"):
+                        if wp.action in ("ORBIT_TURNS", "ORBIT_INFINITE", "ALTITUDE"):
                             if not self._is_orbiting:
                                 # climb_enroute=True case: altitude already OK, just start orbit
                                 self._start_orbit(wp, telemetry.heading)
@@ -562,22 +584,44 @@ class AutopilotManager:
 
         threshold = self._config.stick_threshold
         roll = rc_channels[self.CH_ROLL]
+        pitch = rc_channels[self.CH_PITCH]
+        throttle = rc_channels[self.CH_THROTTLE]
         yaw = rc_channels[self.CH_YAW]
-        roll_diff = abs(roll - self.PWM_CENTER)
-        yaw_diff = abs(yaw - self.PWM_CENTER)
 
-        override_detected = roll_diff > threshold or yaw_diff > threshold
+        # Validate PWM range — disconnected receiver sends 0 or 65535
+        for ch_val in (roll, pitch, throttle, yaw):
+            if ch_val < 800 or ch_val > 2200:
+                return False
+
+        roll_diff = abs(roll - self.PWM_CENTER)
+        pitch_diff = abs(pitch - self.PWM_CENTER)
+        yaw_diff = abs(yaw - self.PWM_CENTER)
+        throttle_diff = abs(throttle - self._throttle_baseline)
+
+        override_detected = roll_diff > threshold or pitch_diff > threshold or yaw_diff > threshold
+
+        # Throttle: skip during LOITER (THROTTLE_NUDGE=0 means ArduPilot ignores it, but PWM still changes)
+        if not self._is_orbiting:
+            override_detected = override_detected or throttle_diff > threshold
 
         if override_detected:
             self._stick_override_count += 1
-            logger.debug(f"RC RAW: roll={roll} (diff={roll_diff}), yaw={yaw} (diff={yaw_diff}), count={self._stick_override_count}/{self._stick_override_threshold_count}")
+            logger.debug(
+                f"RC: roll={roll}({roll_diff}) pitch={pitch}({pitch_diff}) "
+                f"yaw={yaw}({yaw_diff}) thr={throttle}({throttle_diff}) "
+                f"count={self._stick_override_count}/{self._stick_override_threshold_count}"
+            )
 
             if self._stick_override_count >= self._stick_override_threshold_count:
-                logger.info(f"STICK OVERRIDE CONFIRMED: roll={roll}, yaw={yaw}, count={self._stick_override_count}")
+                logger.info(
+                    f"STICK OVERRIDE CONFIRMED: roll={roll} pitch={pitch} "
+                    f"yaw={yaw} thr={throttle} (baseline={self._throttle_baseline}), "
+                    f"count={self._stick_override_count}"
+                )
                 return True
         else:
             if self._stick_override_count > 0:
-                logger.debug(f"RC RAW: roll={roll}, yaw={yaw} - reset count from {self._stick_override_count}")
+                logger.debug(f"RC: roll={roll} pitch={pitch} yaw={yaw} thr={throttle} - reset count from {self._stick_override_count}")
             self._stick_override_count = 0
 
         return False
@@ -639,6 +683,8 @@ class AutopilotManager:
                         status['action'] = f'ORBIT_{self._orbit_turns_completed}/{wp.orbit_turns}{vertical_action}'
                     elif wp.action == 'ORBIT_INFINITE':
                         status['action'] = f'ORBIT_INF{vertical_action}'
+                    elif wp.action == 'ALTITUDE':
+                        status['action'] = f'ALTITUDE_ORBIT{vertical_action}'
                 elif self._waiting_for_altitude:
                     status['action'] = f'ОЖИДАНИЕ_ВЫСОТЫ{vertical_action}'
                     status['orbit_radius'] = wp.orbit_radius
@@ -690,12 +736,14 @@ class AutopilotManager:
         self._proxy.set_cruise_airspeed(target_speed)
         if telemetry.gps_fix >= 3:
             # Normal LOITER — ArduPilot handles the orbit
-            self._proxy.set_param('WP_LOITER_RAD', radius)
             # Send DO_CHANGE_SPEED to clear any persistent speed override from GUIDED
             self._proxy.send_speed(target_speed)
             # Disable THROTTLE_NUDGE so pilot's throttle stick doesn't scale up target speed
             self._proxy.set_param('THROTTLE_NUDGE', 0)
-            self._proxy.set_mode('LOITER')
+            self._proxy.set_param('WP_LOITER_RAD', radius)
+            # NAV_LOITER_UNLIM via MISSION_ITEM_INT(current=2) atomically enters LOITER
+            # at the exact waypoint center with the correct radius
+            self._proxy.send_loiter_unlim(wp.lat, wp.lon, wp.altitude, radius)
             logger.info(f"START ORBIT (LOITER) at WP{wp.id}: radius={radius}, speed={target_speed}")
         else:
             # No GPS — orbit via GUIDED heading commands
