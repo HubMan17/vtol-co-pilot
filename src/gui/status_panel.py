@@ -12,7 +12,7 @@ from src.mavlink.telemetry import TelemetryState
 class WindPopup(QFrame):
     """Popup panel for manual wind override, shown near the wind telemetry cell."""
 
-    applied = pyqtSignal(int, int, float)   # direction, speed, drift_coeff
+    applied = pyqtSignal(int, int)   # direction, speed
     reset = pyqtSignal()
 
     def __init__(self, parent=None):
@@ -88,17 +88,6 @@ class WindPopup(QFrame):
         self.spin_speed.setFont(QFont("Consolas", 11))
         grid.addWidget(self.spin_speed, 1, 1)
 
-        lbl_drift = QLabel("Коэфф. дрейфа:")
-        lbl_drift.setFont(QFont("Arial", 9))
-        grid.addWidget(lbl_drift, 2, 0)
-
-        self.spin_drift = QDoubleSpinBox()
-        self.spin_drift.setRange(0.50, 1.50)
-        self.spin_drift.setSingleStep(0.05)
-        self.spin_drift.setValue(1.0)
-        self.spin_drift.setFont(QFont("Consolas", 11))
-        grid.addWidget(self.spin_drift, 2, 1)
-
         layout.addLayout(grid)
 
         btn_layout = QHBoxLayout()
@@ -122,17 +111,12 @@ class WindPopup(QFrame):
 
         self.setFixedWidth(240)
 
-    def populate(self, direction: float, speed: float, drift: float):
+    def populate(self, direction: float, speed: float):
         self.spin_dir.setValue(int(direction))
         self.spin_speed.setValue(int(speed))
-        self.spin_drift.setValue(drift)
 
     def _on_apply(self):
-        self.applied.emit(
-            self.spin_dir.value(),
-            self.spin_speed.value(),
-            self.spin_drift.value()
-        )
+        self.applied.emit(self.spin_dir.value(), self.spin_speed.value())
         self.close()
 
     def _on_reset(self):
@@ -154,7 +138,7 @@ class StatusPanel(QWidget):
     orbit_radius_changed = pyqtSignal(int)
     target_altitude_changed = pyqtSignal(int)
     target_airspeed_changed = pyqtSignal(int)
-    manual_wind_changed = pyqtSignal(bool, int, int, float)  # enabled, direction, speed, drift_coeff
+    manual_wind_changed = pyqtSignal(bool, int, int)  # enabled, direction, speed
 
     def __init__(self):
         super().__init__()
@@ -164,7 +148,6 @@ class StatusPanel(QWidget):
         self._manual_wind_active = False
         self._last_telem_wind_dir = 0.0
         self._last_telem_wind_speed = 0.0
-        self._current_drift_coeff = 1.0
         self._setup_ui()
 
     def _setup_ui(self):
@@ -445,14 +428,12 @@ class StatusPanel(QWidget):
         if self._manual_wind_active:
             self.wind_popup.populate(
                 self.wind_popup.spin_dir.value(),
-                self.wind_popup.spin_speed.value(),
-                self.wind_popup.spin_drift.value()
+                self.wind_popup.spin_speed.value()
             )
         else:
             self.wind_popup.populate(
                 self._last_telem_wind_dir,
-                self._last_telem_wind_speed,
-                self._current_drift_coeff
+                self._last_telem_wind_speed
             )
 
         # Position popup above or below the wind cell
@@ -462,17 +443,13 @@ class StatusPanel(QWidget):
         self.wind_popup.move(popup_x, popup_y)
         self.wind_popup.show()
 
-    def _on_wind_applied(self, direction: int, speed: int, drift_coeff: float):
+    def _on_wind_applied(self, direction: int, speed: int):
         self._manual_wind_active = True
-        self._current_drift_coeff = drift_coeff
-        self.manual_wind_changed.emit(True, direction, speed, drift_coeff)
+        self.manual_wind_changed.emit(True, direction, speed)
 
     def _on_wind_reset(self):
         self._manual_wind_active = False
-        self.manual_wind_changed.emit(False, 0, 0, 1.0)
-
-    def set_drift_coefficient(self, coeff: float):
-        self._current_drift_coeff = coeff
+        self.manual_wind_changed.emit(False, 0, 0)
 
     def update_autopilot(self, mode: str, status: dict = None):
         mode_names = {

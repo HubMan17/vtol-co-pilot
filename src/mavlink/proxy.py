@@ -1,6 +1,7 @@
 import socket
 import threading
 import time
+import datetime
 import logging
 from typing import Callable, Optional, List
 from pymavlink import mavutil
@@ -169,16 +170,16 @@ class MAVLinkProxy:
             return
 
         # 65535 = don't touch this channel (leave as-is)
-        # Only override the channels we explicitly pass in
-        ch = [65535] * 8
+        # MAVLink v2 RC_CHANNELS_OVERRIDE supports 18 channels (for EKF source on RC9+)
+        ch = [65535] * 18
         for i, val in channels.items():
-            if 1 <= i <= 8:
+            if 1 <= i <= 18:
                 ch[i - 1] = val
 
         self._sitl_conn.mav.rc_channels_override_send(
             self._sitl_conn.target_system,
             self._sitl_conn.target_component,
-            ch[0], ch[1], ch[2], ch[3], ch[4], ch[5], ch[6], ch[7]
+            *ch
         )
         self._event_bus.emit(Event.RC_OVERRIDE_SENT, channels)
 
@@ -187,12 +188,33 @@ class MAVLinkProxy:
         if not self._sitl_conn:
             return
         # 0 = release channel back to RC input
-        # 65535 = don't touch (leave aux channels like CH7 ArmDisarm alone)
+        # 65535 = don't touch (leave aux channels like CH7 ArmDisarm, CH9 EKF source alone)
+        ch = [0, 0, 0] + [65535] * 15
         self._sitl_conn.mav.rc_channels_override_send(
             self._sitl_conn.target_system,
             self._sitl_conn.target_component,
-            0, 0, 0, 65535, 65535, 65535, 65535, 65535
+            *ch
         )
+
+    # Channel for EKF source switching (RC9_OPTION=90)
+    EKF_SRC_CHANNEL = 9
+
+    def set_ekf_source(self, source_set: int):
+        """Switch EKF source set via RC override on channel with RC_OPTION=90.
+        1=SRC1 (normal GPS), 2=SRC2 (emergency), 3=SRC3 (DR GPS_INPUT, no velocity)
+        RC_OPTION=90 thresholds: ≤1200→SRC1, 1200-1800→SRC2, >1800→SRC3
+        """
+        if source_set == 1:
+            pwm = 1100
+        elif source_set == 2:
+            pwm = 1500
+        elif source_set == 3:
+            pwm = 1900
+        else:
+            logger.warning(f"Invalid EKF source set: {source_set}")
+            return
+        self.send_rc_override({self.EKF_SRC_CHANNEL: pwm})
+        logger.info(f"EKF SOURCE SET: {source_set} (RC{self.EKF_SRC_CHANNEL}={pwm})")
 
     def set_mode(self, mode_name: str):
         """Set ArduPilot flight mode (e.g., 'CRUISE', 'MANUAL', 'AUTO')"""
@@ -356,6 +378,16 @@ class MAVLinkProxy:
         logger.info(f"DO_REPOSITION: lat={lat:.6f} lon={lon:.6f} alt={alt:.1f} "
                      f"radius={radius:.0f}(cmd={compensated:.0f}) {direction_str}")
 
+    @staticmethod
+    def _gps_time():
+        """Compute GPS week number and milliseconds within the week from system UTC."""
+        gps_epoch = datetime.datetime(1980, 1, 6, tzinfo=datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        total_seconds = (now - gps_epoch).total_seconds()
+        week = int(total_seconds // 604800)
+        week_ms = int((total_seconds % 604800) * 1000)
+        return week, week_ms
+
     def send_gps_input(self, lat: float, lon: float, alt: float,
                        vn: float, ve: float, vd: float, heading: float,
                        horiz_accuracy: float = 10.0, speed_accuracy: float = 2.0):
@@ -363,17 +395,18 @@ class MAVLinkProxy:
         if not self._sitl_conn:
             return
         import time as _time
+        week, week_ms = self._gps_time()
         self._sitl_conn.mav.gps_input_send(
             int(_time.time() * 1e6),   # time_usec
             1,                          # gps_id=1 → GPS_TYPE2
             0,                          # ignore_flags: all fields valid
-            0,                          # time_week_ms
-            0,                          # time_week
+            week_ms,                    # time_week_ms
+            week,                       # time_week
             3,                          # fix_type: 3D fix
             int(lat * 1e7),             # lat (degE7)
             int(lon * 1e7),             # lon (degE7)
             alt,                        # alt (meters)
-            horiz_accuracy / 5.0,       # hdop
+            1.2,                         # hdop (fixed normal value)
             3.0,                        # vdop
             vn, ve, vd,                 # velocity NED (m/s)
             speed_accuracy,             # speed_accuracy

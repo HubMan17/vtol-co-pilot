@@ -41,6 +41,7 @@ class AutopilotManager:
     CH_PITCH = 1
     CH_THROTTLE = 2
     CH_YAW = 3
+    CH_GPS_SWITCH = 7  # RC8 — toggle for SIM_GPS_DISABLE
 
     PWM_CENTER = 1500
     GUIDED_PROJECTION_DISTANCE = 2000.0  # meters ahead for GUIDED target projection
@@ -88,7 +89,12 @@ class AutopilotManager:
 
         self._log_counter = 0
         self._gps_input_counter = 0
-        self._GPS_INPUT_EVERY_N = 2  # every 2 update cycles = ~200ms at 100ms timer
+        self._GPS_INPUT_EVERY_N = 1  # every update cycle = ~100ms at 100ms timer (10 Гц)
+        self._gps_forced_off = False  # RC8 toggle: pilot forces GPS1 off (spoof protection)
+        self._gps_loss_consecutive = 0     # consecutive cycles with GPS lost (for orbit hysteresis)
+        self._GPS_LOSS_HYSTERESIS = 5      # require N consecutive cycles before switching orbit mode
+        self._ekf_src3_active = False      # EKF source set 3 (DR GPS_INPUT, no velocity) active
+        self._ekf_src_resend_counter = 0   # periodic re-send counter (RC_OVERRIDE_TIME=3s timeout)
 
         self._event_bus.subscribe(Event.CONNECTION_LOST, self._on_connection_lost)
 
@@ -153,6 +159,9 @@ class AutopilotManager:
         self._waiting_for_altitude = False
         self._returning_home = False
         self._loiter_alt_transition = False
+        self._gps_loss_consecutive = 0
+        self._ekf_src3_active = False
+        self._ekf_src_resend_counter = 0
         self._disengage_reason = ""
         self._guided_send_time = 0.0  # force immediate send on engage
 
@@ -222,6 +231,9 @@ class AutopilotManager:
         self._waiting_for_altitude = False
         self._returning_home = True
         self._loiter_alt_transition = False
+        self._gps_loss_consecutive = 0
+        self._ekf_src3_active = False
+        self._ekf_src_resend_counter = 0
         self._disengage_reason = ""
         self._guided_send_time = 0.0
 
@@ -275,6 +287,9 @@ class AutopilotManager:
         self._waiting_for_altitude = False
         self._returning_home = False
         self._loiter_alt_transition = False
+        self._gps_loss_consecutive = 0
+        self._ekf_src3_active = False
+        self._ekf_src_resend_counter = 0
         self._tangent_approach_wp_id = -1
 
         # Restore cruise airspeed and THROTTLE_NUDGE if we modified them for LOITER
@@ -295,7 +310,9 @@ class AutopilotManager:
     def is_engaged(self) -> bool:
         return self._mode != AutopilotMode.MANUAL
 
-    def update(self, override_position: Optional[LatLon] = None) -> bool:
+    def update(self, override_position: Optional[LatLon] = None,
+               dr_velocity: Optional[tuple] = None,
+               dr_blended_position: Optional[LatLon] = None) -> bool:
         if self._mode == AutopilotMode.MANUAL:
             return False
 
@@ -328,10 +345,42 @@ class AutopilotManager:
                 return True
 
             # GPS monitoring and GPS_INPUT injection
-            gps_ok = telemetry.gps_fix >= 3
+            # gps_forced_off: GPS_INPUT still reports fix_type=3, but it's OUR data — not real GPS
+            gps_ok = telemetry.gps_fix >= 3 and not self._gps_forced_off
+
+            # GPS loss tracking: hysteresis for orbit mode + EKF source switching
+            if not gps_ok:
+                self._gps_loss_consecutive += 1
+            else:
+                self._gps_loss_consecutive = 0
+
+            # Auto EKF source switching on GPS1 loss
+            # gps_fix comes from GPS_RAW_INT = GPS1 only (not affected by our GPS_INPUT/GPS2)
+            if not gps_ok and self._gps_loss_consecutive >= self._GPS_LOSS_HYSTERESIS:
+                if not self._ekf_src3_active:
+                    self._proxy.set_ekf_source(3)
+                    self._ekf_src3_active = True
+                    logger.info("AUTO EKF SRC3: GPS1 lost → switching to DR GPS_INPUT")
+            elif gps_ok and self._ekf_src3_active and not self._gps_forced_off:
+                self._proxy.set_ekf_source(1)
+                self._ekf_src3_active = False
+                logger.info("AUTO EKF SRC1: GPS1 restored → switching to normal GPS")
+
+            # Periodic re-send EKF source override (RC_OVERRIDE_TIME=3s timeout)
+            if self._ekf_src3_active:
+                self._ekf_src_resend_counter += 1
+                if self._ekf_src_resend_counter >= 10:  # every ~1s at 10Hz
+                    self._proxy.set_ekf_source(3)
+                    self._ekf_src_resend_counter = 0
+            else:
+                self._ekf_src_resend_counter = 0
 
             # DR or GPS loss → need heading-based GUIDED orbit instead of DO_REPOSITION orbit
-            need_guided_orbit = not gps_ok
+            # Use hysteresis only when already in DO_REPOSITION orbit (to prevent flicker reversal)
+            if self._is_orbiting and self._orbit_reposition_sent:
+                need_guided_orbit = self._gps_loss_consecutive >= self._GPS_LOSS_HYSTERESIS
+            else:
+                need_guided_orbit = not gps_ok
 
             # If ArduPilot exited our mode unexpectedly
             # Skip check for first 2 seconds after engage (mode takes time to update via HEARTBEAT)
@@ -343,7 +392,7 @@ class AutopilotManager:
                 return False
 
             # GPS_INPUT: warmup when GPS OK, primary source when GPS lost
-            self._send_gps_input_if_needed(position, telemetry)
+            self._send_gps_input_if_needed(position, telemetry, dr_velocity, dr_blended_position)
 
             # Detect if user changed the active waypoint (via GUI spinner, prev/next, or new waypoint added)
             wp_check = self._route_planner.get_active_waypoint()
@@ -662,8 +711,13 @@ class AutopilotManager:
         self._proxy.send_speed(self._speed_controller.get_target_speed())
         self._guided_send_time = now
 
-    def _send_gps_input_if_needed(self, position: LatLon, telemetry):
-        """Send GPS_INPUT: warmup when GPS OK (low priority), primary when GPS lost."""
+    def _send_gps_input_if_needed(self, position: LatLon, telemetry,
+                                    dr_velocity: Optional[tuple] = None,
+                                    blended_position: Optional[LatLon] = None):
+        """Send GPS_INPUT: warmup when GPS OK (low priority), primary when GPS lost.
+        dr_velocity: (vn, ve) from DR engine — used when GPS lost to avoid feedback loop.
+        blended_position: smoothly blended DR position for GPS_INPUT (avoids EKF velocity spike on pilot correction).
+        """
         if not position:
             return
 
@@ -672,26 +726,46 @@ class AutopilotManager:
             return
         self._gps_input_counter = 0
 
-        # Velocity from heading + groundspeed (CRITICAL: never send zero velocity)
-        hdg_rad = math.radians(telemetry.heading)
-        vn = telemetry.groundspeed * math.cos(hdg_rad)
-        ve = telemetry.groundspeed * math.sin(hdg_rad)
         vd = -telemetry.climb_rate  # NED: down is positive
 
-        if telemetry.gps_fix >= 3:
-            # GPS alive — warmup: high horiz_accuracy = low priority for EKF
-            accuracy = 50.0
+        if telemetry.gps_fix >= 3 and not self._gps_forced_off:
+            # GPS alive — warmup: establish GPS2 as trusted secondary source
+            # EKF health check: hAcc > MAX(EK3_POSNE_M_NSE, 5.0) = 5.0 → unhealthy
+            #                   sAcc > MAX(EK3_VELNE_M_NSE*2, 1.0) = 1.0 → unhealthy
+            # accuracy=3.0: safely below 5.0 threshold, above GPS1's 0.3 → GPS1 dominates
+            # speed_acc=0.8: safely below 1.0 threshold
+            accuracy = 3.0
+            final_speed_acc = 0.8
+            vn = telemetry.velocity_n
+            ve = telemetry.velocity_e
         else:
-            # GPS lost — DR becomes primary source
-            accuracy = 10.0
-            logger.debug(f"GPS_INPUT (DR): lat={position.lat:.6f} lon={position.lon:.6f} acc={accuracy}")
+            # GPS lost / forced off — DR position as primary GPS source via SRC3
+            # EKF SRC3 has VELXY=0: EKF computes velocity itself (IMU+airspeed+own wind)
+            # We only provide position. Fixed low accuracy = high Kalman gain → EKF tracks DR.
+            # No growing accuracy needed: with VELXY=0, no velocity conflict between two DRs.
+            accuracy = 1.0
+            final_speed_acc = 0.5
+            if dr_velocity:
+                vn, ve = dr_velocity
+            else:
+                hdg_rad = math.radians(telemetry.heading)
+                vn = telemetry.airspeed * math.cos(hdg_rad)
+                ve = telemetry.airspeed * math.sin(hdg_rad)
+            logger.debug(f"GPS_INPUT (DR): lat={position.lat:.6f} lon={position.lon:.6f} "
+                         f"vn={vn:.1f} ve={ve:.1f} acc={accuracy:.1f} spd_acc={final_speed_acc:.1f}")
 
+        # CRITICAL: GPS_INPUT.alt must be MSL, not AGL!
+        # telemetry.altitude = MSL (from VFR_HUD.alt)
+        # Sending AGL causes 580m+ discrepancy vs barometer → EKF distrusts GPS_INPUT
+        # Use blended position for GPS_INPUT when available (smooth pilot corrections)
+        gps_input_pos = blended_position if blended_position else position
         self._proxy.send_gps_input(
-            lat=position.lat, lon=position.lon,
-            alt=telemetry.altitude_agl,
+            lat=gps_input_pos.lat, lon=gps_input_pos.lon,
+            alt=telemetry.altitude,
             vn=vn, ve=ve, vd=vd,
             heading=telemetry.heading,
-            horiz_accuracy=accuracy
+            horiz_accuracy=accuracy,
+            speed_accuracy=final_speed_acc
         )
 
     def check_stick_override(self, rc_channels: list) -> bool:
@@ -742,6 +816,39 @@ class AutopilotManager:
             self._stick_override_count = 0
 
         return False
+
+    def update_gps_switch(self, rc_channels: list):
+        """Monitor RC8 toggle → force ArduPilot to use only GPS2 (GPS_INPUT), ignoring GPS1.
+        Works on both SITL and real hardware:
+        - GPS_AUTO_SWITCH=0 + GPS_PRIMARY=1 → EKF uses only GPS2 (GPS_INPUT)
+        - SIM_GPS_DISABLE=1 → additionally stops simulated GPS1 hardware (SITL only)
+        RC_OPTION=65 (GPS_DISABLE) is NOT used because it kills ALL GPS including GPS_INPUT.
+        """
+        if len(rc_channels) <= self.CH_GPS_SWITCH:
+            return
+        pwm = rc_channels[self.CH_GPS_SWITCH]
+        if pwm < 800 or pwm > 2200:
+            return
+
+        want_disabled = pwm > 1800
+        if want_disabled != self._gps_forced_off:
+            self._gps_forced_off = want_disabled
+            if want_disabled:
+                # Switch to SRC3: EKF uses GPS_INPUT position, no velocity fusion
+                self._proxy.set_ekf_source(3)
+                self._proxy.set_param('SIM_GPS_DISABLE', 1)  # SITL: stop simulated GPS1
+                self._ekf_src3_active = True
+                logger.info(f"GPS1 FORCED OFF (RC8={pwm}): EKF → SRC3")
+            else:
+                # Restore SRC1: normal GPS operation
+                self._proxy.set_param('SIM_GPS_DISABLE', 0)  # SITL: restore simulated GPS1
+                self._proxy.set_ekf_source(1)
+                self._ekf_src3_active = False
+                logger.info(f"GPS1 RESTORED (RC8={pwm}): EKF → SRC1")
+
+    @property
+    def gps_forced_off(self) -> bool:
+        return self._gps_forced_off
 
     def get_target_heading(self) -> float:
         return self._heading_controller.get_target_heading()

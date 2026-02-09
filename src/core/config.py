@@ -33,7 +33,6 @@ class AutopilotConfig:
 @dataclass
 class NavigationConfig:
     waypoint_radius: float = 150.0
-    drift_coefficient: float = 1.0
 
 
 @dataclass
@@ -110,7 +109,6 @@ def save_config(config: AppConfig, path: Path = None):
         },
         "navigation": {
             "waypoint_radius": config.navigation.waypoint_radius,
-            "drift_coefficient": config.navigation.drift_coefficient,
         },
         "gui": {
             "map_center": list(config.gui.map_center),

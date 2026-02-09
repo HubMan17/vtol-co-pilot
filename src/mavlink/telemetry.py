@@ -18,6 +18,8 @@ class TelemetryState:
     timestamp: float = 0.0
     airspeed: float = 0.0
     groundspeed: float = 0.0
+    velocity_n: float = 0.0   # North velocity (m/s) from GLOBAL_POSITION_INT
+    velocity_e: float = 0.0   # East velocity (m/s) from GLOBAL_POSITION_INT
     heading: float = 0.0
     altitude: float = 0.0
     altitude_agl: float = 0.0
@@ -67,6 +69,8 @@ class TelemetryParser:
                 lon=msg.lon / 1e7
             )
             self.state.altitude_agl = msg.relative_alt / 1000.0
+            self.state.velocity_n = msg.vx / 100.0   # cm/s -> m/s (North)
+            self.state.velocity_e = msg.vy / 100.0   # cm/s -> m/s (East)
             updated = True
 
         elif msg_type == "WIND":

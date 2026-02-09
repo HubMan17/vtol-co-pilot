@@ -34,9 +34,7 @@ class MainWindow(QMainWindow):
             component_id=config.mavlink.component_id
         )
 
-        self.dead_reckoning = DeadReckoningEngine(
-            drift_coefficient=config.navigation.drift_coefficient
-        )
+        self.dead_reckoning = DeadReckoningEngine()
         self.route_planner = RoutePlanner()
         self.autopilot = AutopilotManager(self.proxy, config.autopilot)
         self.autopilot.set_route_planner(self.route_planner)
@@ -48,7 +46,6 @@ class MainWindow(QMainWindow):
         self._manual_wind_enabled = False
         self._manual_wind_dir = 0
         self._manual_wind_speed = 0
-        self._manual_drift_coeff = config.navigation.drift_coefficient
 
         self._setup_ui()
         self._setup_connections()
@@ -532,16 +529,14 @@ class MainWindow(QMainWindow):
         self.autopilot.set_target_airspeed(float(speed))
         self.statusbar.showMessage(f"Целевая скорость: {speed} м/с")
 
-    def _on_manual_wind_changed(self, enabled: bool, direction: int, speed: int, drift_coeff: float):
+    def _on_manual_wind_changed(self, enabled: bool, direction: int, speed: int):
         self._manual_wind_enabled = enabled
         self._manual_wind_dir = direction
         self._manual_wind_speed = speed
-        self._manual_drift_coeff = drift_coeff
-        self.dead_reckoning.set_drift_coefficient(drift_coeff)
+        self.dead_reckoning.set_manual_wind_active(enabled)
         if enabled:
-            self.statusbar.showMessage(f"Ручной ветер: {direction}° / {speed} м/с, дрейф: {drift_coeff:.2f}")
+            self.statusbar.showMessage(f"Ручной ветер: {direction}° / {speed} м/с")
         else:
-            self.dead_reckoning.set_drift_coefficient(self.config.navigation.drift_coefficient)
             self.statusbar.showMessage("Ветер: автоматический (от ArduPilot)")
 
     def _update_display(self):
@@ -555,17 +550,35 @@ class MainWindow(QMainWindow):
             telemetry.wind_direction = float(self._manual_wind_dir)
             telemetry.wind_speed = float(self._manual_wind_speed)
 
-        self.status_panel.update_telemetry(telemetry)
         self.lbl_mode.setText(f"Режим: {telemetry.mode}")
 
-        dr_position = self.dead_reckoning.update(telemetry)
+        # RC8 toggle → force GPS1 off (spoof protection, works on SITL + real hardware)
+        self.autopilot.update_gps_switch(telemetry.rc_channels)
+        gps_forced_off = self.autopilot.gps_forced_off
 
-        if self._use_dr_position and dr_position:
+        dr_position = self.dead_reckoning.update(telemetry, force_dr=gps_forced_off)
+
+        # Override wind display: show frozen wind when GPS lost (ArduPilot WIND degrades)
+        gps_lost = telemetry.gps_fix < 3 or gps_forced_off
+        if gps_lost and not self._manual_wind_enabled:
+            frozen_speed, frozen_dir = self.dead_reckoning.get_frozen_wind()
+            if frozen_speed > 0 or frozen_dir > 0:
+                telemetry.wind_speed = frozen_speed
+                telemetry.wind_direction = frozen_dir
+
+        self.status_panel.update_telemetry(telemetry)
+
+        # Display position: use DR when GPS forced off or DR toggle enabled
+        if (gps_forced_off or self._use_dr_position) and dr_position:
             display_position = dr_position
         elif telemetry.position:
             display_position = telemetry.position
         else:
             display_position = dr_position
+
+        # Autopilot ALWAYS gets DR position for GPS_INPUT injection
+        # (DR snaps to GPS when GPS OK, propagates independently when GPS lost)
+        autopilot_position = dr_position if dr_position else display_position
 
         if display_position:
             self.map_widget.update_aircraft(
@@ -607,7 +620,11 @@ class MainWindow(QMainWindow):
 
                 self.status_panel.update_navigation(wp_idx + 1, wp_total, distance, eta, xtk)
 
-        self.autopilot.update(display_position)
+        # Pass DR velocity + blended position for GPS_INPUT
+        dr_vel = self.dead_reckoning.get_velocity()
+        dr_blended = self.dead_reckoning.get_position()
+        self.autopilot.update(autopilot_position, dr_velocity=dr_vel,
+                              dr_blended_position=dr_blended)
         self._update_autopilot_display()
 
     def _update_autopilot_display(self):
