@@ -5,6 +5,8 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt
 
+from src.gui.theme import Colors, Fonts
+
 
 class WaypointDialog(QDialog):
     WAYPOINT_TYPES = [
@@ -22,25 +24,50 @@ class WaypointDialog(QDialog):
 
     def _setup_ui(self):
         self.setWindowTitle("Добавить точку маршрута")
-        self.setMinimumWidth(280)
+        self.setMinimumWidth(320)
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {Colors.BG_APP};
+                color: {Colors.TEXT_PRIMARY};
+            }}
+            QLabel {{
+                color: {Colors.TEXT_SECONDARY};
+                font-size: {Fonts.SIZE_BODY}px;
+            }}
+        """)
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(10)
+        layout.setSpacing(12)
+        layout.setContentsMargins(20, 20, 20, 20)
 
+        # Title
+        title = QLabel("Новая точка маршрута")
+        title.setStyleSheet(f"""
+            color: {Colors.TEXT_PRIMARY};
+            font-size: 16px;
+            font-weight: 700;
+        """)
+        layout.addWidget(title)
+
+        # Coordinates card
         coord_group = QGroupBox("Координаты")
         coord_layout = QFormLayout(coord_group)
-        coord_layout.setSpacing(4)
+        coord_layout.setSpacing(6)
 
         self.lbl_lat = QLabel(f"{self._lat:.6f}")
+        self.lbl_lat.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-family: {Fonts.MONO}; font-weight: 600;")
         self.lbl_lon = QLabel(f"{self._lon:.6f}")
+        self.lbl_lon.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-family: {Fonts.MONO}; font-weight: 600;")
+
         coord_layout.addRow("Широта:", self.lbl_lat)
         coord_layout.addRow("Долгота:", self.lbl_lon)
 
         layout.addWidget(coord_group)
 
+        # Parameters card
         params_group = QGroupBox("Параметры")
         params_layout = QFormLayout(params_group)
-        params_layout.setSpacing(6)
+        params_layout.setSpacing(8)
 
         self.spin_altitude = QSpinBox()
         self.spin_altitude.setRange(10, 5000)
@@ -66,9 +93,10 @@ class WaypointDialog(QDialog):
 
         layout.addWidget(params_group)
 
+        # Orbit parameters card
         orbit_group = QGroupBox("Кружение")
         orbit_layout = QFormLayout(orbit_group)
-        orbit_layout.setSpacing(6)
+        orbit_layout.setSpacing(8)
 
         self.spin_orbit_radius = QSpinBox()
         self.spin_orbit_radius.setRange(30, 500)
@@ -85,15 +113,22 @@ class WaypointDialog(QDialog):
         self.orbit_group.setVisible(False)
         layout.addWidget(orbit_group)
 
+        # Buttons
         btn_layout = QHBoxLayout()
-        self.btn_ok = QPushButton("Добавить")
-        self.btn_ok.clicked.connect(self.accept)
+        btn_layout.setSpacing(8)
+
         self.btn_cancel = QPushButton("Отмена")
+        self.btn_cancel.setFixedHeight(36)
         self.btn_cancel.clicked.connect(self.reject)
+        btn_layout.addWidget(self.btn_cancel)
 
         btn_layout.addStretch()
+
+        self.btn_ok = QPushButton("Добавить")
+        self.btn_ok.setProperty("cssClass", "primary")
+        self.btn_ok.setFixedHeight(36)
+        self.btn_ok.clicked.connect(self.accept)
         btn_layout.addWidget(self.btn_ok)
-        btn_layout.addWidget(self.btn_cancel)
 
         layout.addLayout(btn_layout)
 

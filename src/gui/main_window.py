@@ -2,7 +2,8 @@ from pathlib import Path
 from typing import Optional
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QFrame, QSplitter, QStatusBar, QFileDialog, QMessageBox, QSpinBox
+    QPushButton, QLabel, QFrame, QSplitter, QStatusBar, QFileDialog,
+    QMessageBox, QSpinBox, QApplication
 )
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont
@@ -17,6 +18,7 @@ from src.autopilot.autopilot_manager import AutopilotManager, AutopilotMode
 from src.gui.status_panel import StatusPanel
 from src.gui.map_widget import MapWidget
 from src.gui.waypoint_dialog import WaypointDialog
+from src.gui.theme import STYLESHEET, Colors, Fonts
 
 
 class MainWindow(QMainWindow):
@@ -41,6 +43,9 @@ class MainWindow(QMainWindow):
         self._set_home_mode = False
         self._home_position: Optional[LatLon] = None
 
+        # Apply global dark theme
+        QApplication.instance().setStyleSheet(STYLESHEET)
+
         self._setup_ui()
         self._setup_connections()
         self._setup_timer()
@@ -52,137 +57,259 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
-        main_layout.setContentsMargins(5, 5, 5, 5)
-        main_layout.setSpacing(5)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
-        toolbar = self._create_toolbar()
-        main_layout.addWidget(toolbar)
+        # --- Header bar ---
+        header = self._create_header()
+        main_layout.addWidget(header)
 
-        splitter = QSplitter(Qt.Horizontal)
+        # --- Content: sidebar + map ---
+        content = QWidget()
+        content_layout = QHBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
 
-        self.map_widget = MapWidget(self.config.gui.map_center, self.config.gui.map_zoom)
-        splitter.addWidget(self.map_widget)
-
-        right_panel = QWidget()
-        right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(0, 0, 0, 0)
+        # Left sidebar (status + controls)
+        sidebar = QWidget()
+        sidebar.setStyleSheet(f"background-color: {Colors.BG_SIDEBAR};")
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        sidebar_layout.setSpacing(0)
 
         self.status_panel = StatusPanel()
-        right_layout.addWidget(self.status_panel)
+        sidebar_layout.addWidget(self.status_panel, 1)
 
+        # Control buttons at bottom of sidebar
         control_panel = self._create_control_panel()
-        right_layout.addWidget(control_panel)
+        sidebar_layout.addWidget(control_panel)
 
-        splitter.addWidget(right_panel)
-        splitter.setSizes([800, 400])
+        # Separator line between sidebar and map
+        sep = QFrame()
+        sep.setFixedWidth(1)
+        sep.setStyleSheet(f"background-color: {Colors.BORDER};")
 
-        main_layout.addWidget(splitter)
+        # Map (main content area)
+        self.map_widget = MapWidget(self.config.gui.map_center, self.config.gui.map_zoom)
 
+        content_layout.addWidget(sidebar)
+        content_layout.addWidget(sep)
+        content_layout.addWidget(self.map_widget, 1)
+
+        main_layout.addWidget(content, 1)
+
+        # Status bar
         self.statusbar = QStatusBar()
         self.setStatusBar(self.statusbar)
         self.statusbar.showMessage("Отключено")
 
-    def _create_toolbar(self) -> QFrame:
-        frame = QFrame()
-        frame.setFrameStyle(QFrame.StyledPanel)
-        layout = QHBoxLayout(frame)
-        layout.setContentsMargins(10, 5, 10, 5)
+    def _create_header(self) -> QFrame:
+        header = QFrame()
+        header.setFixedHeight(52)
+        header.setStyleSheet(f"""
+            QFrame {{
+                background-color: {Colors.BG_SIDEBAR};
+                border-bottom: 1px solid {Colors.BORDER};
+            }}
+        """)
 
+        layout = QHBoxLayout(header)
+        layout.setContentsMargins(16, 0, 16, 0)
+        layout.setSpacing(12)
+
+        # Connect / disconnect
         self.btn_connect = QPushButton("Подключить")
-        self.btn_connect.setFixedWidth(120)
+        self.btn_connect.setProperty("cssClass", "primary")
+        self.btn_connect.setFixedHeight(34)
+        self.btn_connect.setFixedWidth(130)
         layout.addWidget(self.btn_connect)
 
         self.btn_disconnect = QPushButton("Отключить")
-        self.btn_disconnect.setFixedWidth(120)
+        self.btn_disconnect.setFixedHeight(34)
+        self.btn_disconnect.setFixedWidth(130)
         self.btn_disconnect.setEnabled(False)
         layout.addWidget(self.btn_disconnect)
 
         layout.addStretch()
 
-        self.lbl_mode = QLabel("Режим: ---")
-        self.lbl_mode.setFont(QFont("Consolas", 12, QFont.Bold))
+        # ArduPilot mode badge
+        self.lbl_mode = QLabel("---")
+        self.lbl_mode.setFont(QFont(Fonts.MONO, 13, QFont.Bold))
+        self.lbl_mode.setStyleSheet(f"""
+            color: {Colors.TEXT_SECONDARY};
+            font-size: 13px;
+            font-weight: 700;
+            padding: 4px 14px;
+            border-radius: 6px;
+            background-color: {Colors.BG_INPUT};
+        """)
+        self.lbl_mode.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.lbl_mode)
 
         layout.addStretch()
 
+        # Connection status indicator
         self.lbl_status = QLabel("ОТКЛЮЧЕНО")
-        self.lbl_status.setStyleSheet("color: red; font-weight: bold;")
+        self.lbl_status.setFont(QFont(Fonts.FAMILY, 11, QFont.Bold))
+        self.lbl_status.setStyleSheet(f"""
+            color: {Colors.ERROR};
+            font-size: 11px;
+            font-weight: 700;
+            padding: 4px 12px;
+            border-radius: 12px;
+            background-color: {Colors.ERROR_BG};
+        """)
         layout.addWidget(self.lbl_status)
 
-        return frame
+        return header
 
     def _create_control_panel(self) -> QFrame:
-        frame = QFrame()
-        frame.setFrameStyle(QFrame.StyledPanel)
-        layout = QVBoxLayout(frame)
+        panel = QFrame()
+        panel.setStyleSheet(f"""
+            QFrame {{
+                background-color: {Colors.BG_SIDEBAR};
+                border-top: 1px solid {Colors.BORDER};
+            }}
+        """)
 
-        self.btn_nav = QPushButton("Навигация")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        # Main autopilot button
+        self.btn_nav = QPushButton("▶  Навигация")
         self.btn_nav.setCheckable(True)
         self.btn_nav.setEnabled(False)
+        self.btn_nav.setFixedHeight(40)
+        self.btn_nav.setFont(QFont(Fonts.FAMILY, 13, QFont.Bold))
+        self.btn_nav.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {Colors.BG_INPUT};
+                color: {Colors.TEXT_DATA};
+                border: 1px solid {Colors.BORDER_BUTTON};
+                border-radius: 10px;
+                padding: 8px 16px;
+                font-size: 13px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background-color: {Colors.BG_TOOLTIP};
+                border-color: {Colors.TEXT_TERTIARY};
+            }}
+            QPushButton:checked {{
+                background-color: {Colors.SUCCESS};
+                color: #ffffff;
+                border-color: {Colors.SUCCESS};
+            }}
+            QPushButton:disabled {{
+                background-color: {Colors.BG_CARD};
+                color: {Colors.TEXT_TERTIARY};
+                border-color: {Colors.BORDER};
+            }}
+        """)
         layout.addWidget(self.btn_nav)
 
-        action_layout = QHBoxLayout()
+        # Action row 1
+        row1 = QHBoxLayout()
+        row1.setSpacing(8)
 
-        self.btn_set_pos = QPushButton("Коррекция позиции")
+        self.btn_set_pos = QPushButton("📍 Коррекция")
         self.btn_set_pos.setCheckable(True)
         self.btn_set_pos.setEnabled(False)
-        action_layout.addWidget(self.btn_set_pos)
+        self.btn_set_pos.setFixedHeight(34)
+        row1.addWidget(self.btn_set_pos)
 
-        self.btn_set_home = QPushButton("Установить дом")
+        self.btn_set_home = QPushButton("🏠 Дом")
         self.btn_set_home.setCheckable(True)
         self.btn_set_home.setEnabled(False)
-        action_layout.addWidget(self.btn_set_home)
+        self.btn_set_home.setFixedHeight(34)
+        row1.addWidget(self.btn_set_home)
 
-        self.btn_load_route = QPushButton("Загрузить маршрут")
+        self.btn_load_route = QPushButton("📂 Маршрут")
         self.btn_load_route.setEnabled(False)
-        action_layout.addWidget(self.btn_load_route)
+        self.btn_load_route.setFixedHeight(34)
+        row1.addWidget(self.btn_load_route)
 
-        layout.addLayout(action_layout)
+        layout.addLayout(row1)
 
-        map_layout = QHBoxLayout()
+        # Action row 2
+        row2 = QHBoxLayout()
+        row2.setSpacing(8)
 
-        self.btn_follow = QPushButton("Следовать")
+        self.btn_follow = QPushButton("👁 Слежение")
         self.btn_follow.setCheckable(True)
         self.btn_follow.setEnabled(False)
-        map_layout.addWidget(self.btn_follow)
+        self.btn_follow.setFixedHeight(34)
+        row2.addWidget(self.btn_follow)
 
-        self.btn_home = QPushButton("Домой")
+        self.btn_home = QPushButton("⟲  Домой")
         self.btn_home.setCheckable(True)
         self.btn_home.setEnabled(False)
-        map_layout.addWidget(self.btn_home)
+        self.btn_home.setFixedHeight(34)
+        self.btn_home.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {Colors.BG_INPUT};
+                color: {Colors.TEXT_DATA};
+                border: 1px solid {Colors.BORDER_BUTTON};
+                border-radius: 8px;
+                padding: 8px 16px;
+                font-size: {Fonts.SIZE_BODY}px;
+                font-weight: 500;
+            }}
+            QPushButton:hover {{
+                background-color: {Colors.BG_TOOLTIP};
+                border-color: {Colors.TEXT_TERTIARY};
+            }}
+            QPushButton:checked {{
+                background-color: {Colors.WARNING};
+                color: #000000;
+                border-color: {Colors.WARNING};
+            }}
+            QPushButton:disabled {{
+                background-color: {Colors.BG_CARD};
+                color: {Colors.TEXT_TERTIARY};
+                border-color: {Colors.BORDER};
+            }}
+        """)
+        row2.addWidget(self.btn_home)
 
-        self.btn_clear_track = QPushButton("Очистить трек")
+        self.btn_clear_track = QPushButton("✕ Трек")
         self.btn_clear_track.setEnabled(False)
-        map_layout.addWidget(self.btn_clear_track)
+        self.btn_clear_track.setFixedHeight(34)
+        row2.addWidget(self.btn_clear_track)
 
-        layout.addLayout(map_layout)
+        layout.addLayout(row2)
 
-        wp_nav_layout = QHBoxLayout()
+        # Waypoint navigation row
+        wp_row = QHBoxLayout()
+        wp_row.setSpacing(6)
 
         self.btn_wp_prev = QPushButton("◀")
-        self.btn_wp_prev.setFixedWidth(40)
+        self.btn_wp_prev.setProperty("cssClass", "icon")
         self.btn_wp_prev.setEnabled(False)
-        wp_nav_layout.addWidget(self.btn_wp_prev)
+        wp_row.addWidget(self.btn_wp_prev)
 
-        wp_nav_layout.addWidget(QLabel("Точка:"))
+        wp_label = QLabel("Точка:")
+        wp_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Fonts.SIZE_SMALL}px;")
+        wp_row.addWidget(wp_label)
 
         self.spin_waypoint = QSpinBox()
         self.spin_waypoint.setMinimum(1)
         self.spin_waypoint.setMaximum(1)
         self.spin_waypoint.setEnabled(False)
         self.spin_waypoint.setFixedWidth(60)
-        wp_nav_layout.addWidget(self.spin_waypoint)
+        self.spin_waypoint.setFixedHeight(32)
+        wp_row.addWidget(self.spin_waypoint)
 
         self.btn_wp_next = QPushButton("▶")
-        self.btn_wp_next.setFixedWidth(40)
+        self.btn_wp_next.setProperty("cssClass", "icon")
         self.btn_wp_next.setEnabled(False)
-        wp_nav_layout.addWidget(self.btn_wp_next)
+        wp_row.addWidget(self.btn_wp_next)
 
-        wp_nav_layout.addStretch()
+        wp_row.addStretch()
+        layout.addLayout(wp_row)
 
-        layout.addLayout(wp_nav_layout)
-
-        return frame
+        return panel
 
     def _setup_connections(self):
         self.btn_connect.clicked.connect(self._on_connect)
@@ -219,6 +346,8 @@ class MainWindow(QMainWindow):
         self.update_timer.timeout.connect(self._update_display)
         self.update_timer.start(100)
 
+    # ─── Connection ───
+
     def _on_connect(self):
         self.statusbar.showMessage("Подключение...")
         if self.proxy.connect():
@@ -239,12 +368,17 @@ class MainWindow(QMainWindow):
         self.btn_clear_track.setEnabled(True)
         self.btn_follow.setEnabled(True)
         self.btn_home.setEnabled(True)
+
         self.lbl_status.setText("ПОДКЛЮЧЕНО")
-        self.lbl_status.setStyleSheet("color: green; font-weight: bold;")
+        self.lbl_status.setStyleSheet(f"""
+            color: {Colors.SUCCESS};
+            font-size: 11px; font-weight: 700;
+            padding: 4px 12px; border-radius: 12px;
+            background-color: {Colors.SUCCESS_BG};
+        """)
         self.statusbar.showMessage(f"Подключено к SITL на порту {self.config.mavlink.sitl_port}")
 
         self.btn_follow.setChecked(True)
-        self.btn_follow.setStyleSheet("background-color: #00cc00;")
         self.map_widget.set_follow_mode(True)
 
     def _on_connection_lost(self, data):
@@ -257,27 +391,31 @@ class MainWindow(QMainWindow):
         self.btn_clear_track.setEnabled(False)
         self.btn_follow.setEnabled(False)
         self.btn_home.setEnabled(False)
+
         self.lbl_status.setText("ОТКЛЮЧЕНО")
-        self.lbl_status.setStyleSheet("color: red; font-weight: bold;")
+        self.lbl_status.setStyleSheet(f"""
+            color: {Colors.ERROR};
+            font-size: 11px; font-weight: 700;
+            padding: 4px 12px; border-radius: 12px;
+            background-color: {Colors.ERROR_BG};
+        """)
         self.statusbar.showMessage("Отключено")
+
+    # ─── Position / Home ───
 
     def _on_set_position_toggle(self):
         self._set_position_mode = self.btn_set_pos.isChecked()
         if self._set_position_mode:
             self.statusbar.showMessage("Кликните на карте для коррекции позиции EKF...")
-            self.btn_set_pos.setStyleSheet("background-color: #ffcc00;")
         else:
             self.statusbar.showMessage("Режим коррекции позиции отменён")
-            self.btn_set_pos.setStyleSheet("")
 
     def _on_set_home_toggle(self):
         self._set_home_mode = self.btn_set_home.isChecked()
         if self._set_home_mode:
             self.statusbar.showMessage("Кликните на карте для установки точки дома...")
-            self.btn_set_home.setStyleSheet("background-color: #00cc00;")
         else:
             self.statusbar.showMessage("Режим установки дома отменён")
-            self.btn_set_home.setStyleSheet("")
 
     def _on_map_clicked(self, lat: float, lon: float):
         if self._set_position_mode:
@@ -289,11 +427,9 @@ class MainWindow(QMainWindow):
         self._set_correction_position(lat, lon)
 
     def _set_correction_position(self, lat: float, lon: float):
-        """Send EKF position reset to firmware via custom COMMAND_INT."""
         self.proxy.send_position_reset(lat, lon)
         self._set_position_mode = False
         self.btn_set_pos.setChecked(False)
-        self.btn_set_pos.setStyleSheet("")
         self.map_widget.set_aircraft_position(lat, lon)
         self.statusbar.showMessage(f"Коррекция позиции отправлена: {lat:.6f}, {lon:.6f}")
 
@@ -318,7 +454,6 @@ class MainWindow(QMainWindow):
             climb_enroute=wp_data.get('climb_enroute', False)
         )
 
-        # If autopilot is orbiting or returning home, redirect to the newly added waypoint
         if self.autopilot.is_engaged():
             status = self.autopilot.get_status()
             if status.get('is_orbiting') or status.get('returning_home'):
@@ -364,6 +499,8 @@ class MainWindow(QMainWindow):
             self.spin_waypoint.setValue(self.route_planner.get_active_waypoint_index() + 1)
             self.spin_waypoint.blockSignals(False)
 
+    # ─── Waypoints ───
+
     def _on_wp_prev(self):
         self.route_planner.prev_waypoint()
         self._refresh_map_waypoints()
@@ -385,6 +522,8 @@ class MainWindow(QMainWindow):
         if wp:
             self.statusbar.showMessage(f"Активная точка: {wp.id}")
 
+    # ─── Map controls ───
+
     def _on_clear_track(self):
         self.map_widget.clear_track()
         self.statusbar.showMessage("Трек очищен")
@@ -393,11 +532,11 @@ class MainWindow(QMainWindow):
         follow = self.btn_follow.isChecked()
         self.map_widget.set_follow_mode(follow)
         if follow:
-            self.btn_follow.setStyleSheet("background-color: #00cc00;")
             self.statusbar.showMessage("Слежение за самолётом включено")
         else:
-            self.btn_follow.setStyleSheet("")
             self.statusbar.showMessage("Слежение отключено")
+
+    # ─── Home ───
 
     def _on_context_set_home(self, lat: float, lon: float):
         self._set_home_position(lat, lon)
@@ -408,7 +547,6 @@ class MainWindow(QMainWindow):
         self.map_widget.set_home_marker(lat, lon)
         self._set_home_mode = False
         self.btn_set_home.setChecked(False)
-        self.btn_set_home.setStyleSheet("")
         self.statusbar.showMessage(f"Дом установлен: {lat:.6f}, {lon:.6f}")
 
     def _on_home_toggle(self):
@@ -419,9 +557,7 @@ class MainWindow(QMainWindow):
                 return
 
             if self.autopilot.engage_home():
-                self.btn_home.setStyleSheet("background-color: #ff6600;")
                 self.btn_nav.setChecked(False)
-                self.btn_nav.setStyleSheet("")
                 self.statusbar.showMessage("Возврат домой активирован")
             else:
                 self.btn_home.setChecked(False)
@@ -429,10 +565,11 @@ class MainWindow(QMainWindow):
         else:
             self.autopilot.disengage("Отключено пользователем")
 
+    # ─── Nav ───
+
     def _on_nav_toggle(self):
         if self.btn_nav.isChecked():
             if self.autopilot.engage_nav():
-                self.btn_nav.setStyleSheet("background-color: #00cc00;")
                 route = self.route_planner.get_route()
                 wp = self.route_planner.get_active_waypoint()
                 if route and wp:
@@ -446,20 +583,19 @@ class MainWindow(QMainWindow):
         else:
             self.autopilot.disengage("Отключено пользователем")
 
+    # ─── Autopilot events ───
+
     def _on_autopilot_engage(self, data):
         mode = data.get('mode', '')
         if mode == 'NAV':
             self.btn_nav.setChecked(True)
-            self.btn_nav.setStyleSheet("background-color: #00cc00;")
             wp_id = data.get('waypoint', 0)
             total = data.get('total', 0)
             self.statusbar.showMessage(f"Навигация: точка {wp_id}/{total}")
 
     def _on_autopilot_disengage(self, data):
         self.btn_nav.setChecked(False)
-        self.btn_nav.setStyleSheet("")
         self.btn_home.setChecked(False)
-        self.btn_home.setStyleSheet("")
 
         reason = data.get('reason', '')
         if reason:
@@ -473,6 +609,8 @@ class MainWindow(QMainWindow):
         total = self.route_planner.get_waypoint_count()
         self.map_widget.update_active_waypoint(next_wp - 1)
         self.statusbar.showMessage(f"Достигнута точка {reached}, следующая: {next_wp}/{total}")
+
+    # ─── Parameter changes ───
 
     def _on_orbit_radius_changed(self, radius: int):
         self.autopilot.set_orbit_radius(float(radius))
@@ -490,6 +628,8 @@ class MainWindow(QMainWindow):
         self.proxy.send_wind_override(direction, speed)
         self.statusbar.showMessage(f"Ветер установлен: {direction}° / {speed} м/с")
 
+    # ─── Display update ───
+
     def _update_display(self):
         if not self.proxy.is_connected():
             return
@@ -497,7 +637,10 @@ class MainWindow(QMainWindow):
         telemetry = self.proxy.get_telemetry()
 
         self.status_panel.update_telemetry(telemetry)
-        self.lbl_mode.setText(f"Режим: {telemetry.mode}")
+
+        # Update mode badge in header
+        mode_text = telemetry.mode or "---"
+        self.lbl_mode.setText(mode_text)
 
         display_position = telemetry.position
 
@@ -510,7 +653,6 @@ class MainWindow(QMainWindow):
 
             ap_status = self.autopilot.get_status()
             if ap_status.get('returning_home', False) and self._home_position:
-                # RTH mode: show distance/ETA to home position
                 distance = haversine_distance(
                     display_position.lat, display_position.lon,
                     self._home_position.lat, self._home_position.lon
@@ -523,7 +665,6 @@ class MainWindow(QMainWindow):
                 self.status_panel.labels["Время приб."][0].setText(f"{minutes:02d}:{seconds:02d}")
                 self.status_panel.labels["Бок. уклон."][0].setText("--- м")
             elif self.route_planner.get_route():
-                # Normal route: show distance/ETA to active waypoint
                 if not self.autopilot.is_engaged():
                     if self.route_planner.is_waypoint_reached(display_position):
                         old_idx = self.route_planner.get_active_waypoint_index()

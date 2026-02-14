@@ -5,6 +5,8 @@ from PyQt5.QtCore import QObject, pyqtSlot, pyqtSignal, QPoint
 from PyQt5.QtGui import QCursor
 import json
 
+from src.gui.theme import Colors
+
 
 class MapBridge(QObject):
     position_clicked = pyqtSignal(float, float)
@@ -56,26 +58,47 @@ class MapWidget(QWidget):
         self._context_lon = lon
 
         menu = QMenu(self)
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background-color: {Colors.BG_TOOLTIP};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 4px;
+            }}
+            QMenu::item {{
+                padding: 8px 16px;
+                border-radius: 4px;
+            }}
+            QMenu::item:selected {{
+                background-color: {Colors.BG_INPUT};
+            }}
+            QMenu::separator {{
+                height: 1px;
+                background: {Colors.BORDER};
+                margin: 4px 8px;
+            }}
+        """)
 
-        action_set_pos = QAction("Установить позицию здесь", self)
+        action_set_pos = QAction("📍 Установить позицию здесь", self)
         action_set_pos.triggered.connect(self._on_set_position)
         menu.addAction(action_set_pos)
 
-        action_add_wp = QAction("Добавить точку маршрута", self)
+        action_add_wp = QAction("📌 Добавить точку маршрута", self)
         action_add_wp.triggered.connect(self._on_add_waypoint)
         menu.addAction(action_add_wp)
 
-        action_set_home = QAction("Установить дом", self)
+        action_set_home = QAction("🏠 Установить дом", self)
         action_set_home.triggered.connect(self._on_set_home)
         menu.addAction(action_set_home)
 
         menu.addSeparator()
 
-        action_center = QAction("Центрировать карту", self)
+        action_center = QAction("⊕ Центрировать карту", self)
         action_center.triggered.connect(self._on_center_map)
         menu.addAction(action_center)
 
-        action_clear_track = QAction("Очистить трек", self)
+        action_clear_track = QAction("✕ Очистить трек", self)
         action_clear_track.triggered.connect(self._on_clear_track)
         menu.addAction(action_clear_track)
 
@@ -107,7 +130,7 @@ class MapWidget(QWidget):
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
     <style>
-        body {{ margin: 0; padding: 0; }}
+        body {{ margin: 0; padding: 0; background: {Colors.BG_APP}; }}
         #map {{ width: 100%; height: 100vh; }}
         .aircraft-icon {{
             width: 32px;
@@ -116,7 +139,7 @@ class MapWidget(QWidget):
             margin-top: -16px;
         }}
         .waypoint-pin {{
-            filter: drop-shadow(0 2px 3px rgba(0,0,0,0.5));
+            filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
         }}
         .waypoint-pin .pin-body {{
             transition: transform 0.15s ease;
@@ -125,23 +148,40 @@ class MapWidget(QWidget):
             transform: scale(1.1);
         }}
         .wp-number {{
-            font-family: Arial, sans-serif;
+            font-family: 'Segoe UI', Inter, sans-serif;
             font-size: 11px;
             font-weight: bold;
             fill: #fff;
         }}
         .leaflet-tooltip {{
-            background: rgba(30, 30, 30, 0.9);
-            border: none;
-            border-radius: 3px;
-            padding: 4px 8px;
-            font-family: Consolas, monospace;
+            background: {Colors.BG_TOOLTIP};
+            border: 1px solid {Colors.BORDER};
+            border-radius: 8px;
+            padding: 6px 10px;
+            font-family: 'Segoe UI', Inter, sans-serif;
             font-size: 11px;
-            color: #eee;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+            color: {Colors.TEXT_PRIMARY};
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
         }}
         .leaflet-tooltip-top:before {{
-            border-top-color: rgba(30, 30, 30, 0.9);
+            border-top-color: {Colors.BG_TOOLTIP};
+        }}
+        .leaflet-control-zoom a {{
+            background-color: {Colors.BG_CARD} !important;
+            color: {Colors.TEXT_PRIMARY} !important;
+            border-color: {Colors.BORDER} !important;
+        }}
+        .leaflet-control-zoom a:hover {{
+            background-color: {Colors.BG_TOOLTIP} !important;
+        }}
+        .leaflet-bar {{
+            border: 1px solid {Colors.BORDER} !important;
+            border-radius: 8px !important;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3) !important;
+        }}
+        .leaflet-bar a {{
+            border-bottom-color: {Colors.BORDER} !important;
         }}
     </style>
 </head>
@@ -169,9 +209,9 @@ class MapWidget(QWidget):
 
         function createAircraftIcon(heading) {{
             return L.divIcon({{
-                html: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" style="transform: rotate(${{heading}}deg);">
+                html: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" style="transform: rotate(${{heading}}deg); filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));">
                     <path d="M16 2 L14 12 L4 14 L4 18 L14 16 L14 26 L10 28 L10 30 L16 28 L22 30 L22 28 L18 26 L18 16 L28 18 L28 14 L18 12 Z"
-                          fill="#00ff00" stroke="#000" stroke-width="1"/>
+                          fill="{Colors.PRIMARY_LIGHT}" stroke="#fff" stroke-width="0.5" opacity="0.95"/>
                 </svg>`,
                 className: 'aircraft-icon',
                 iconSize: [32, 32],
@@ -201,7 +241,11 @@ class MapWidget(QWidget):
             if (trackLine) {{
                 trackLine.setLatLngs(trackPoints);
             }} else {{
-                trackLine = L.polyline(trackPoints, {{color: '#00ff00', weight: 2}}).addTo(map);
+                trackLine = L.polyline(trackPoints, {{
+                    color: '{Colors.PRIMARY_LIGHT}',
+                    weight: 2,
+                    opacity: 0.7
+                }}).addTo(map);
             }}
 
             updateActiveWaypointLine();
@@ -258,23 +302,20 @@ class MapWidget(QWidget):
 
         function createWaypointIcon(number, isPast, isActive) {{
             var size = isActive ? 32 : 28;
-            var fillColor, strokeColor, textColor, glowColor;
+            var fillColor, strokeColor, textColor;
 
             if (isPast) {{
-                fillColor = '#6b7280';
+                fillColor = '{Colors.TEXT_TERTIARY}';
                 strokeColor = '#4b5563';
-                textColor = '#d1d5db';
-                glowColor = 'none';
+                textColor = '{Colors.TEXT_DATA}';
             }} else if (isActive) {{
-                fillColor = '#10b981';
+                fillColor = '{Colors.SUCCESS}';
                 strokeColor = '#059669';
                 textColor = '#ffffff';
-                glowColor = '#10b981';
             }} else {{
-                fillColor = '#f59e0b';
+                fillColor = '{Colors.WARNING}';
                 strokeColor = '#d97706';
                 textColor = '#ffffff';
-                glowColor = 'none';
             }}
 
             var glowFilter = isActive ? '<filter id="glow"><feGaussianBlur stdDeviation="2" result="coloredBlur"/><feMerge><feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>' : '';
@@ -336,17 +377,17 @@ class MapWidget(QWidget):
                 var color, weight, opacity, dashArray;
 
                 if (isPastSegment) {{
-                    color = '#888888';
+                    color = '{Colors.TEXT_TERTIARY}';
                     weight = 2;
                     opacity = 0.4;
                     dashArray = null;
                 }} else if (isActiveSegment) {{
-                    color = '#00ffff';
+                    color = '{Colors.PRIMARY_LIGHT}';
                     weight = 3;
                     opacity = 0.9;
                     dashArray = null;
                 }} else {{
-                    color = '#ff6600';
+                    color = '{Colors.WARNING}';
                     weight = 2;
                     opacity = 0.7;
                     dashArray = '8, 8';
@@ -386,7 +427,7 @@ class MapWidget(QWidget):
                     lastAircraftPos,
                     [wp.lat, wp.lon]
                 ], {{
-                    color: '#ff00ff',
+                    color: '{Colors.PRIMARY}',
                     weight: 2,
                     opacity: 0.8,
                     dashArray: '4, 8'
@@ -425,8 +466,8 @@ class MapWidget(QWidget):
                 homeMarker.setLatLng([lat, lon]);
             }} else {{
                 var homeIcon = L.divIcon({{
-                    html: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
-                        <path d="M12 3L4 9v12h5v-7h6v7h5V9l-8-6z" fill="#ff0000" stroke="#fff" stroke-width="1"/>
+                    html: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" style="filter: drop-shadow(0 2px 3px rgba(0,0,0,0.4));">
+                        <path d="M12 3L4 9v12h5v-7h6v7h5V9l-8-6z" fill="{Colors.ERROR}" stroke="#fff" stroke-width="0.8"/>
                     </svg>`,
                     className: 'home-icon',
                     iconSize: [24, 24],
