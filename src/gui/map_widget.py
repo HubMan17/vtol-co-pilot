@@ -1,9 +1,11 @@
+import json
+
+import qtawesome as qta
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QMenu, QAction
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 from PyQt5.QtWebChannel import QWebChannel
 from PyQt5.QtCore import QObject, pyqtSlot, pyqtSignal, QPoint
 from PyQt5.QtGui import QCursor
-import json
 
 from src.gui.theme import Colors
 
@@ -80,25 +82,30 @@ class MapWidget(QWidget):
             }}
         """)
 
-        action_set_pos = QAction("📍 Установить позицию здесь", self)
+        action_set_pos = QAction("Установить позицию здесь", self)
+        action_set_pos.setIcon(qta.icon("mdi.crosshairs-gps", color=Colors.TEXT_SECONDARY))
         action_set_pos.triggered.connect(self._on_set_position)
         menu.addAction(action_set_pos)
 
-        action_add_wp = QAction("📌 Добавить точку маршрута", self)
+        action_add_wp = QAction("Добавить точку маршрута", self)
+        action_add_wp.setIcon(qta.icon("mdi.map-marker-plus", color=Colors.TEXT_SECONDARY))
         action_add_wp.triggered.connect(self._on_add_waypoint)
         menu.addAction(action_add_wp)
 
-        action_set_home = QAction("🏠 Установить дом", self)
+        action_set_home = QAction("Установить дом", self)
+        action_set_home.setIcon(qta.icon("mdi.home-map-marker", color=Colors.TEXT_SECONDARY))
         action_set_home.triggered.connect(self._on_set_home)
         menu.addAction(action_set_home)
 
         menu.addSeparator()
 
-        action_center = QAction("⊕ Центрировать карту", self)
+        action_center = QAction("Центрировать карту", self)
+        action_center.setIcon(qta.icon("mdi.crosshairs", color=Colors.TEXT_SECONDARY))
         action_center.triggered.connect(self._on_center_map)
         menu.addAction(action_center)
 
-        action_clear_track = QAction("✕ Очистить трек", self)
+        action_clear_track = QAction("Очистить трек", self)
+        action_clear_track.setIcon(qta.icon("mdi.eraser", color=Colors.TEXT_SECONDARY))
         action_clear_track.triggered.connect(self._on_clear_track)
         menu.addAction(action_clear_track)
 
@@ -307,7 +314,7 @@ class MapWidget(QWidget):
             if (isPast) {{
                 fillColor = '{Colors.TEXT_TERTIARY}';
                 strokeColor = '#4b5563';
-                textColor = '{Colors.TEXT_DATA}';
+                textColor = '{Colors.TEXT_SECONDARY}';
             }} else if (isActive) {{
                 fillColor = '{Colors.SUCCESS}';
                 strokeColor = '#059669';

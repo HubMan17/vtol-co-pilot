@@ -1,12 +1,14 @@
 from pathlib import Path
 from typing import Optional
+
+import qtawesome as qta
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QFrame, QSplitter, QStatusBar, QFileDialog,
+    QPushButton, QLabel, QFrame, QStatusBar, QFileDialog,
     QMessageBox, QSpinBox, QApplication
 )
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QFont, QIcon
 
 from src.core.config import AppConfig
 from src.core.events import EventBus, Event
@@ -43,273 +45,262 @@ class MainWindow(QMainWindow):
         self._set_home_mode = False
         self._home_position: Optional[LatLon] = None
 
-        # Apply global dark theme
         QApplication.instance().setStyleSheet(STYLESHEET)
 
         self._setup_ui()
         self._setup_connections()
         self._setup_timer()
 
+    # ────────────────────── UI ──────────────────────
+
     def _setup_ui(self):
-        self.setWindowTitle("VTOL Со-Пилот")
+        self.setWindowTitle("VTOL Co-Pilot")
         self.setMinimumSize(1200, 800)
 
         central = QWidget()
         self.setCentralWidget(central)
-        main_layout = QVBoxLayout(central)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
+        root = QHBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        # --- Header bar ---
-        header = self._create_header()
-        main_layout.addWidget(header)
-
-        # --- Content: sidebar + map ---
-        content = QWidget()
-        content_layout = QHBoxLayout(content)
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(0)
-
-        # Left sidebar (status + controls)
-        sidebar = QWidget()
-        sidebar.setStyleSheet(f"background-color: {Colors.BG_SIDEBAR};")
-        sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(0, 0, 0, 0)
-        sidebar_layout.setSpacing(0)
-
-        self.status_panel = StatusPanel()
-        sidebar_layout.addWidget(self.status_panel, 1)
-
-        # Control buttons at bottom of sidebar
-        control_panel = self._create_control_panel()
-        sidebar_layout.addWidget(control_panel)
-
-        # Separator line between sidebar and map
-        sep = QFrame()
-        sep.setFixedWidth(1)
-        sep.setStyleSheet(f"background-color: {Colors.BORDER};")
-
-        # Map (main content area)
+        # ── LEFT: Map ──
         self.map_widget = MapWidget(self.config.gui.map_center, self.config.gui.map_zoom)
+        root.addWidget(self.map_widget, 1)
 
-        content_layout.addWidget(sidebar)
-        content_layout.addWidget(sep)
-        content_layout.addWidget(self.map_widget, 1)
+        # ── RIGHT: Panel ──
+        right = QWidget()
+        right.setStyleSheet(f"background-color: {Colors.BG_SIDEBAR};")
+        right_lay = QVBoxLayout(right)
+        right_lay.setContentsMargins(0, 0, 0, 0)
+        right_lay.setSpacing(0)
 
-        main_layout.addWidget(content, 1)
+        # Header inside panel
+        right_lay.addWidget(self._build_panel_header())
+
+        # Separator
+        sep = QFrame()
+        sep.setFixedHeight(1)
+        sep.setStyleSheet(f"background-color: {Colors.BORDER};")
+        right_lay.addWidget(sep)
+
+        # Status panel (scrollable telemetry + nav + autopilot)
+        self.status_panel = StatusPanel()
+        right_lay.addWidget(self.status_panel, 1)
+
+        # Separator
+        sep2 = QFrame()
+        sep2.setFixedHeight(1)
+        sep2.setStyleSheet(f"background-color: {Colors.BORDER};")
+        right_lay.addWidget(sep2)
+
+        # Controls footer
+        right_lay.addWidget(self._build_controls())
+
+        # Vertical separator between map and panel
+        vsep = QFrame()
+        vsep.setFixedWidth(1)
+        vsep.setStyleSheet(f"background-color: {Colors.BORDER_SUBTLE};")
+
+        root.addWidget(vsep)
+        root.addWidget(right)
 
         # Status bar
         self.statusbar = QStatusBar()
         self.setStatusBar(self.statusbar)
         self.statusbar.showMessage("Отключено")
 
-    def _create_header(self) -> QFrame:
-        header = QFrame()
-        header.setFixedHeight(52)
-        header.setStyleSheet(f"""
-            QFrame {{
-                background-color: {Colors.BG_SIDEBAR};
-                border-bottom: 1px solid {Colors.BORDER};
-            }}
-        """)
+    def _build_panel_header(self) -> QWidget:
+        """Connection controls + mode badge."""
+        hdr = QWidget()
+        hdr.setFixedHeight(48)
+        lay = QHBoxLayout(hdr)
+        lay.setContentsMargins(10, 0, 10, 0)
+        lay.setSpacing(8)
 
-        layout = QHBoxLayout(header)
-        layout.setContentsMargins(16, 0, 16, 0)
-        layout.setSpacing(12)
-
-        # Connect / disconnect
+        # Connect
         self.btn_connect = QPushButton("Подключить")
-        self.btn_connect.setProperty("cssClass", "primary")
-        self.btn_connect.setFixedHeight(34)
-        self.btn_connect.setFixedWidth(130)
-        layout.addWidget(self.btn_connect)
+        self.btn_connect.setIcon(qta.icon("mdi.lan-connect", color="#fff"))
+        self.btn_connect.setFixedHeight(30)
+        self.btn_connect.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {Colors.PRIMARY};
+                color: #fff; border: none; border-radius: 6px;
+                padding: 0 12px; font-size: 12px; font-weight: 600;
+            }}
+            QPushButton:hover {{ background-color: {Colors.PRIMARY_HOVER}; }}
+        """)
+        lay.addWidget(self.btn_connect)
 
-        self.btn_disconnect = QPushButton("Отключить")
-        self.btn_disconnect.setFixedHeight(34)
-        self.btn_disconnect.setFixedWidth(130)
+        # Disconnect
+        self.btn_disconnect = QPushButton("Откл.")
+        self.btn_disconnect.setIcon(qta.icon("mdi.lan-disconnect", color=Colors.TEXT_SECONDARY))
+        self.btn_disconnect.setFixedHeight(30)
         self.btn_disconnect.setEnabled(False)
-        layout.addWidget(self.btn_disconnect)
+        lay.addWidget(self.btn_disconnect)
 
-        layout.addStretch()
+        lay.addStretch()
 
-        # ArduPilot mode badge
+        # Mode badge
         self.lbl_mode = QLabel("---")
-        self.lbl_mode.setFont(QFont(Fonts.MONO, 13, QFont.Bold))
         self.lbl_mode.setStyleSheet(f"""
-            color: {Colors.TEXT_SECONDARY};
-            font-size: 13px;
-            font-weight: 700;
-            padding: 4px 14px;
-            border-radius: 6px;
+            color: {Colors.TEXT_TERTIARY};
+            font-family: "{Fonts.MONO}";
+            font-size: 12px; font-weight: 700;
+            padding: 3px 10px; border-radius: 4px;
             background-color: {Colors.BG_INPUT};
         """)
-        self.lbl_mode.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.lbl_mode)
+        lay.addWidget(self.lbl_mode)
 
-        layout.addStretch()
-
-        # Connection status indicator
-        self.lbl_status = QLabel("ОТКЛЮЧЕНО")
-        self.lbl_status.setFont(QFont(Fonts.FAMILY, 11, QFont.Bold))
+        # Status dot
+        self.lbl_status = QLabel("OFF")
         self.lbl_status.setStyleSheet(f"""
             color: {Colors.ERROR};
-            font-size: 11px;
-            font-weight: 700;
-            padding: 4px 12px;
-            border-radius: 12px;
+            font-size: 10px; font-weight: 700;
+            padding: 2px 8px; border-radius: 10px;
             background-color: {Colors.ERROR_BG};
         """)
-        layout.addWidget(self.lbl_status)
+        lay.addWidget(self.lbl_status)
 
-        return header
+        return hdr
 
-    def _create_control_panel(self) -> QFrame:
-        panel = QFrame()
-        panel.setStyleSheet(f"""
-            QFrame {{
-                background-color: {Colors.BG_SIDEBAR};
-                border-top: 1px solid {Colors.BORDER};
-            }}
-        """)
+    def _build_controls(self) -> QWidget:
+        """Action buttons at the bottom of the right panel."""
+        panel = QWidget()
+        lay = QVBoxLayout(panel)
+        lay.setContentsMargins(10, 8, 10, 10)
+        lay.setSpacing(6)
 
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
-
-        # Main autopilot button
-        self.btn_nav = QPushButton("▶  Навигация")
+        # NAV button — big, prominent
+        self.btn_nav = QPushButton("  Навигация")
+        self.btn_nav.setIcon(qta.icon("mdi.play", color="#fff"))
         self.btn_nav.setCheckable(True)
         self.btn_nav.setEnabled(False)
-        self.btn_nav.setFixedHeight(40)
-        self.btn_nav.setFont(QFont(Fonts.FAMILY, 13, QFont.Bold))
+        self.btn_nav.setFixedHeight(36)
         self.btn_nav.setStyleSheet(f"""
             QPushButton {{
                 background-color: {Colors.BG_INPUT};
-                color: {Colors.TEXT_DATA};
-                border: 1px solid {Colors.BORDER_BUTTON};
-                border-radius: 10px;
-                padding: 8px 16px;
-                font-size: 13px;
-                font-weight: 600;
+                color: {Colors.TEXT_SECONDARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                font-size: 13px; font-weight: 600;
+                padding: 0 16px;
             }}
             QPushButton:hover {{
-                background-color: {Colors.BG_TOOLTIP};
-                border-color: {Colors.TEXT_TERTIARY};
+                background-color: {Colors.BG_HOVER};
+                color: {Colors.TEXT_PRIMARY};
+                border-color: {Colors.BORDER_LIGHT};
             }}
             QPushButton:checked {{
                 background-color: {Colors.SUCCESS};
-                color: #ffffff;
+                color: #fff;
                 border-color: {Colors.SUCCESS};
             }}
             QPushButton:disabled {{
                 background-color: {Colors.BG_CARD};
-                color: {Colors.TEXT_TERTIARY};
-                border-color: {Colors.BORDER};
+                color: {Colors.TEXT_DIM};
+                border-color: {Colors.BORDER_SUBTLE};
             }}
         """)
-        layout.addWidget(self.btn_nav)
+        lay.addWidget(self.btn_nav)
 
-        # Action row 1
-        row1 = QHBoxLayout()
-        row1.setSpacing(8)
+        # Row 1: Position + Home + Route
+        r1 = QHBoxLayout()
+        r1.setSpacing(4)
 
-        self.btn_set_pos = QPushButton("📍 Коррекция")
-        self.btn_set_pos.setCheckable(True)
-        self.btn_set_pos.setEnabled(False)
-        self.btn_set_pos.setFixedHeight(34)
-        row1.addWidget(self.btn_set_pos)
+        self.btn_set_pos = self._action_btn("mdi.crosshairs-gps", "Коррекция", checkable=True)
+        r1.addWidget(self.btn_set_pos)
 
-        self.btn_set_home = QPushButton("🏠 Дом")
-        self.btn_set_home.setCheckable(True)
-        self.btn_set_home.setEnabled(False)
-        self.btn_set_home.setFixedHeight(34)
-        row1.addWidget(self.btn_set_home)
+        self.btn_set_home = self._action_btn("mdi.home-map-marker", "Дом", checkable=True)
+        r1.addWidget(self.btn_set_home)
 
-        self.btn_load_route = QPushButton("📂 Маршрут")
-        self.btn_load_route.setEnabled(False)
-        self.btn_load_route.setFixedHeight(34)
-        row1.addWidget(self.btn_load_route)
+        self.btn_load_route = self._action_btn("mdi.folder-open-outline", "Маршрут")
+        r1.addWidget(self.btn_load_route)
 
-        layout.addLayout(row1)
+        lay.addLayout(r1)
 
-        # Action row 2
-        row2 = QHBoxLayout()
-        row2.setSpacing(8)
+        # Row 2: Follow + RTH + Clear
+        r2 = QHBoxLayout()
+        r2.setSpacing(4)
 
-        self.btn_follow = QPushButton("👁 Слежение")
-        self.btn_follow.setCheckable(True)
-        self.btn_follow.setEnabled(False)
-        self.btn_follow.setFixedHeight(34)
-        row2.addWidget(self.btn_follow)
+        self.btn_follow = self._action_btn("mdi.eye-outline", "Слежение", checkable=True)
+        r2.addWidget(self.btn_follow)
 
-        self.btn_home = QPushButton("⟲  Домой")
+        self.btn_home = QPushButton("  Домой")
+        self.btn_home.setIcon(qta.icon("mdi.home-import-outline", color=Colors.TEXT_SECONDARY))
         self.btn_home.setCheckable(True)
         self.btn_home.setEnabled(False)
-        self.btn_home.setFixedHeight(34)
+        self.btn_home.setFixedHeight(30)
         self.btn_home.setStyleSheet(f"""
             QPushButton {{
                 background-color: {Colors.BG_INPUT};
-                color: {Colors.TEXT_DATA};
-                border: 1px solid {Colors.BORDER_BUTTON};
-                border-radius: 8px;
-                padding: 8px 16px;
-                font-size: {Fonts.SIZE_BODY}px;
-                font-weight: 500;
+                color: {Colors.TEXT_SECONDARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 6px;
+                padding: 0 10px; font-size: 12px; font-weight: 500;
             }}
             QPushButton:hover {{
-                background-color: {Colors.BG_TOOLTIP};
-                border-color: {Colors.TEXT_TERTIARY};
+                background-color: {Colors.BG_HOVER};
+                color: {Colors.TEXT_PRIMARY};
             }}
             QPushButton:checked {{
                 background-color: {Colors.WARNING};
-                color: #000000;
+                color: #000;
                 border-color: {Colors.WARNING};
             }}
             QPushButton:disabled {{
                 background-color: {Colors.BG_CARD};
-                color: {Colors.TEXT_TERTIARY};
-                border-color: {Colors.BORDER};
+                color: {Colors.TEXT_DIM};
+                border-color: {Colors.BORDER_SUBTLE};
             }}
         """)
-        row2.addWidget(self.btn_home)
+        r2.addWidget(self.btn_home)
 
-        self.btn_clear_track = QPushButton("✕ Трек")
-        self.btn_clear_track.setEnabled(False)
-        self.btn_clear_track.setFixedHeight(34)
-        row2.addWidget(self.btn_clear_track)
+        self.btn_clear_track = self._action_btn("mdi.eraser", "Трек")
+        r2.addWidget(self.btn_clear_track)
 
-        layout.addLayout(row2)
+        lay.addLayout(r2)
 
-        # Waypoint navigation row
-        wp_row = QHBoxLayout()
-        wp_row.setSpacing(6)
+        # Waypoint nav row
+        wr = QHBoxLayout()
+        wr.setSpacing(4)
 
-        self.btn_wp_prev = QPushButton("◀")
-        self.btn_wp_prev.setProperty("cssClass", "icon")
+        self.btn_wp_prev = QPushButton()
+        self.btn_wp_prev.setIcon(qta.icon("mdi.chevron-left", color=Colors.TEXT_SECONDARY))
+        self.btn_wp_prev.setFixedSize(28, 28)
         self.btn_wp_prev.setEnabled(False)
-        wp_row.addWidget(self.btn_wp_prev)
+        wr.addWidget(self.btn_wp_prev)
 
-        wp_label = QLabel("Точка:")
-        wp_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Fonts.SIZE_SMALL}px;")
-        wp_row.addWidget(wp_label)
+        wl = QLabel("WPT")
+        wl.setStyleSheet(f"color: {Colors.TEXT_TERTIARY}; font-size: 10px;")
+        wr.addWidget(wl)
 
         self.spin_waypoint = QSpinBox()
         self.spin_waypoint.setMinimum(1)
         self.spin_waypoint.setMaximum(1)
         self.spin_waypoint.setEnabled(False)
-        self.spin_waypoint.setFixedWidth(60)
-        self.spin_waypoint.setFixedHeight(32)
-        wp_row.addWidget(self.spin_waypoint)
+        self.spin_waypoint.setFixedSize(52, 28)
+        wr.addWidget(self.spin_waypoint)
 
-        self.btn_wp_next = QPushButton("▶")
-        self.btn_wp_next.setProperty("cssClass", "icon")
+        self.btn_wp_next = QPushButton()
+        self.btn_wp_next.setIcon(qta.icon("mdi.chevron-right", color=Colors.TEXT_SECONDARY))
+        self.btn_wp_next.setFixedSize(28, 28)
         self.btn_wp_next.setEnabled(False)
-        wp_row.addWidget(self.btn_wp_next)
+        wr.addWidget(self.btn_wp_next)
 
-        wp_row.addStretch()
-        layout.addLayout(wp_row)
+        wr.addStretch()
+        lay.addLayout(wr)
 
         return panel
+
+    def _action_btn(self, icon_name: str, text: str, checkable: bool = False) -> QPushButton:
+        btn = QPushButton(f"  {text}")
+        btn.setIcon(qta.icon(icon_name, color=Colors.TEXT_SECONDARY))
+        btn.setCheckable(checkable)
+        btn.setEnabled(False)
+        btn.setFixedHeight(30)
+        return btn
+
+    # ────────────────────── Connections ──────────────────────
 
     def _setup_connections(self):
         self.btn_connect.clicked.connect(self._on_connect)
@@ -346,7 +337,7 @@ class MainWindow(QMainWindow):
         self.update_timer.timeout.connect(self._update_display)
         self.update_timer.start(100)
 
-    # ─── Connection ───
+    # ────────────────────── Connection ──────────────────────
 
     def _on_connect(self):
         self.statusbar.showMessage("Подключение...")
@@ -358,25 +349,24 @@ class MainWindow(QMainWindow):
         self.proxy.stop()
         self._on_connection_lost(None)
 
+    def _enable_controls(self, enabled: bool):
+        for btn in (self.btn_nav, self.btn_set_pos, self.btn_set_home,
+                     self.btn_load_route, self.btn_clear_track,
+                     self.btn_follow, self.btn_home):
+            btn.setEnabled(enabled)
+
     def _on_connection_restored(self, data):
         self.btn_connect.setEnabled(False)
         self.btn_disconnect.setEnabled(True)
-        self.btn_nav.setEnabled(True)
-        self.btn_set_pos.setEnabled(True)
-        self.btn_set_home.setEnabled(True)
-        self.btn_load_route.setEnabled(True)
-        self.btn_clear_track.setEnabled(True)
-        self.btn_follow.setEnabled(True)
-        self.btn_home.setEnabled(True)
+        self._enable_controls(True)
 
-        self.lbl_status.setText("ПОДКЛЮЧЕНО")
+        self.lbl_status.setText("ON")
         self.lbl_status.setStyleSheet(f"""
-            color: {Colors.SUCCESS};
-            font-size: 11px; font-weight: 700;
-            padding: 4px 12px; border-radius: 12px;
+            color: {Colors.SUCCESS}; font-size: 10px; font-weight: 700;
+            padding: 2px 8px; border-radius: 10px;
             background-color: {Colors.SUCCESS_BG};
         """)
-        self.statusbar.showMessage(f"Подключено к SITL на порту {self.config.mavlink.sitl_port}")
+        self.statusbar.showMessage(f"Подключено — порт {self.config.mavlink.sitl_port}")
 
         self.btn_follow.setChecked(True)
         self.map_widget.set_follow_mode(True)
@@ -384,31 +374,24 @@ class MainWindow(QMainWindow):
     def _on_connection_lost(self, data):
         self.btn_connect.setEnabled(True)
         self.btn_disconnect.setEnabled(False)
-        self.btn_nav.setEnabled(False)
-        self.btn_set_pos.setEnabled(False)
-        self.btn_set_home.setEnabled(False)
-        self.btn_load_route.setEnabled(False)
-        self.btn_clear_track.setEnabled(False)
-        self.btn_follow.setEnabled(False)
-        self.btn_home.setEnabled(False)
+        self._enable_controls(False)
 
-        self.lbl_status.setText("ОТКЛЮЧЕНО")
+        self.lbl_status.setText("OFF")
         self.lbl_status.setStyleSheet(f"""
-            color: {Colors.ERROR};
-            font-size: 11px; font-weight: 700;
-            padding: 4px 12px; border-radius: 12px;
+            color: {Colors.ERROR}; font-size: 10px; font-weight: 700;
+            padding: 2px 8px; border-radius: 10px;
             background-color: {Colors.ERROR_BG};
         """)
         self.statusbar.showMessage("Отключено")
 
-    # ─── Position / Home ───
+    # ────────────────────── Position / Home ──────────────────────
 
     def _on_set_position_toggle(self):
         self._set_position_mode = self.btn_set_pos.isChecked()
         if self._set_position_mode:
             self.statusbar.showMessage("Кликните на карте для коррекции позиции EKF...")
         else:
-            self.statusbar.showMessage("Режим коррекции позиции отменён")
+            self.statusbar.showMessage("Режим коррекции отменён")
 
     def _on_set_home_toggle(self):
         self._set_home_mode = self.btn_set_home.isChecked()
@@ -431,7 +414,7 @@ class MainWindow(QMainWindow):
         self._set_position_mode = False
         self.btn_set_pos.setChecked(False)
         self.map_widget.set_aircraft_position(lat, lon)
-        self.statusbar.showMessage(f"Коррекция позиции отправлена: {lat:.6f}, {lon:.6f}")
+        self.statusbar.showMessage(f"Коррекция позиции: {lat:.6f}, {lon:.6f}")
 
     def _on_context_add_waypoint(self, lat: float, lon: float):
         dialog = WaypointDialog(self, lat, lon)
@@ -444,10 +427,8 @@ class MainWindow(QMainWindow):
             self.route_planner.create_route("Новый маршрут")
 
         wp = self.route_planner.add_waypoint(
-            lat=wp_data['lat'],
-            lon=wp_data['lon'],
-            altitude=wp_data['altitude'],
-            radius=wp_data['radius'],
+            lat=wp_data['lat'], lon=wp_data['lon'],
+            altitude=wp_data['altitude'], radius=wp_data['radius'],
             action=wp_data['action'],
             orbit_radius=wp_data.get('orbit_radius', 150.0),
             orbit_turns=wp_data.get('orbit_turns', 1),
@@ -457,86 +438,11 @@ class MainWindow(QMainWindow):
         if self.autopilot.is_engaged():
             status = self.autopilot.get_status()
             if status.get('is_orbiting') or status.get('returning_home'):
-                new_idx = self.route_planner.get_waypoint_count() - 1
-                self.route_planner.set_active_waypoint(new_idx)
+                self.route_planner.set_active_waypoint(
+                    self.route_planner.get_waypoint_count() - 1)
 
         self._refresh_map_waypoints()
         self.statusbar.showMessage(f"Добавлена точка {wp.id}: {lat:.6f}, {lon:.6f}")
-
-    def _on_load_route(self):
-        routes_dir = Path(__file__).parent.parent.parent / "routes"
-        routes_dir.mkdir(exist_ok=True)
-
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Загрузить маршрут", str(routes_dir), "JSON файлы (*.json)"
-        )
-
-        if file_path:
-            route = self.route_planner.load_route(Path(file_path))
-            if route:
-                self._refresh_map_waypoints()
-                self.statusbar.showMessage(f"Загружен маршрут: {route.name} ({len(route.waypoints)} точек)")
-            else:
-                QMessageBox.warning(self, "Ошибка", "Не удалось загрузить файл маршрута")
-
-    def _refresh_map_waypoints(self):
-        waypoints = self.route_planner.get_waypoints_for_display()
-        active_idx = self.route_planner.get_active_waypoint_index()
-        self.map_widget.set_waypoints(waypoints, active_idx)
-        self._update_waypoint_controls()
-
-    def _update_waypoint_controls(self):
-        wp_count = self.route_planner.get_waypoint_count()
-        has_waypoints = wp_count > 0
-
-        self.btn_wp_prev.setEnabled(has_waypoints)
-        self.btn_wp_next.setEnabled(has_waypoints)
-        self.spin_waypoint.setEnabled(has_waypoints)
-
-        if has_waypoints:
-            self.spin_waypoint.blockSignals(True)
-            self.spin_waypoint.setMaximum(wp_count)
-            self.spin_waypoint.setValue(self.route_planner.get_active_waypoint_index() + 1)
-            self.spin_waypoint.blockSignals(False)
-
-    # ─── Waypoints ───
-
-    def _on_wp_prev(self):
-        self.route_planner.prev_waypoint()
-        self._refresh_map_waypoints()
-        wp = self.route_planner.get_active_waypoint()
-        if wp:
-            self.statusbar.showMessage(f"Активная точка: {wp.id}")
-
-    def _on_wp_next(self):
-        self.route_planner.next_waypoint()
-        self._refresh_map_waypoints()
-        wp = self.route_planner.get_active_waypoint()
-        if wp:
-            self.statusbar.showMessage(f"Активная точка: {wp.id}")
-
-    def _on_wp_select(self, value: int):
-        self.route_planner.set_active_waypoint(value - 1)
-        self._refresh_map_waypoints()
-        wp = self.route_planner.get_active_waypoint()
-        if wp:
-            self.statusbar.showMessage(f"Активная точка: {wp.id}")
-
-    # ─── Map controls ───
-
-    def _on_clear_track(self):
-        self.map_widget.clear_track()
-        self.statusbar.showMessage("Трек очищен")
-
-    def _on_follow_toggle(self):
-        follow = self.btn_follow.isChecked()
-        self.map_widget.set_follow_mode(follow)
-        if follow:
-            self.statusbar.showMessage("Слежение за самолётом включено")
-        else:
-            self.statusbar.showMessage("Слежение отключено")
-
-    # ─── Home ───
 
     def _on_context_set_home(self, lat: float, lon: float):
         self._set_home_position(lat, lon)
@@ -547,25 +453,75 @@ class MainWindow(QMainWindow):
         self.map_widget.set_home_marker(lat, lon)
         self._set_home_mode = False
         self.btn_set_home.setChecked(False)
-        self.statusbar.showMessage(f"Дом установлен: {lat:.6f}, {lon:.6f}")
+        self.statusbar.showMessage(f"Дом: {lat:.6f}, {lon:.6f}")
+
+    # ────────────────────── Route / Waypoints ──────────────────────
+
+    def _on_load_route(self):
+        routes_dir = Path(__file__).parent.parent.parent / "routes"
+        routes_dir.mkdir(exist_ok=True)
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Загрузить маршрут", str(routes_dir), "JSON файлы (*.json)")
+        if file_path:
+            route = self.route_planner.load_route(Path(file_path))
+            if route:
+                self._refresh_map_waypoints()
+                self.statusbar.showMessage(f"Маршрут: {route.name} ({len(route.waypoints)} точек)")
+            else:
+                QMessageBox.warning(self, "Ошибка", "Не удалось загрузить маршрут")
+
+    def _refresh_map_waypoints(self):
+        waypoints = self.route_planner.get_waypoints_for_display()
+        active_idx = self.route_planner.get_active_waypoint_index()
+        self.map_widget.set_waypoints(waypoints, active_idx)
+        self._update_waypoint_controls()
+
+    def _update_waypoint_controls(self):
+        n = self.route_planner.get_waypoint_count()
+        for w in (self.btn_wp_prev, self.btn_wp_next, self.spin_waypoint):
+            w.setEnabled(n > 0)
+        if n > 0:
+            self.spin_waypoint.blockSignals(True)
+            self.spin_waypoint.setMaximum(n)
+            self.spin_waypoint.setValue(self.route_planner.get_active_waypoint_index() + 1)
+            self.spin_waypoint.blockSignals(False)
+
+    def _on_wp_prev(self):
+        self.route_planner.prev_waypoint()
+        self._refresh_map_waypoints()
+
+    def _on_wp_next(self):
+        self.route_planner.next_waypoint()
+        self._refresh_map_waypoints()
+
+    def _on_wp_select(self, value: int):
+        self.route_planner.set_active_waypoint(value - 1)
+        self._refresh_map_waypoints()
+
+    # ────────────────────── Map controls ──────────────────────
+
+    def _on_clear_track(self):
+        self.map_widget.clear_track()
+        self.statusbar.showMessage("Трек очищен")
+
+    def _on_follow_toggle(self):
+        self.map_widget.set_follow_mode(self.btn_follow.isChecked())
+
+    # ────────────────────── Autopilot ──────────────────────
 
     def _on_home_toggle(self):
         if self.btn_home.isChecked():
             if not self._home_position:
                 self.btn_home.setChecked(False)
-                self.statusbar.showMessage("Сначала установите точку Дом на карте")
+                self.statusbar.showMessage("Установите точку Дом на карте")
                 return
-
             if self.autopilot.engage_home():
                 self.btn_nav.setChecked(False)
-                self.statusbar.showMessage("Возврат домой активирован")
+                self.statusbar.showMessage("Возврат домой")
             else:
                 self.btn_home.setChecked(False)
-                self.statusbar.showMessage("Не удалось активировать возврат домой")
         else:
             self.autopilot.disengage("Отключено пользователем")
-
-    # ─── Nav ───
 
     def _on_nav_toggle(self):
         if self.btn_nav.isChecked():
@@ -573,122 +529,92 @@ class MainWindow(QMainWindow):
                 route = self.route_planner.get_route()
                 wp = self.route_planner.get_active_waypoint()
                 if route and wp:
-                    self.statusbar.showMessage(f"Навигация: точка {wp.id}/{len(route.waypoints)}")
+                    self.statusbar.showMessage(f"Навигация: WPT {wp.id}/{len(route.waypoints)}")
             else:
                 self.btn_nav.setChecked(False)
                 if not self.route_planner.get_route():
-                    self.statusbar.showMessage("Загрузите маршрут для навигации")
+                    self.statusbar.showMessage("Загрузите маршрут")
                 else:
                     self.statusbar.showMessage("Не удалось включить навигацию")
         else:
             self.autopilot.disengage("Отключено пользователем")
 
-    # ─── Autopilot events ───
-
     def _on_autopilot_engage(self, data):
-        mode = data.get('mode', '')
-        if mode == 'NAV':
+        if data.get('mode') == 'NAV':
             self.btn_nav.setChecked(True)
-            wp_id = data.get('waypoint', 0)
-            total = data.get('total', 0)
-            self.statusbar.showMessage(f"Навигация: точка {wp_id}/{total}")
 
     def _on_autopilot_disengage(self, data):
         self.btn_nav.setChecked(False)
         self.btn_home.setChecked(False)
-
         reason = data.get('reason', '')
-        if reason:
-            self.statusbar.showMessage(f"Автопилот отключён: {reason}")
-        else:
-            self.statusbar.showMessage("Автопилот отключён")
+        self.statusbar.showMessage(f"АП откл.: {reason}" if reason else "АП отключен")
 
     def _on_waypoint_reached(self, data):
-        reached = data.get('reached', 0)
         next_wp = data.get('next', 0)
         total = self.route_planner.get_waypoint_count()
         self.map_widget.update_active_waypoint(next_wp - 1)
-        self.statusbar.showMessage(f"Достигнута точка {reached}, следующая: {next_wp}/{total}")
+        self.statusbar.showMessage(f"WPT {data.get('reached', 0)} reached → {next_wp}/{total}")
 
-    # ─── Parameter changes ───
+    # ────────────────────── Param changes ──────────────────────
 
-    def _on_orbit_radius_changed(self, radius: int):
-        self.autopilot.set_orbit_radius(float(radius))
-        self.statusbar.showMessage(f"Радиус кружения: {radius} м")
+    def _on_orbit_radius_changed(self, r):
+        self.autopilot.set_orbit_radius(float(r))
 
-    def _on_target_altitude_changed(self, altitude: int):
-        self.autopilot.set_target_altitude(float(altitude))
-        self.statusbar.showMessage(f"Целевая высота: {altitude} м")
+    def _on_target_altitude_changed(self, a):
+        self.autopilot.set_target_altitude(float(a))
 
-    def _on_target_airspeed_changed(self, speed: int):
-        self.autopilot.set_target_airspeed(float(speed))
-        self.statusbar.showMessage(f"Целевая скорость: {speed} м/с")
+    def _on_target_airspeed_changed(self, s):
+        self.autopilot.set_target_airspeed(float(s))
 
-    def _on_wind_override(self, direction: int, speed: int):
+    def _on_wind_override(self, direction, speed):
         self.proxy.send_wind_override(direction, speed)
-        self.statusbar.showMessage(f"Ветер установлен: {direction}° / {speed} м/с")
+        self.statusbar.showMessage(f"Ветер: {direction}° / {speed} м/с")
 
-    # ─── Display update ───
+    # ────────────────────── Display loop ──────────────────────
 
     def _update_display(self):
         if not self.proxy.is_connected():
             return
 
         telemetry = self.proxy.get_telemetry()
-
         self.status_panel.update_telemetry(telemetry)
+        self.lbl_mode.setText(telemetry.mode or "---")
 
-        # Update mode badge in header
-        mode_text = telemetry.mode or "---"
-        self.lbl_mode.setText(mode_text)
+        pos = telemetry.position
+        if pos:
+            self.map_widget.update_aircraft(pos.lat, pos.lon, telemetry.heading)
 
-        display_position = telemetry.position
-
-        if display_position:
-            self.map_widget.update_aircraft(
-                display_position.lat,
-                display_position.lon,
-                telemetry.heading
-            )
-
-            ap_status = self.autopilot.get_status()
-            if ap_status.get('returning_home', False) and self._home_position:
-                distance = haversine_distance(
-                    display_position.lat, display_position.lon,
-                    self._home_position.lat, self._home_position.lon
-                )
-                eta = eta_seconds(distance, telemetry.groundspeed)
-                minutes = int(eta // 60) if eta != float('inf') else 99
-                seconds = int(eta % 60) if eta != float('inf') else 99
-                self.status_panel.labels["Точка"][0].setText("Дом")
-                self.status_panel.labels["Дистанция"][0].setText(f"{distance / 1000:.2f} км")
-                self.status_panel.labels["Время приб."][0].setText(f"{minutes:02d}:{seconds:02d}")
-                self.status_panel.labels["Бок. уклон."][0].setText("--- м")
+            ap = self.autopilot.get_status()
+            if ap.get('returning_home') and self._home_position:
+                d = haversine_distance(pos.lat, pos.lon,
+                                       self._home_position.lat, self._home_position.lon)
+                e = eta_seconds(d, telemetry.groundspeed)
+                m = int(e // 60) if e != float('inf') else 99
+                s = int(e % 60) if e != float('inf') else 99
+                self.status_panel.labels["Точка"][0].setText("HOME")
+                self.status_panel.labels["Дистанция"][0].setText(f"{d / 1000:.2f} км")
+                self.status_panel.labels["Время приб."][0].setText(f"{m:02d}:{s:02d}")
+                self.status_panel.labels["Бок. уклон."][0].setText("---")
             elif self.route_planner.get_route():
                 if not self.autopilot.is_engaged():
-                    if self.route_planner.is_waypoint_reached(display_position):
-                        old_idx = self.route_planner.get_active_waypoint_index()
+                    if self.route_planner.is_waypoint_reached(pos):
+                        old = self.route_planner.get_active_waypoint_index()
                         self.route_planner.next_waypoint()
-                        new_idx = self.route_planner.get_active_waypoint_index()
-                        if new_idx != old_idx:
-                            self.map_widget.update_active_waypoint(new_idx)
-                            self.statusbar.showMessage(f"Достигнута точка {old_idx + 1}, следующая: {new_idx + 1}")
+                        new = self.route_planner.get_active_waypoint_index()
+                        if new != old:
+                            self.map_widget.update_active_waypoint(new)
 
-                distance = self.route_planner.distance_to_waypoint(display_position)
-                eta = self.route_planner.eta_to_waypoint(display_position, telemetry.groundspeed)
-                xtk = self.route_planner.cross_track_error(display_position)
-                wp_idx = self.route_planner.get_active_waypoint_index()
-                wp_total = self.route_planner.get_waypoint_count()
-
-                self.status_panel.update_navigation(wp_idx + 1, wp_total, distance, eta, xtk)
+                dist = self.route_planner.distance_to_waypoint(pos)
+                eta = self.route_planner.eta_to_waypoint(pos, telemetry.groundspeed)
+                xtk = self.route_planner.cross_track_error(pos)
+                idx = self.route_planner.get_active_waypoint_index()
+                total = self.route_planner.get_waypoint_count()
+                self.status_panel.update_navigation(idx + 1, total, dist, eta, xtk)
 
         self.autopilot.update()
-        self._update_autopilot_display()
 
-    def _update_autopilot_display(self):
         mode = self.autopilot.get_mode()
         status = self.autopilot.get_status()
-
         if mode == AutopilotMode.MANUAL:
             self.status_panel.update_autopilot('MANUAL', status)
         elif mode == AutopilotMode.NAV:

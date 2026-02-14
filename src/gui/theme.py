@@ -1,110 +1,103 @@
 """
-Dark analytics dashboard theme for VTOL Co-Pilot.
-Inspired by Stripe Dashboard, Linear, Vercel — dark mode with blue accents.
+Dark theme for VTOL Co-Pilot.
+Stripe/Linear/Vercel-inspired dark mode with blue accents.
 """
 
 
 class Colors:
-    # Backgrounds (dark to light)
+    # Backgrounds
     BG_APP = "#0B0F1A"
     BG_CARD = "#111827"
-    BG_SIDEBAR = "#0D1117"
+    BG_SIDEBAR = "#0F1320"
     BG_INPUT = "#1A2035"
-    BG_HOVER = "#1A2035"
+    BG_HOVER = "#1E293B"
     BG_TOOLTIP = "#1E293B"
+    BG_ELEVATED = "#162031"
 
     # Accents
     PRIMARY = "#2563EB"
     PRIMARY_HOVER = "#3B82F6"
     PRIMARY_LIGHT = "#3B82F6"
+    PRIMARY_DIM = "rgba(37, 99, 235, 0.15)"
     SUCCESS = "#22C55E"
-    SUCCESS_BG = "rgba(34, 197, 94, 0.1)"
+    SUCCESS_BG = "rgba(34, 197, 94, 0.12)"
     ERROR = "#EF4444"
-    ERROR_BG = "rgba(239, 68, 68, 0.1)"
+    ERROR_BG = "rgba(239, 68, 68, 0.12)"
     WARNING = "#F59E0B"
-    WARNING_HOVER = "#FBBF24"
+    WARNING_BG = "rgba(245, 158, 11, 0.12)"
 
     # Text
-    TEXT_PRIMARY = "#F9FAFB"
-    TEXT_SECONDARY = "#9CA3AF"
-    TEXT_TERTIARY = "#6B7280"
-    TEXT_DATA = "#D1D5DB"
+    TEXT_PRIMARY = "#F1F5F9"
+    TEXT_SECONDARY = "#94A3B8"
+    TEXT_TERTIARY = "#64748B"
+    TEXT_DIM = "#475569"
 
     # Borders
-    BORDER = "#1F2937"
-    BORDER_TABLE = "#1E293B"
-    BORDER_BUTTON = "#374151"
+    BORDER = "#1E293B"
+    BORDER_LIGHT = "#334155"
+    BORDER_SUBTLE = "#1A2332"
 
 
 class Fonts:
-    FAMILY = "Segoe UI, Inter, -apple-system, sans-serif"
-    MONO = "Consolas, JetBrains Mono, Fira Code, monospace"
-    SIZE_METRIC_LARGE = 26
-    SIZE_METRIC = 18
-    SIZE_HEADING = 14
-    SIZE_BODY = 13
-    SIZE_SMALL = 11
-    SIZE_BADGE = 11
+    FAMILY = "Segoe UI"
+    MONO = "Consolas"
 
 
 STYLESHEET = f"""
 /* ===== Global ===== */
-QMainWindow, QWidget {{
+QMainWindow {{
     background-color: {Colors.BG_APP};
     color: {Colors.TEXT_PRIMARY};
-    font-family: {Fonts.FAMILY};
-    font-size: {Fonts.SIZE_BODY}px;
+}}
+QWidget {{
+    font-family: "{Fonts.FAMILY}";
+    font-size: 13px;
+    color: {Colors.TEXT_PRIMARY};
 }}
 
 /* ===== Scrollbar ===== */
 QScrollBar:vertical {{
     background: transparent;
-    width: 6px;
+    width: 5px;
     margin: 0;
 }}
 QScrollBar::handle:vertical {{
-    background: {Colors.BORDER_BUTTON};
-    border-radius: 3px;
-    min-height: 20px;
+    background: {Colors.BORDER_LIGHT};
+    border-radius: 2px;
+    min-height: 24px;
+}}
+QScrollBar::handle:vertical:hover {{
+    background: {Colors.TEXT_TERTIARY};
 }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
     height: 0;
 }}
-QScrollBar:horizontal {{
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
     background: transparent;
-    height: 6px;
-    margin: 0;
-}}
-QScrollBar::handle:horizontal {{
-    background: {Colors.BORDER_BUTTON};
-    border-radius: 3px;
-    min-width: 20px;
-}}
-QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
-    width: 0;
 }}
 
 /* ===== QPushButton ===== */
 QPushButton {{
     background-color: {Colors.BG_INPUT};
-    color: {Colors.TEXT_DATA};
-    border: 1px solid {Colors.BORDER_BUTTON};
-    border-radius: 8px;
-    padding: 8px 16px;
-    font-size: {Fonts.SIZE_BODY}px;
+    color: {Colors.TEXT_SECONDARY};
+    border: 1px solid {Colors.BORDER};
+    border-radius: 6px;
+    padding: 6px 14px;
     font-weight: 500;
+    font-size: 12px;
 }}
 QPushButton:hover {{
-    background-color: {Colors.BG_TOOLTIP};
-    border-color: {Colors.TEXT_TERTIARY};
+    background-color: {Colors.BG_HOVER};
+    color: {Colors.TEXT_PRIMARY};
+    border-color: {Colors.BORDER_LIGHT};
 }}
 QPushButton:pressed {{
-    background-color: {Colors.BORDER_BUTTON};
+    background-color: {Colors.BORDER_LIGHT};
 }}
 QPushButton:disabled {{
     background-color: {Colors.BG_CARD};
-    color: {Colors.TEXT_TERTIARY};
-    border-color: {Colors.BORDER};
+    color: {Colors.TEXT_DIM};
+    border-color: {Colors.BORDER_SUBTLE};
 }}
 QPushButton:checked {{
     background-color: {Colors.PRIMARY};
@@ -115,85 +108,15 @@ QPushButton:checked:hover {{
     background-color: {Colors.PRIMARY_HOVER};
 }}
 
-/* Primary button class */
-QPushButton[cssClass="primary"] {{
-    background-color: {Colors.PRIMARY};
-    color: #ffffff;
-    border: none;
-    font-weight: 600;
-}}
-QPushButton[cssClass="primary"]:hover {{
-    background-color: {Colors.PRIMARY_HOVER};
-}}
-QPushButton[cssClass="primary"]:pressed {{
-    background-color: #1D4ED8;
-}}
-
-/* Danger button */
-QPushButton[cssClass="danger"] {{
-    background-color: transparent;
-    color: {Colors.ERROR};
-    border: 1px solid {Colors.ERROR};
-}}
-QPushButton[cssClass="danger"]:hover {{
-    background-color: {Colors.ERROR_BG};
-}}
-
-/* Success button */
-QPushButton[cssClass="success"] {{
-    background-color: {Colors.SUCCESS};
-    color: #ffffff;
-    border: none;
-}}
-QPushButton[cssClass="success"]:hover {{
-    background-color: #16A34A;
-}}
-
-/* Warning button */
-QPushButton[cssClass="warning"] {{
-    background-color: {Colors.WARNING};
-    color: #000000;
-    border: none;
-    font-weight: 600;
-}}
-QPushButton[cssClass="warning"]:hover {{
-    background-color: {Colors.WARNING_HOVER};
-}}
-
-/* Small icon button */
-QPushButton[cssClass="icon"] {{
-    padding: 6px;
-    min-width: 32px;
-    max-width: 32px;
-    min-height: 32px;
-    max-height: 32px;
-    border-radius: 8px;
-    font-size: 14px;
-}}
-
-/* ===== QLabel ===== */
-QLabel {{
-    color: {Colors.TEXT_PRIMARY};
-    background: transparent;
-}}
-
-/* ===== QFrame (Card) ===== */
-QFrame[cssClass="card"] {{
-    background-color: {Colors.BG_CARD};
-    border: 1px solid {Colors.BORDER};
-    border-radius: 12px;
-    padding: 0px;
-}}
-
 /* ===== QSpinBox ===== */
 QSpinBox {{
     background-color: {Colors.BG_INPUT};
     color: {Colors.TEXT_PRIMARY};
     border: 1px solid {Colors.BORDER};
-    border-radius: 8px;
-    padding: 6px 8px;
-    font-family: {Fonts.MONO};
-    font-size: {Fonts.SIZE_BODY}px;
+    border-radius: 6px;
+    padding: 4px 6px;
+    font-family: "{Fonts.MONO}";
+    font-size: 12px;
     selection-background-color: {Colors.PRIMARY};
 }}
 QSpinBox:focus {{
@@ -201,26 +124,26 @@ QSpinBox:focus {{
 }}
 QSpinBox:disabled {{
     background-color: {Colors.BG_CARD};
-    color: {Colors.TEXT_TERTIARY};
-    border-color: {Colors.BORDER};
+    color: {Colors.TEXT_DIM};
+    border-color: {Colors.BORDER_SUBTLE};
 }}
 QSpinBox::up-button, QSpinBox::down-button {{
-    width: 20px;
+    width: 16px;
     border: none;
     background: transparent;
 }}
 QSpinBox::up-arrow {{
     image: none;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-bottom: 5px solid {Colors.TEXT_SECONDARY};
+    border-left: 3px solid transparent;
+    border-right: 3px solid transparent;
+    border-bottom: 4px solid {Colors.TEXT_TERTIARY};
     width: 0; height: 0;
 }}
 QSpinBox::down-arrow {{
     image: none;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-top: 5px solid {Colors.TEXT_SECONDARY};
+    border-left: 3px solid transparent;
+    border-right: 3px solid transparent;
+    border-top: 4px solid {Colors.TEXT_TERTIARY};
     width: 0; height: 0;
 }}
 
@@ -229,45 +152,44 @@ QComboBox {{
     background-color: {Colors.BG_INPUT};
     color: {Colors.TEXT_PRIMARY};
     border: 1px solid {Colors.BORDER};
-    border-radius: 8px;
-    padding: 6px 12px;
-    font-size: {Fonts.SIZE_BODY}px;
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 12px;
 }}
 QComboBox:focus {{
     border-color: {Colors.PRIMARY};
 }}
 QComboBox::drop-down {{
     border: none;
-    width: 24px;
+    width: 20px;
 }}
 QComboBox::down-arrow {{
     image: none;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-top: 5px solid {Colors.TEXT_SECONDARY};
+    border-left: 3px solid transparent;
+    border-right: 3px solid transparent;
+    border-top: 4px solid {Colors.TEXT_TERTIARY};
     width: 0; height: 0;
 }}
 QComboBox QAbstractItemView {{
-    background-color: {Colors.BG_TOOLTIP};
+    background-color: {Colors.BG_HOVER};
     color: {Colors.TEXT_PRIMARY};
     border: 1px solid {Colors.BORDER};
-    border-radius: 8px;
     selection-background-color: {Colors.BG_INPUT};
     outline: none;
-    padding: 4px;
+    padding: 2px;
 }}
 
 /* ===== QCheckBox ===== */
 QCheckBox {{
     color: {Colors.TEXT_PRIMARY};
-    spacing: 8px;
-    font-size: {Fonts.SIZE_BODY}px;
+    spacing: 6px;
+    font-size: 12px;
 }}
 QCheckBox::indicator {{
-    width: 18px;
-    height: 18px;
-    border: 1px solid {Colors.BORDER_BUTTON};
-    border-radius: 4px;
+    width: 16px;
+    height: 16px;
+    border: 1px solid {Colors.BORDER_LIGHT};
+    border-radius: 3px;
     background-color: {Colors.BG_INPUT};
 }}
 QCheckBox::indicator:checked {{
@@ -279,52 +201,50 @@ QCheckBox::indicator:checked {{
 QGroupBox {{
     background-color: {Colors.BG_CARD};
     border: 1px solid {Colors.BORDER};
-    border-radius: 12px;
-    margin-top: 16px;
-    padding: 16px 12px 12px 12px;
-    font-size: {Fonts.SIZE_HEADING}px;
+    border-radius: 8px;
+    margin-top: 14px;
+    padding: 14px 10px 10px 10px;
     font-weight: 600;
     color: {Colors.TEXT_PRIMARY};
 }}
 QGroupBox::title {{
     subcontrol-origin: margin;
     subcontrol-position: top left;
-    padding: 0 8px;
-    left: 12px;
-    color: {Colors.TEXT_SECONDARY};
-    font-size: {Fonts.SIZE_SMALL}px;
+    padding: 0 6px;
+    left: 10px;
+    color: {Colors.TEXT_TERTIARY};
+    font-size: 10px;
     font-weight: 600;
-    text-transform: uppercase;
 }}
 
 /* ===== QStatusBar ===== */
 QStatusBar {{
     background-color: {Colors.BG_SIDEBAR};
-    color: {Colors.TEXT_SECONDARY};
-    border-top: 1px solid {Colors.BORDER};
-    font-size: {Fonts.SIZE_SMALL}px;
-    padding: 4px 12px;
+    color: {Colors.TEXT_TERTIARY};
+    border-top: 1px solid {Colors.BORDER_SUBTLE};
+    font-size: 11px;
+    padding: 2px 10px;
 }}
 
 /* ===== QSplitter ===== */
 QSplitter::handle {{
-    background-color: {Colors.BORDER};
+    background-color: {Colors.BORDER_SUBTLE};
     width: 1px;
 }}
 QSplitter::handle:hover {{
     background-color: {Colors.PRIMARY};
 }}
 
-/* ===== QMenu (context) ===== */
+/* ===== QMenu ===== */
 QMenu {{
-    background-color: {Colors.BG_TOOLTIP};
+    background-color: {Colors.BG_HOVER};
     color: {Colors.TEXT_PRIMARY};
     border: 1px solid {Colors.BORDER};
     border-radius: 8px;
     padding: 4px;
 }}
 QMenu::item {{
-    padding: 8px 16px;
+    padding: 6px 14px;
     border-radius: 4px;
 }}
 QMenu::item:selected {{
@@ -344,24 +264,11 @@ QDialog {{
 
 /* ===== QToolTip ===== */
 QToolTip {{
-    background-color: {Colors.BG_TOOLTIP};
+    background-color: {Colors.BG_HOVER};
     color: {Colors.TEXT_PRIMARY};
     border: 1px solid {Colors.BORDER};
-    border-radius: 6px;
-    padding: 6px 10px;
-    font-size: {Fonts.SIZE_SMALL}px;
-}}
-
-/* ===== QMessageBox ===== */
-QMessageBox {{
-    background-color: {Colors.BG_APP};
-}}
-QMessageBox QLabel {{
-    color: {Colors.TEXT_PRIMARY};
-}}
-
-/* ===== QFileDialog ===== */
-QFileDialog {{
-    background-color: {Colors.BG_APP};
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 11px;
 }}
 """

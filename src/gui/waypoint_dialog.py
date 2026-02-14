@@ -1,3 +1,4 @@
+import qtawesome as qta
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QSpinBox, QComboBox, QCheckBox,
@@ -25,46 +26,26 @@ class WaypointDialog(QDialog):
     def _setup_ui(self):
         self.setWindowTitle("Добавить точку маршрута")
         self.setMinimumWidth(320)
-        self.setStyleSheet(f"""
-            QDialog {{
-                background-color: {Colors.BG_APP};
-                color: {Colors.TEXT_PRIMARY};
-            }}
-            QLabel {{
-                color: {Colors.TEXT_SECONDARY};
-                font-size: {Fonts.SIZE_BODY}px;
-            }}
-        """)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
-        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setContentsMargins(16, 16, 16, 16)
 
-        # Title
-        title = QLabel("Новая точка маршрута")
-        title.setStyleSheet(f"""
-            color: {Colors.TEXT_PRIMARY};
-            font-size: 16px;
-            font-weight: 700;
-        """)
-        layout.addWidget(title)
-
-        # Coordinates card
+        # Coordinates
         coord_group = QGroupBox("Координаты")
         coord_layout = QFormLayout(coord_group)
         coord_layout.setSpacing(6)
 
         self.lbl_lat = QLabel(f"{self._lat:.6f}")
-        self.lbl_lat.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-family: {Fonts.MONO}; font-weight: 600;")
+        self.lbl_lat.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-family: '{Fonts.MONO}'; font-weight: 600;")
         self.lbl_lon = QLabel(f"{self._lon:.6f}")
-        self.lbl_lon.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-family: {Fonts.MONO}; font-weight: 600;")
+        self.lbl_lon.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-family: '{Fonts.MONO}'; font-weight: 600;")
 
         coord_layout.addRow("Широта:", self.lbl_lat)
         coord_layout.addRow("Долгота:", self.lbl_lon)
-
         layout.addWidget(coord_group)
 
-        # Parameters card
+        # Parameters
         params_group = QGroupBox("Параметры")
         params_layout = QFormLayout(params_group)
         params_layout.setSpacing(8)
@@ -76,7 +57,6 @@ class WaypointDialog(QDialog):
         params_layout.addRow("Высота:", self.spin_altitude)
 
         self.chk_climb_enroute = QCheckBox("Набирать высоту в процессе полёта")
-        self.chk_climb_enroute.setChecked(False)
         params_layout.addRow("", self.chk_climb_enroute)
 
         self.combo_type = QComboBox()
@@ -90,10 +70,9 @@ class WaypointDialog(QDialog):
         self.spin_radius.setValue(150)
         self.spin_radius.setSuffix(" м")
         params_layout.addRow("Радиус принятия:", self.spin_radius)
-
         layout.addWidget(params_group)
 
-        # Orbit parameters card
+        # Orbit
         orbit_group = QGroupBox("Кружение")
         orbit_layout = QFormLayout(orbit_group)
         orbit_layout.setSpacing(8)
@@ -118,34 +97,38 @@ class WaypointDialog(QDialog):
         btn_layout.setSpacing(8)
 
         self.btn_cancel = QPushButton("Отмена")
-        self.btn_cancel.setFixedHeight(36)
+        self.btn_cancel.setFixedHeight(32)
         self.btn_cancel.clicked.connect(self.reject)
         btn_layout.addWidget(self.btn_cancel)
 
         btn_layout.addStretch()
 
-        self.btn_ok = QPushButton("Добавить")
-        self.btn_ok.setProperty("cssClass", "primary")
-        self.btn_ok.setFixedHeight(36)
+        self.btn_ok = QPushButton("  Добавить")
+        self.btn_ok.setIcon(qta.icon("mdi.plus", color="#fff"))
+        self.btn_ok.setFixedHeight(32)
+        self.btn_ok.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {Colors.PRIMARY};
+                color: #fff; border: none; border-radius: 6px;
+                padding: 0 14px; font-weight: 600;
+            }}
+            QPushButton:hover {{ background-color: {Colors.PRIMARY_HOVER}; }}
+        """)
         self.btn_ok.clicked.connect(self.accept)
         btn_layout.addWidget(self.btn_ok)
 
         layout.addLayout(btn_layout)
-
         self._on_type_changed(0)
 
     def _on_type_changed(self, index):
         type_id = self.combo_type.currentData()
-
         is_orbit = type_id in ("ORBIT_TURNS", "ORBIT_INFINITE", "ALTITUDE")
         self.orbit_group.setVisible(is_orbit)
         self.spin_orbit_turns.setEnabled(type_id == "ORBIT_TURNS")
-
         self.adjustSize()
 
     def get_waypoint_data(self) -> dict:
         type_id = self.combo_type.currentData()
-
         data = {
             'lat': self._lat,
             'lon': self._lon,
@@ -154,11 +137,8 @@ class WaypointDialog(QDialog):
             'radius': self.spin_radius.value(),
             'climb_enroute': self.chk_climb_enroute.isChecked(),
         }
-
         if type_id in ("ORBIT_TURNS", "ORBIT_INFINITE", "ALTITUDE"):
             data['orbit_radius'] = self.spin_orbit_radius.value()
-
             if type_id == "ORBIT_TURNS":
                 data['orbit_turns'] = self.spin_orbit_turns.value()
-
         return data
