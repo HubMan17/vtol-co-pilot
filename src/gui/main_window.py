@@ -20,7 +20,7 @@ from src.autopilot.autopilot_manager import AutopilotManager, AutopilotMode
 from src.gui.status_panel import StatusPanel
 from src.gui.map_widget import MapWidget
 from src.gui.waypoint_dialog import WaypointDialog
-from src.gui.theme import STYLESHEET, Colors, Fonts
+from src.gui.theme import STYLESHEET, Colors, Fonts, apply_dark_titlebar
 
 
 class MainWindow(QMainWindow):
@@ -50,6 +50,8 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         self._setup_connections()
         self._setup_timer()
+
+        apply_dark_titlebar(int(self.winId()))
 
     # ────────────────────── UI ──────────────────────
 

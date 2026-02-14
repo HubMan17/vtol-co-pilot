@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt
 
-from src.gui.theme import Colors, Fonts
+from src.gui.theme import Colors, Fonts, apply_dark_titlebar
 
 
 class WaypointDialog(QDialog):
@@ -22,6 +22,7 @@ class WaypointDialog(QDialog):
         self._lat = lat
         self._lon = lon
         self._setup_ui()
+        apply_dark_titlebar(int(self.winId()))
 
     def _setup_ui(self):
         self.setWindowTitle("Добавить точку маршрута")

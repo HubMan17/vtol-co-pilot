@@ -1,11 +1,13 @@
 """
 Dark theme for VTOL Co-Pilot.
-Stripe/Linear/Vercel-inspired dark mode with blue accents.
+Fully dark — no light surfaces anywhere.
 """
+import ctypes
+import sys
 
 
 class Colors:
-    # Backgrounds
+    # Backgrounds — everything near-black
     BG_APP = "#0B0F1A"
     BG_CARD = "#111827"
     BG_SIDEBAR = "#0F1320"
@@ -43,19 +45,40 @@ class Fonts:
     MONO = "Consolas"
 
 
+def apply_dark_titlebar(hwnd: int):
+    """Enable dark title bar on Windows 10/11 via DWM."""
+    if sys.platform != "win32":
+        return
+    try:
+        DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+        value = ctypes.c_int(1)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            ctypes.byref(value),
+            ctypes.sizeof(value),
+        )
+    except Exception:
+        pass
+
+
 STYLESHEET = f"""
-/* ===== Global ===== */
+/* ===== Global — force dark on everything ===== */
+* {{
+    background-color: transparent;
+    color: {Colors.TEXT_PRIMARY};
+}}
 QMainWindow {{
     background-color: {Colors.BG_APP};
-    color: {Colors.TEXT_PRIMARY};
 }}
 QWidget {{
     font-family: "{Fonts.FAMILY}";
     font-size: 13px;
     color: {Colors.TEXT_PRIMARY};
+    background-color: transparent;
 }}
 
-/* ===== Scrollbar ===== */
+/* ===== Scrollbars (both axes) ===== */
 QScrollBar:vertical {{
     background: transparent;
     width: 5px;
@@ -73,6 +96,25 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
     height: 0;
 }}
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+    background: transparent;
+}}
+QScrollBar:horizontal {{
+    background: transparent;
+    height: 5px;
+    margin: 0;
+}}
+QScrollBar::handle:horizontal {{
+    background: {Colors.BORDER_LIGHT};
+    border-radius: 2px;
+    min-width: 24px;
+}}
+QScrollBar::handle:horizontal:hover {{
+    background: {Colors.TEXT_TERTIARY};
+}}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+    width: 0;
+}}
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
     background: transparent;
 }}
 
@@ -108,8 +150,8 @@ QPushButton:checked:hover {{
     background-color: {Colors.PRIMARY_HOVER};
 }}
 
-/* ===== QSpinBox ===== */
-QSpinBox {{
+/* ===== QSpinBox / QDoubleSpinBox ===== */
+QSpinBox, QDoubleSpinBox {{
     background-color: {Colors.BG_INPUT};
     color: {Colors.TEXT_PRIMARY};
     border: 1px solid {Colors.BORDER};
@@ -119,32 +161,46 @@ QSpinBox {{
     font-size: 12px;
     selection-background-color: {Colors.PRIMARY};
 }}
-QSpinBox:focus {{
+QSpinBox:focus, QDoubleSpinBox:focus {{
     border-color: {Colors.PRIMARY};
 }}
-QSpinBox:disabled {{
+QSpinBox:disabled, QDoubleSpinBox:disabled {{
     background-color: {Colors.BG_CARD};
     color: {Colors.TEXT_DIM};
     border-color: {Colors.BORDER_SUBTLE};
 }}
-QSpinBox::up-button, QSpinBox::down-button {{
+QSpinBox::up-button, QSpinBox::down-button,
+QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{
     width: 16px;
     border: none;
     background: transparent;
 }}
-QSpinBox::up-arrow {{
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
     image: none;
     border-left: 3px solid transparent;
     border-right: 3px solid transparent;
     border-bottom: 4px solid {Colors.TEXT_TERTIARY};
     width: 0; height: 0;
 }}
-QSpinBox::down-arrow {{
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
     image: none;
     border-left: 3px solid transparent;
     border-right: 3px solid transparent;
     border-top: 4px solid {Colors.TEXT_TERTIARY};
     width: 0; height: 0;
+}}
+
+/* ===== QLineEdit / QTextEdit / QPlainTextEdit ===== */
+QLineEdit, QTextEdit, QPlainTextEdit {{
+    background-color: {Colors.BG_INPUT};
+    color: {Colors.TEXT_PRIMARY};
+    border: 1px solid {Colors.BORDER};
+    border-radius: 6px;
+    padding: 4px 8px;
+    selection-background-color: {Colors.PRIMARY};
+}}
+QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {{
+    border-color: {Colors.PRIMARY};
 }}
 
 /* ===== QComboBox ===== */
@@ -171,10 +227,10 @@ QComboBox::down-arrow {{
     width: 0; height: 0;
 }}
 QComboBox QAbstractItemView {{
-    background-color: {Colors.BG_HOVER};
+    background-color: {Colors.BG_CARD};
     color: {Colors.TEXT_PRIMARY};
     border: 1px solid {Colors.BORDER};
-    selection-background-color: {Colors.BG_INPUT};
+    selection-background-color: {Colors.BG_HOVER};
     outline: none;
     padding: 2px;
 }}
@@ -217,6 +273,17 @@ QGroupBox::title {{
     font-weight: 600;
 }}
 
+/* ===== QLabel ===== */
+QLabel {{
+    background: transparent;
+    border: none;
+}}
+
+/* ===== QFrame ===== */
+QFrame {{
+    border: none;
+}}
+
 /* ===== QStatusBar ===== */
 QStatusBar {{
     background-color: {Colors.BG_SIDEBAR};
@@ -224,6 +291,9 @@ QStatusBar {{
     border-top: 1px solid {Colors.BORDER_SUBTLE};
     font-size: 11px;
     padding: 2px 10px;
+}}
+QStatusBar QLabel {{
+    color: {Colors.TEXT_TERTIARY};
 }}
 
 /* ===== QSplitter ===== */
@@ -237,7 +307,7 @@ QSplitter::handle:hover {{
 
 /* ===== QMenu ===== */
 QMenu {{
-    background-color: {Colors.BG_HOVER};
+    background-color: {Colors.BG_CARD};
     color: {Colors.TEXT_PRIMARY};
     border: 1px solid {Colors.BORDER};
     border-radius: 8px;
@@ -248,7 +318,7 @@ QMenu::item {{
     border-radius: 4px;
 }}
 QMenu::item:selected {{
-    background-color: {Colors.BG_INPUT};
+    background-color: {Colors.BG_HOVER};
 }}
 QMenu::separator {{
     height: 1px;
@@ -262,13 +332,83 @@ QDialog {{
     color: {Colors.TEXT_PRIMARY};
 }}
 
+/* ===== QMessageBox ===== */
+QMessageBox {{
+    background-color: {Colors.BG_APP};
+    color: {Colors.TEXT_PRIMARY};
+}}
+QMessageBox QLabel {{
+    color: {Colors.TEXT_PRIMARY};
+}}
+
+/* ===== QFileDialog ===== */
+QFileDialog {{
+    background-color: {Colors.BG_APP};
+    color: {Colors.TEXT_PRIMARY};
+}}
+
 /* ===== QToolTip ===== */
 QToolTip {{
-    background-color: {Colors.BG_HOVER};
+    background-color: {Colors.BG_CARD};
     color: {Colors.TEXT_PRIMARY};
     border: 1px solid {Colors.BORDER};
     border-radius: 4px;
     padding: 4px 8px;
     font-size: 11px;
+}}
+
+/* ===== QScrollArea ===== */
+QScrollArea {{
+    background: transparent;
+    border: none;
+}}
+
+/* ===== QTabWidget / QTabBar ===== */
+QTabWidget::pane {{
+    background-color: {Colors.BG_APP};
+    border: 1px solid {Colors.BORDER};
+}}
+QTabBar::tab {{
+    background-color: {Colors.BG_CARD};
+    color: {Colors.TEXT_SECONDARY};
+    border: 1px solid {Colors.BORDER};
+    padding: 6px 14px;
+}}
+QTabBar::tab:selected {{
+    background-color: {Colors.BG_APP};
+    color: {Colors.TEXT_PRIMARY};
+    border-bottom-color: {Colors.BG_APP};
+}}
+
+/* ===== QHeaderView (table headers) ===== */
+QHeaderView::section {{
+    background-color: {Colors.BG_CARD};
+    color: {Colors.TEXT_SECONDARY};
+    border: 1px solid {Colors.BORDER};
+    padding: 4px 8px;
+    font-weight: 600;
+}}
+
+/* ===== QTableView / QTreeView / QListView ===== */
+QTableView, QTreeView, QListView {{
+    background-color: {Colors.BG_APP};
+    color: {Colors.TEXT_PRIMARY};
+    border: 1px solid {Colors.BORDER};
+    selection-background-color: {Colors.BG_HOVER};
+    gridline-color: {Colors.BORDER};
+    alternate-background-color: {Colors.BG_CARD};
+}}
+
+/* ===== QProgressBar ===== */
+QProgressBar {{
+    background-color: {Colors.BG_INPUT};
+    border: 1px solid {Colors.BORDER};
+    border-radius: 4px;
+    text-align: center;
+    color: {Colors.TEXT_PRIMARY};
+}}
+QProgressBar::chunk {{
+    background-color: {Colors.PRIMARY};
+    border-radius: 3px;
 }}
 """

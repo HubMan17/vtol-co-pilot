@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import QWidget, QVBoxLayout, QMenu, QAction
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 from PyQt5.QtWebChannel import QWebChannel
 from PyQt5.QtCore import QObject, pyqtSlot, pyqtSignal, QPoint
-from PyQt5.QtGui import QCursor
+from PyQt5.QtGui import QCursor, QColor
 
 from src.gui.theme import Colors
 
@@ -42,6 +42,7 @@ class MapWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         self.web_view = QWebEngineView()
+        self.web_view.page().setBackgroundColor(QColor(Colors.BG_APP))
 
         self.bridge = MapBridge()
         self.channel = QWebChannel()
@@ -137,8 +138,19 @@ class MapWidget(QWidget):
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
     <style>
-        body {{ margin: 0; padding: 0; background: {Colors.BG_APP}; }}
+        html, body {{ margin: 0; padding: 0; background: {Colors.BG_APP}; overflow: hidden; }}
         #map {{ width: 100%; height: 100vh; }}
+        .leaflet-container {{ background: {Colors.BG_APP} !important; }}
+        .leaflet-tile-pane {{ opacity: 1; }}
+        .leaflet-popup-content-wrapper {{
+            background: {Colors.BG_CARD} !important;
+            color: {Colors.TEXT_PRIMARY} !important;
+            border: 1px solid {Colors.BORDER} !important;
+            border-radius: 8px !important;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.4) !important;
+        }}
+        .leaflet-popup-tip {{ background: {Colors.BG_CARD} !important; }}
+        .leaflet-popup-close-button {{ color: {Colors.TEXT_TERTIARY} !important; }}
         .aircraft-icon {{
             width: 32px;
             height: 32px;
