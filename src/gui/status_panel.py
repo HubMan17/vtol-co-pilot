@@ -1,170 +1,25 @@
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QGridLayout, QHBoxLayout, QLabel, QFrame,
-    QSpinBox, QDoubleSpinBox, QPushButton, QGraphicsDropShadowEffect
+    QSpinBox, QPushButton
 )
-from PyQt5.QtGui import QFont, QColor, QCursor
-from PyQt5.QtCore import Qt, pyqtSignal, QPoint
+from PyQt5.QtGui import QFont
+from PyQt5.QtCore import Qt, pyqtSignal
 import math
 
 from src.mavlink.telemetry import TelemetryState
-
-
-class WindPopup(QFrame):
-    """Popup panel for manual wind override, shown near the wind telemetry cell."""
-
-    applied = pyqtSignal(int, int, float)   # direction, speed, drift_coeff
-    reset = pyqtSignal()
-
-    def __init__(self, parent=None):
-        super().__init__(parent, Qt.Popup | Qt.FramelessWindowHint)
-        self.setStyleSheet("""
-            WindPopup {
-                background-color: #2b2b2b;
-                border: 2px solid #ff6600;
-                border-radius: 8px;
-            }
-            QLabel { color: #cccccc; }
-            QSpinBox, QDoubleSpinBox {
-                background-color: #3c3c3c;
-                color: white;
-                border: 1px solid #555;
-                border-radius: 3px;
-                padding: 3px;
-                min-height: 24px;
-            }
-            QSpinBox:focus, QDoubleSpinBox:focus {
-                border: 1px solid #ff6600;
-            }
-            QPushButton {
-                min-height: 28px;
-                border-radius: 4px;
-                font-weight: bold;
-            }
-        """)
-
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(20)
-        shadow.setColor(QColor(0, 0, 0, 160))
-        shadow.setOffset(0, 4)
-        self.setGraphicsEffect(shadow)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(8)
-
-        title = QLabel("Ручной ветер (DR)")
-        title.setFont(QFont("Arial", 10, QFont.Bold))
-        title.setStyleSheet("color: #ff6600;")
-        title.setAlignment(Qt.AlignCenter)
-        layout.addWidget(title)
-
-        hint = QLabel("Переопределяет ветер для\nсчисления координат (DR)")
-        hint.setFont(QFont("Arial", 8))
-        hint.setStyleSheet("color: #888;")
-        hint.setAlignment(Qt.AlignCenter)
-        layout.addWidget(hint)
-
-        grid = QGridLayout()
-        grid.setSpacing(6)
-
-        lbl_dir = QLabel("Направление:")
-        lbl_dir.setFont(QFont("Arial", 9))
-        grid.addWidget(lbl_dir, 0, 0)
-
-        self.spin_dir = QSpinBox()
-        self.spin_dir.setRange(0, 360)
-        self.spin_dir.setWrapping(True)
-        self.spin_dir.setSuffix("°")
-        self.spin_dir.setFont(QFont("Consolas", 11))
-        grid.addWidget(self.spin_dir, 0, 1)
-
-        lbl_spd = QLabel("Скорость:")
-        lbl_spd.setFont(QFont("Arial", 9))
-        grid.addWidget(lbl_spd, 1, 0)
-
-        self.spin_speed = QSpinBox()
-        self.spin_speed.setRange(0, 30)
-        self.spin_speed.setSuffix(" м/с")
-        self.spin_speed.setFont(QFont("Consolas", 11))
-        grid.addWidget(self.spin_speed, 1, 1)
-
-        lbl_drift = QLabel("Коэфф. дрейфа:")
-        lbl_drift.setFont(QFont("Arial", 9))
-        grid.addWidget(lbl_drift, 2, 0)
-
-        self.spin_drift = QDoubleSpinBox()
-        self.spin_drift.setRange(0.50, 1.50)
-        self.spin_drift.setSingleStep(0.05)
-        self.spin_drift.setValue(1.0)
-        self.spin_drift.setFont(QFont("Consolas", 11))
-        grid.addWidget(self.spin_drift, 2, 1)
-
-        layout.addLayout(grid)
-
-        btn_layout = QHBoxLayout()
-        btn_layout.setSpacing(6)
-
-        self.btn_apply = QPushButton("Установить")
-        self.btn_apply.setStyleSheet(
-            "background-color: #ff6600; color: white;"
-        )
-        self.btn_apply.clicked.connect(self._on_apply)
-        btn_layout.addWidget(self.btn_apply)
-
-        self.btn_reset = QPushButton("Сбросить")
-        self.btn_reset.setStyleSheet(
-            "background-color: #555; color: white;"
-        )
-        self.btn_reset.clicked.connect(self._on_reset)
-        btn_layout.addWidget(self.btn_reset)
-
-        layout.addLayout(btn_layout)
-
-        self.setFixedWidth(240)
-
-    def populate(self, direction: float, speed: float, drift: float):
-        self.spin_dir.setValue(int(direction))
-        self.spin_speed.setValue(int(speed))
-        self.spin_drift.setValue(drift)
-
-    def _on_apply(self):
-        self.applied.emit(
-            self.spin_dir.value(),
-            self.spin_speed.value(),
-            self.spin_drift.value()
-        )
-        self.close()
-
-    def _on_reset(self):
-        self.reset.emit()
-        self.close()
-
-
-class ClickableFrame(QFrame):
-    """A QFrame that emits clicked signal on mouse press."""
-    clicked = pyqtSignal()
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self.clicked.emit()
-        super().mousePressEvent(event)
 
 
 class StatusPanel(QWidget):
     orbit_radius_changed = pyqtSignal(int)
     target_altitude_changed = pyqtSignal(int)
     target_airspeed_changed = pyqtSignal(int)
-    manual_wind_changed = pyqtSignal(bool, int, int, float)  # enabled, direction, speed, drift_coeff
+    wind_override_requested = pyqtSignal(int, int)
 
     def __init__(self):
         super().__init__()
         self._manual_alt_override = False
         self._manual_radius_override = False
         self._manual_speed_override = False
-        self._manual_wind_active = False
-        self._last_telem_wind_dir = 0.0
-        self._last_telem_wind_speed = 0.0
-        self._current_drift_coeff = 1.0
         self._setup_ui()
 
     def _setup_ui(self):
@@ -214,18 +69,17 @@ class StatusPanel(QWidget):
             self.labels[name] = (value_label, unit)
             grid.addWidget(frame, row, col)
 
-        # Wind cell — clickable, opens popup
-        self.wind_frame = ClickableFrame()
-        self.wind_frame.setFrameStyle(QFrame.StyledPanel)
-        self.wind_frame.setCursor(QCursor(Qt.PointingHandCursor))
-        wind_frame_layout = QVBoxLayout(self.wind_frame)
+        # Wind cell — read-only display
+        wind_frame = QFrame()
+        wind_frame.setFrameStyle(QFrame.StyledPanel)
+        wind_frame_layout = QVBoxLayout(wind_frame)
         wind_frame_layout.setContentsMargins(5, 2, 5, 2)
         wind_frame_layout.setSpacing(0)
 
-        self.wind_name_label = QLabel("Ветер ▾")
-        self.wind_name_label.setFont(QFont("Arial", 8))
-        self.wind_name_label.setStyleSheet("color: gray;")
-        wind_frame_layout.addWidget(self.wind_name_label)
+        wind_name_label = QLabel("Ветер")
+        wind_name_label.setFont(QFont("Arial", 8))
+        wind_name_label.setStyleSheet("color: gray;")
+        wind_frame_layout.addWidget(wind_name_label)
 
         self.wind_value_label = QLabel("---")
         self.wind_value_label.setFont(QFont("Consolas", 14, QFont.Bold))
@@ -233,16 +87,38 @@ class StatusPanel(QWidget):
         wind_frame_layout.addWidget(self.wind_value_label)
 
         self.labels["Ветер"] = (self.wind_value_label, "")
-        grid.addWidget(self.wind_frame, 3, 1)
-
-        self.wind_frame.clicked.connect(self._show_wind_popup)
-
-        # Create wind popup (hidden)
-        self.wind_popup = WindPopup()
-        self.wind_popup.applied.connect(self._on_wind_applied)
-        self.wind_popup.reset.connect(self._on_wind_reset)
+        grid.addWidget(wind_frame, 3, 1)
 
         layout.addLayout(grid)
+
+        wind_ctrl_frame = QFrame()
+        wind_ctrl_frame.setFrameStyle(QFrame.StyledPanel)
+        wind_ctrl_layout = QHBoxLayout(wind_ctrl_frame)
+        wind_ctrl_layout.setContentsMargins(5, 2, 5, 2)
+
+        wind_ctrl_layout.addWidget(QLabel("Ветер:"))
+
+        self.spin_wind_dir = QSpinBox()
+        self.spin_wind_dir.setRange(0, 360)
+        self.spin_wind_dir.setWrapping(True)
+        self.spin_wind_dir.setSuffix("°")
+        self.spin_wind_dir.setValue(0)
+        self.spin_wind_dir.setFixedWidth(65)
+        wind_ctrl_layout.addWidget(self.spin_wind_dir)
+
+        self.spin_wind_speed = QSpinBox()
+        self.spin_wind_speed.setRange(0, 30)
+        self.spin_wind_speed.setSuffix(" м/с")
+        self.spin_wind_speed.setValue(0)
+        self.spin_wind_speed.setFixedWidth(75)
+        wind_ctrl_layout.addWidget(self.spin_wind_speed)
+
+        self.btn_set_wind = QPushButton("Установить")
+        self.btn_set_wind.setFixedWidth(80)
+        self.btn_set_wind.clicked.connect(self._on_set_wind)
+        wind_ctrl_layout.addWidget(self.btn_set_wind)
+
+        layout.addWidget(wind_ctrl_frame)
 
         nav_title = QLabel("НАВИГАЦИЯ")
         nav_title.setFont(QFont("Arial", 10, QFont.Bold))
@@ -369,26 +245,8 @@ class StatusPanel(QWidget):
         self._set_value("Высота AGL", state.altitude_agl, 0)
         self._set_value("Верт. скор.", state.climb_rate, 1)
 
-        # Store latest telemetry wind for popup pre-fill
-        if not self._manual_wind_active:
-            self._last_telem_wind_dir = state.wind_direction
-            self._last_telem_wind_speed = state.wind_speed
-
-        wind_label = self.labels["Ветер"][0]
-        if self._manual_wind_active:
-            wind_str = f"{int(state.wind_direction):03d}° / {state.wind_speed:.0f} м/с"
-            wind_label.setText(wind_str)
-            wind_label.setStyleSheet("color: #ff6600; font-weight: bold;")
-            self.wind_frame.setStyleSheet("ClickableFrame { background-color: rgba(255, 102, 0, 30); }")
-            self.wind_name_label.setText("Ветер ✎ ▾")
-            self.wind_name_label.setStyleSheet("color: #ff6600;")
-        else:
-            wind_str = f"{int(state.wind_direction):03d}° / {state.wind_speed:.0f} м/с"
-            wind_label.setText(wind_str)
-            wind_label.setStyleSheet("")
-            self.wind_frame.setStyleSheet("")
-            self.wind_name_label.setText("Ветер ▾")
-            self.wind_name_label.setStyleSheet("color: gray;")
+        wind_str = f"{int(state.wind_direction):03d}° / {state.wind_speed:.0f} м/с"
+        self.wind_value_label.setText(wind_str)
 
         self._set_value("Крен", math.degrees(state.roll), 1)
         self._set_value("Тангаж", math.degrees(state.pitch), 1)
@@ -439,40 +297,12 @@ class StatusPanel(QWidget):
         self.target_airspeed_changed.emit(self.spin_target_speed.value())
         self.btn_set_speed.setStyleSheet("background-color: #00cc00;")
 
-    # --- Wind popup ---
-
-    def _show_wind_popup(self):
-        if self._manual_wind_active:
-            self.wind_popup.populate(
-                self.wind_popup.spin_dir.value(),
-                self.wind_popup.spin_speed.value(),
-                self.wind_popup.spin_drift.value()
-            )
-        else:
-            self.wind_popup.populate(
-                self._last_telem_wind_dir,
-                self._last_telem_wind_speed,
-                self._current_drift_coeff
-            )
-
-        # Position popup above or below the wind cell
-        pos = self.wind_frame.mapToGlobal(QPoint(0, 0))
-        popup_x = pos.x() - self.wind_popup.width() + self.wind_frame.width()
-        popup_y = pos.y() + self.wind_frame.height() + 4
-        self.wind_popup.move(popup_x, popup_y)
-        self.wind_popup.show()
-
-    def _on_wind_applied(self, direction: int, speed: int, drift_coeff: float):
-        self._manual_wind_active = True
-        self._current_drift_coeff = drift_coeff
-        self.manual_wind_changed.emit(True, direction, speed, drift_coeff)
-
-    def _on_wind_reset(self):
-        self._manual_wind_active = False
-        self.manual_wind_changed.emit(False, 0, 0, 1.0)
-
-    def set_drift_coefficient(self, coeff: float):
-        self._current_drift_coeff = coeff
+    def _on_set_wind(self):
+        self.wind_override_requested.emit(
+            self.spin_wind_dir.value(),
+            self.spin_wind_speed.value()
+        )
+        self.btn_set_wind.setStyleSheet("background-color: #00cc00;")
 
     def update_autopilot(self, mode: str, status: dict = None):
         mode_names = {

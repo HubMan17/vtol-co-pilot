@@ -12,7 +12,6 @@ from src.core.events import EventBus, Event
 from src.mavlink.proxy import MAVLinkProxy
 from src.mavlink.telemetry import LatLon
 from src.navigation.calculations import haversine_distance, eta_seconds
-from src.navigation.dead_reckoning import DeadReckoningEngine
 from src.navigation.route_planner import RoutePlanner
 from src.autopilot.autopilot_manager import AutopilotManager, AutopilotMode
 from src.gui.status_panel import StatusPanel
@@ -34,21 +33,13 @@ class MainWindow(QMainWindow):
             component_id=config.mavlink.component_id
         )
 
-        self.dead_reckoning = DeadReckoningEngine(
-            drift_coefficient=config.navigation.drift_coefficient
-        )
         self.route_planner = RoutePlanner()
         self.autopilot = AutopilotManager(self.proxy, config.autopilot)
         self.autopilot.set_route_planner(self.route_planner)
 
         self._set_position_mode = False
         self._set_home_mode = False
-        self._use_dr_position = False
         self._home_position: Optional[LatLon] = None
-        self._manual_wind_enabled = False
-        self._manual_wind_dir = 0
-        self._manual_wind_speed = 0
-        self._manual_drift_coeff = config.navigation.drift_coefficient
 
         self._setup_ui()
         self._setup_connections()
@@ -114,13 +105,6 @@ class MainWindow(QMainWindow):
 
         layout.addStretch()
 
-        self.lbl_dr_status = QLabel("Счисление: ВЫКЛ")
-        self.lbl_dr_status.setFont(QFont("Consolas", 10))
-        self.lbl_dr_status.setStyleSheet("color: gray;")
-        layout.addWidget(self.lbl_dr_status)
-
-        layout.addSpacing(20)
-
         self.lbl_status = QLabel("ОТКЛЮЧЕНО")
         self.lbl_status.setStyleSheet("color: red; font-weight: bold;")
         layout.addWidget(self.lbl_status)
@@ -139,7 +123,7 @@ class MainWindow(QMainWindow):
 
         action_layout = QHBoxLayout()
 
-        self.btn_set_pos = QPushButton("Установить позицию")
+        self.btn_set_pos = QPushButton("Коррекция позиции")
         self.btn_set_pos.setCheckable(True)
         self.btn_set_pos.setEnabled(False)
         action_layout.addWidget(self.btn_set_pos)
@@ -155,19 +139,6 @@ class MainWindow(QMainWindow):
 
         layout.addLayout(action_layout)
 
-        dr_layout = QHBoxLayout()
-
-        self.btn_use_dr = QPushButton("Использовать счисление")
-        self.btn_use_dr.setCheckable(True)
-        self.btn_use_dr.setEnabled(False)
-        dr_layout.addWidget(self.btn_use_dr)
-
-        self.btn_clear_track = QPushButton("Очистить трек")
-        self.btn_clear_track.setEnabled(False)
-        dr_layout.addWidget(self.btn_clear_track)
-
-        layout.addLayout(dr_layout)
-
         map_layout = QHBoxLayout()
 
         self.btn_follow = QPushButton("Следовать")
@@ -179,6 +150,10 @@ class MainWindow(QMainWindow):
         self.btn_home.setCheckable(True)
         self.btn_home.setEnabled(False)
         map_layout.addWidget(self.btn_home)
+
+        self.btn_clear_track = QPushButton("Очистить трек")
+        self.btn_clear_track.setEnabled(False)
+        map_layout.addWidget(self.btn_clear_track)
 
         layout.addLayout(map_layout)
 
@@ -215,7 +190,6 @@ class MainWindow(QMainWindow):
         self.btn_set_pos.clicked.connect(self._on_set_position_toggle)
         self.btn_set_home.clicked.connect(self._on_set_home_toggle)
         self.btn_load_route.clicked.connect(self._on_load_route)
-        self.btn_use_dr.clicked.connect(self._on_use_dr_toggle)
         self.btn_clear_track.clicked.connect(self._on_clear_track)
         self.btn_nav.clicked.connect(self._on_nav_toggle)
         self.btn_follow.clicked.connect(self._on_follow_toggle)
@@ -232,7 +206,7 @@ class MainWindow(QMainWindow):
         self.status_panel.orbit_radius_changed.connect(self._on_orbit_radius_changed)
         self.status_panel.target_altitude_changed.connect(self._on_target_altitude_changed)
         self.status_panel.target_airspeed_changed.connect(self._on_target_airspeed_changed)
-        self.status_panel.manual_wind_changed.connect(self._on_manual_wind_changed)
+        self.status_panel.wind_override_requested.connect(self._on_wind_override)
 
         self.event_bus.subscribe(Event.CONNECTION_RESTORED, self._on_connection_restored)
         self.event_bus.subscribe(Event.CONNECTION_LOST, self._on_connection_lost)
@@ -262,7 +236,6 @@ class MainWindow(QMainWindow):
         self.btn_set_pos.setEnabled(True)
         self.btn_set_home.setEnabled(True)
         self.btn_load_route.setEnabled(True)
-        self.btn_use_dr.setEnabled(True)
         self.btn_clear_track.setEnabled(True)
         self.btn_follow.setEnabled(True)
         self.btn_home.setEnabled(True)
@@ -281,7 +254,6 @@ class MainWindow(QMainWindow):
         self.btn_set_pos.setEnabled(False)
         self.btn_set_home.setEnabled(False)
         self.btn_load_route.setEnabled(False)
-        self.btn_use_dr.setEnabled(False)
         self.btn_clear_track.setEnabled(False)
         self.btn_follow.setEnabled(False)
         self.btn_home.setEnabled(False)
@@ -292,10 +264,10 @@ class MainWindow(QMainWindow):
     def _on_set_position_toggle(self):
         self._set_position_mode = self.btn_set_pos.isChecked()
         if self._set_position_mode:
-            self.statusbar.showMessage("Кликните на карте для установки позиции...")
+            self.statusbar.showMessage("Кликните на карте для коррекции позиции EKF...")
             self.btn_set_pos.setStyleSheet("background-color: #ffcc00;")
         else:
-            self.statusbar.showMessage("Режим установки позиции отменён")
+            self.statusbar.showMessage("Режим коррекции позиции отменён")
             self.btn_set_pos.setStyleSheet("")
 
     def _on_set_home_toggle(self):
@@ -309,28 +281,21 @@ class MainWindow(QMainWindow):
 
     def _on_map_clicked(self, lat: float, lon: float):
         if self._set_position_mode:
-            self._set_dr_position(lat, lon)
+            self._set_correction_position(lat, lon)
         elif self._set_home_mode:
             self._set_home_position(lat, lon)
 
     def _on_context_set_position(self, lat: float, lon: float):
-        self._set_dr_position(lat, lon)
+        self._set_correction_position(lat, lon)
 
-    def _set_dr_position(self, lat: float, lon: float):
-        self.dead_reckoning.set_position(lat, lon)
+    def _set_correction_position(self, lat: float, lon: float):
+        """Send EKF position reset to firmware via custom COMMAND_INT."""
+        self.proxy.send_position_reset(lat, lon)
         self._set_position_mode = False
         self.btn_set_pos.setChecked(False)
         self.btn_set_pos.setStyleSheet("")
         self.map_widget.set_aircraft_position(lat, lon)
-
-        if not self._use_dr_position:
-            self._use_dr_position = True
-            self.btn_use_dr.setChecked(True)
-            self.autopilot.set_use_dr(True)
-            self.lbl_dr_status.setText("Счисление: ВКЛ")
-            self.lbl_dr_status.setStyleSheet("color: #00ff00; font-weight: bold;")
-
-        self.statusbar.showMessage(f"Позиция установлена: {lat:.6f}, {lon:.6f}")
+        self.statusbar.showMessage(f"Коррекция позиции отправлена: {lat:.6f}, {lon:.6f}")
 
     def _on_context_add_waypoint(self, lat: float, lon: float):
         dialog = WaypointDialog(self, lat, lon)
@@ -420,18 +385,7 @@ class MainWindow(QMainWindow):
         if wp:
             self.statusbar.showMessage(f"Активная точка: {wp.id}")
 
-    def _on_use_dr_toggle(self):
-        self._use_dr_position = self.btn_use_dr.isChecked()
-        self.autopilot.set_use_dr(self._use_dr_position)
-        if self._use_dr_position:
-            self.lbl_dr_status.setText("Счисление: ВКЛ")
-            self.lbl_dr_status.setStyleSheet("color: #00ff00; font-weight: bold;")
-        else:
-            self.lbl_dr_status.setText("Счисление: ВЫКЛ")
-            self.lbl_dr_status.setStyleSheet("color: gray;")
-
     def _on_clear_track(self):
-        self.dead_reckoning.clear_track()
         self.map_widget.clear_track()
         self.statusbar.showMessage("Трек очищен")
 
@@ -532,17 +486,9 @@ class MainWindow(QMainWindow):
         self.autopilot.set_target_airspeed(float(speed))
         self.statusbar.showMessage(f"Целевая скорость: {speed} м/с")
 
-    def _on_manual_wind_changed(self, enabled: bool, direction: int, speed: int, drift_coeff: float):
-        self._manual_wind_enabled = enabled
-        self._manual_wind_dir = direction
-        self._manual_wind_speed = speed
-        self._manual_drift_coeff = drift_coeff
-        self.dead_reckoning.set_drift_coefficient(drift_coeff)
-        if enabled:
-            self.statusbar.showMessage(f"Ручной ветер: {direction}° / {speed} м/с, дрейф: {drift_coeff:.2f}")
-        else:
-            self.dead_reckoning.set_drift_coefficient(self.config.navigation.drift_coefficient)
-            self.statusbar.showMessage("Ветер: автоматический (от ArduPilot)")
+    def _on_wind_override(self, direction: int, speed: int):
+        self.proxy.send_wind_override(direction, speed)
+        self.statusbar.showMessage(f"Ветер установлен: {direction}° / {speed} м/с")
 
     def _update_display(self):
         if not self.proxy.is_connected():
@@ -550,22 +496,10 @@ class MainWindow(QMainWindow):
 
         telemetry = self.proxy.get_telemetry()
 
-        # Override wind for DR engine when manual wind is active
-        if self._manual_wind_enabled:
-            telemetry.wind_direction = float(self._manual_wind_dir)
-            telemetry.wind_speed = float(self._manual_wind_speed)
-
         self.status_panel.update_telemetry(telemetry)
         self.lbl_mode.setText(f"Режим: {telemetry.mode}")
 
-        dr_position = self.dead_reckoning.update(telemetry)
-
-        if self._use_dr_position and dr_position:
-            display_position = dr_position
-        elif telemetry.position:
-            display_position = telemetry.position
-        else:
-            display_position = dr_position
+        display_position = telemetry.position
 
         if display_position:
             self.map_widget.update_aircraft(
@@ -607,7 +541,7 @@ class MainWindow(QMainWindow):
 
                 self.status_panel.update_navigation(wp_idx + 1, wp_total, distance, eta, xtk)
 
-        self.autopilot.update(display_position)
+        self.autopilot.update()
         self._update_autopilot_display()
 
     def _update_autopilot_display(self):

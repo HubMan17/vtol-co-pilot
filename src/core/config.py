@@ -33,7 +33,6 @@ class AutopilotConfig:
 @dataclass
 class NavigationConfig:
     waypoint_radius: float = 150.0
-    drift_coefficient: float = 1.0
 
 
 @dataclass
@@ -72,7 +71,9 @@ def load_config(path: Path = None) -> AppConfig:
             ap_data.setdefault("pitch_limit_down", old_limit)
         config.autopilot = AutopilotConfig(**ap_data)
     if "navigation" in data:
-        config.navigation = NavigationConfig(**data["navigation"])
+        nav_data = data["navigation"].copy()
+        nav_data.pop('drift_coefficient', None)  # removed field — ignore from old configs
+        config.navigation = NavigationConfig(**nav_data)
     if "gui" in data:
         config.gui = GUIConfig(**data["gui"])
 
@@ -110,7 +111,6 @@ def save_config(config: AppConfig, path: Path = None):
         },
         "navigation": {
             "waypoint_radius": config.navigation.waypoint_radius,
-            "drift_coefficient": config.navigation.drift_coefficient,
         },
         "gui": {
             "map_center": list(config.gui.map_center),

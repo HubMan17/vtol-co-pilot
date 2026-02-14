@@ -356,32 +356,55 @@ class MAVLinkProxy:
         logger.info(f"DO_REPOSITION: lat={lat:.6f} lon={lon:.6f} alt={alt:.1f} "
                      f"radius={radius:.0f}(cmd={compensated:.0f}) {direction_str}")
 
-    def send_gps_input(self, lat: float, lon: float, alt: float,
-                       vn: float, ve: float, vd: float, heading: float,
-                       horiz_accuracy: float = 10.0, speed_accuracy: float = 2.0):
-        """Send GPS_INPUT with DR position as second GPS slot (GPS_TYPE2=14 MAV)."""
+    def send_position_reset(self, lat: float, lon: float, accuracy: float = 5.0):
+        """Send custom COMMAND_INT (43210) to force EKF position reset in firmware.
+        Uses forcePositionReset() added to AP_NavEKF3.
+        accuracy: position accuracy in meters (sets EKF covariance).
+        """
         if not self._sitl_conn:
             return
-        import time as _time
-        self._sitl_conn.mav.gps_input_send(
-            int(_time.time() * 1e6),   # time_usec
-            1,                          # gps_id=1 → GPS_TYPE2
-            0,                          # ignore_flags: all fields valid
-            0,                          # time_week_ms
-            0,                          # time_week
-            3,                          # fix_type: 3D fix
-            int(lat * 1e7),             # lat (degE7)
-            int(lon * 1e7),             # lon (degE7)
-            alt,                        # alt (meters)
-            horiz_accuracy / 5.0,       # hdop
-            3.0,                        # vdop
-            vn, ve, vd,                 # velocity NED (m/s)
-            speed_accuracy,             # speed_accuracy
-            horiz_accuracy,             # horiz_accuracy (meters)
-            5.0,                        # vert_accuracy
-            8,                          # satellites_visible
-            int(heading * 100)          # yaw (centidegrees)
+        self._sitl_conn.mav.command_int_send(
+            self._sitl_conn.target_system,
+            self._sitl_conn.target_component,
+            mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT,  # frame
+            43210,           # custom command: forcePositionReset
+            0, 0,            # current, autocontinue
+            accuracy,        # param1: position accuracy (meters)
+            0,               # param2: empty
+            0,               # param3: empty
+            0,               # param4: empty
+            int(lat * 1e7),  # x: lat (degE7)
+            int(lon * 1e7),  # y: lon (degE7)
+            0                # z: alt (not used)
         )
+        logger.info(f"POSITION_RESET: lat={lat:.6f} lon={lon:.6f} acc={accuracy:.1f}")
+
+    def send_wind_override(self, direction_deg: int, speed_ms: int, accuracy: float = 2.0):
+        """Send custom COMMAND_INT (43211) to force EKF wind state in firmware.
+        direction_deg: wind FROM direction in degrees (meteorological convention).
+        speed_ms: wind speed in m/s.
+        accuracy: wind accuracy in m/s (sets EKF covariance).
+        """
+        if not self._sitl_conn:
+            return
+        import math
+        dir_rad = math.radians(direction_deg)
+        wind_n = -speed_ms * math.cos(dir_rad)
+        wind_e = -speed_ms * math.sin(dir_rad)
+        self._sitl_conn.mav.command_int_send(
+            self._sitl_conn.target_system,
+            self._sitl_conn.target_component,
+            0,               # frame (unused)
+            43211,           # custom command: forceWindReset
+            0, 0,            # current, autocontinue
+            wind_n,          # param1: windN (m/s)
+            wind_e,          # param2: windE (m/s)
+            accuracy,        # param3: wind accuracy (m/s)
+            0,               # param4: empty
+            0, 0, 0          # x, y, z: not used
+        )
+        logger.info(f"WIND_OVERRIDE: dir={direction_deg}° speed={speed_ms}m/s "
+                     f"(N={wind_n:.1f} E={wind_e:.1f}) acc={accuracy:.1f}")
 
     def on_message(self, callback: Callable):
         self._message_callbacks.append(callback)
