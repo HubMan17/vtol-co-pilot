@@ -5,10 +5,10 @@ import qtawesome as qta
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QFrame, QStatusBar, QFileDialog,
-    QMessageBox, QSpinBox, QApplication, QSplitter
+    QMessageBox, QSpinBox, QApplication, QSplitter, QMenu, QAction
 )
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QFont, QIcon
+from PyQt5.QtCore import Qt, QTimer, QPoint
+from PyQt5.QtGui import QFont, QIcon, QCursor
 
 from src.core.config import AppConfig
 from src.core.events import EventBus, Event
@@ -20,7 +20,9 @@ from src.autopilot.autopilot_manager import AutopilotManager, AutopilotMode
 from src.gui.status_panel import StatusPanel
 from src.gui.map_widget import MapWidget
 from src.gui.waypoint_dialog import WaypointDialog
+from src.gui.zone_dialog import ZonePropertiesDialog
 from src.gui.theme import STYLESHEET, Colors, Fonts, apply_dark_titlebar
+from src.navigation.zone_manager import ZoneManager
 
 
 class MainWindow(QMainWindow):
@@ -41,8 +43,11 @@ class MainWindow(QMainWindow):
         self.autopilot = AutopilotManager(self.proxy, config.autopilot)
         self.autopilot.set_route_planner(self.route_planner)
 
+        self.zone_manager = ZoneManager()
+
         self._set_position_mode = False
         self._set_home_mode = False
+        self._drawing_zone_mode = False
         self._home_position: Optional[LatLon] = None
 
         QApplication.instance().setStyleSheet(STYLESHEET)
@@ -289,6 +294,12 @@ class MainWindow(QMainWindow):
         self.btn_clear_track = self._action_btn("mdi.eraser", "Трек")
         r2.addWidget(self.btn_clear_track)
 
+        self.btn_draw_zone = QPushButton("  Зоны")
+        self.btn_draw_zone.setIcon(qta.icon("mdi.shield-alert-outline", color=Colors.TEXT_SECONDARY))
+        self.btn_draw_zone.setCheckable(True)
+        self.btn_draw_zone.setFixedHeight(30)
+        r2.addWidget(self.btn_draw_zone)
+
         lay.addLayout(r2)
 
         # Waypoint nav row
@@ -340,6 +351,7 @@ class MainWindow(QMainWindow):
         self.btn_set_home.clicked.connect(self._on_set_home_toggle)
         self.btn_load_route.clicked.connect(self._on_load_route)
         self.btn_clear_track.clicked.connect(self._on_clear_track)
+        self.btn_draw_zone.clicked.connect(self._on_draw_zone_toggle)
         self.btn_nav.clicked.connect(self._on_nav_toggle)
         self.btn_follow.clicked.connect(self._on_follow_toggle)
         self.btn_home.clicked.connect(self._on_home_toggle)
@@ -351,6 +363,14 @@ class MainWindow(QMainWindow):
         self.map_widget.set_position_requested.connect(self._on_context_set_position)
         self.map_widget.add_waypoint_requested.connect(self._on_context_add_waypoint)
         self.map_widget.set_home_requested.connect(self._on_context_set_home)
+        self.map_widget.draw_zone_requested.connect(self._on_start_zone_drawing)
+        self.map_widget.zone_drawing_finished.connect(self._on_zone_drawing_finished)
+        self.map_widget.zone_drawing_cancelled.connect(self._on_zone_drawing_cancelled)
+        self.map_widget.zone_double_clicked.connect(self._on_zone_double_clicked)
+        self.map_widget.zone_context_menu_requested.connect(self._on_zone_context_menu)
+        self.map_widget.zone_editing_finished.connect(self._on_zone_editing_finished)
+        self.map_widget.zone_vertices_updated.connect(self._on_zone_vertices_updated)
+        self.map_widget.page_loaded.connect(self._load_zones)
         self.map_widget.mouse_moved.connect(self._on_map_mouse_move)
         self.map_widget.zoom_changed.connect(self._on_map_zoom_changed)
 
@@ -539,6 +559,146 @@ class MainWindow(QMainWindow):
 
     def _on_follow_toggle(self):
         self.map_widget.set_follow_mode(self.btn_follow.isChecked())
+
+    # ────────────────────── No-Fly Zones ──────────────────────
+
+    def _load_zones(self):
+        zones = self.zone_manager.get_all_zones()
+        if zones:
+            zone_dicts = [{'id': z.id, 'points': z.points, 'name': z.name}
+                          for z in zones]
+            self.map_widget.load_all_zones(zone_dicts)
+
+    def _on_draw_zone_toggle(self):
+        if self.btn_draw_zone.isChecked():
+            self._on_start_zone_drawing()
+        else:
+            self._cancel_zone_drawing()
+
+    def _on_start_zone_drawing(self):
+        self._set_position_mode = False
+        self._set_home_mode = False
+        self.btn_set_pos.setChecked(False)
+        self.btn_set_home.setChecked(False)
+
+        self._drawing_zone_mode = True
+        self.btn_draw_zone.setChecked(True)
+        self.map_widget.start_zone_drawing()
+        self.statusbar.showMessage("Кликайте по карте для создания зоны... (двойной клик или клик на первую точку для завершения, Esc — отмена)")
+
+    def _cancel_zone_drawing(self):
+        self._drawing_zone_mode = False
+        self.btn_draw_zone.setChecked(False)
+        self.map_widget.cancel_zone_drawing()
+        self.statusbar.showMessage("")
+
+    def _on_zone_drawing_finished(self, points: list):
+        self._drawing_zone_mode = False
+        self.btn_draw_zone.setChecked(False)
+
+        dialog = ZonePropertiesDialog(self)
+        result = dialog.exec_()
+        if result != ZonePropertiesDialog.Accepted:
+            self.statusbar.showMessage("Создание зоны отменено")
+            return
+
+        data = dialog.get_zone_data()
+        zone = self.zone_manager.add_zone(
+            points=points,
+            name=data['name'],
+            description=data['description'],
+            altitude=data['altitude'],
+        )
+        self.map_widget.add_restricted_zone(zone.id, zone.points, zone.name)
+        self.map_widget.set_layer_visibility('restricted', True)
+        name = zone.name or "Без названия"
+        self.statusbar.showMessage(f"Запретная зона создана: {name}")
+
+    def _on_zone_drawing_cancelled(self):
+        self._drawing_zone_mode = False
+        self.btn_draw_zone.setChecked(False)
+        self.statusbar.showMessage("Рисование зоны отменено")
+
+    def _on_zone_context_menu(self, zone_id: str, screen_x: int, screen_y: int):
+        zone = self.zone_manager.get_zone(zone_id)
+        if not zone:
+            return
+
+        menu = QMenu(self)
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background-color: {Colors.BG_TOOLTIP};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px; padding: 4px;
+            }}
+            QMenu::item {{ padding: 8px 16px; border-radius: 4px; }}
+            QMenu::item:selected {{ background-color: {Colors.BG_INPUT}; }}
+            QMenu::separator {{ height: 1px; background: {Colors.BORDER}; margin: 4px 8px; }}
+        """)
+
+        act_edit = menu.addAction(
+            qta.icon("mdi.vector-polyline-edit", color=Colors.TEXT_SECONDARY),
+            "Редактировать вершины"
+        )
+        act_props = menu.addAction(
+            qta.icon("mdi.cog-outline", color=Colors.TEXT_SECONDARY),
+            "Свойства"
+        )
+        menu.addSeparator()
+        act_delete = menu.addAction(
+            qta.icon("mdi.delete-outline", color=Colors.ERROR),
+            "Удалить зону"
+        )
+
+        action = menu.exec_(QCursor.pos())
+
+        if action == act_edit:
+            self.map_widget.enable_zone_editing(zone_id)
+            self.statusbar.showMessage(
+                "Перетаскивайте вершины. ПКМ на вершину — удалить. "
+                "Серые точки — добавить вершину. Клик вне зоны или Esc — завершить."
+            )
+        elif action == act_props:
+            self._on_zone_double_clicked(zone_id)
+        elif action == act_delete:
+            self.zone_manager.remove_zone(zone_id)
+            self.map_widget.remove_restricted_zone(zone_id)
+            name = zone.name or "Без названия"
+            self.statusbar.showMessage(f"Запретная зона удалена: {name}")
+
+    def _on_zone_double_clicked(self, zone_id: str):
+        zone = self.zone_manager.get_zone(zone_id)
+        if not zone:
+            return
+
+        self.map_widget.disable_zone_editing(zone_id)
+
+        dialog = ZonePropertiesDialog(self, zone=zone)
+        result = dialog.exec_()
+
+        if result == ZonePropertiesDialog.DELETE_REQUESTED:
+            self.zone_manager.remove_zone(zone_id)
+            self.map_widget.remove_restricted_zone(zone_id)
+            name = zone.name or "Без названия"
+            self.statusbar.showMessage(f"Запретная зона удалена: {name}")
+        elif result == ZonePropertiesDialog.Accepted:
+            data = dialog.get_zone_data()
+            self.zone_manager.update_zone(zone_id, **data)
+            updated = self.zone_manager.get_zone(zone_id)
+            if updated:
+                self.map_widget.remove_restricted_zone(zone_id)
+                self.map_widget.add_restricted_zone(zone_id, updated.points, updated.name)
+            name = data.get('name') or "Без названия"
+            self.statusbar.showMessage(f"Запретная зона обновлена: {name}")
+        else:
+            self.statusbar.showMessage("")
+
+    def _on_zone_editing_finished(self):
+        self.statusbar.showMessage("")
+
+    def _on_zone_vertices_updated(self, zone_id: str, points: list):
+        self.zone_manager.update_zone_points(zone_id, points)
 
     # ────────────────────── Autopilot ──────────────────────
 

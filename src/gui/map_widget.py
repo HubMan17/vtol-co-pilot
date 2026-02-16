@@ -347,6 +347,12 @@ class MapBridge(QObject):
     bounds_changed = pyqtSignal(float, float, float, float)
     mouse_moved = pyqtSignal(float, float)
     zoom_changed = pyqtSignal(int)
+    zone_drawing_finished = pyqtSignal(str)
+    zone_drawing_cancelled = pyqtSignal()
+    zone_double_clicked = pyqtSignal(str)
+    zone_context_menu_requested = pyqtSignal(str, int, int)
+    zone_editing_finished = pyqtSignal()
+    zone_vertices_updated = pyqtSignal(str, str)
 
     @pyqtSlot(float, float)
     def onMapClick(self, lat, lon):
@@ -368,12 +374,44 @@ class MapBridge(QObject):
     def onZoomChanged(self, zoom):
         self.zoom_changed.emit(zoom)
 
+    @pyqtSlot(str)
+    def onZoneDrawingFinished(self, points_json):
+        self.zone_drawing_finished.emit(points_json)
+
+    @pyqtSlot()
+    def onZoneDrawingCancelled(self):
+        self.zone_drawing_cancelled.emit()
+
+    @pyqtSlot(str)
+    def onZoneDoubleClicked(self, zone_id):
+        self.zone_double_clicked.emit(zone_id)
+
+    @pyqtSlot(str, int, int)
+    def onZoneContextMenu(self, zone_id, screen_x, screen_y):
+        self.zone_context_menu_requested.emit(zone_id, screen_x, screen_y)
+
+    @pyqtSlot()
+    def onZoneEditingFinished(self):
+        self.zone_editing_finished.emit()
+
+    @pyqtSlot(str, str)
+    def onZoneVerticesUpdated(self, zone_id, points_json):
+        self.zone_vertices_updated.emit(zone_id, points_json)
+
 
 class MapWidget(QWidget):
     set_position_requested = pyqtSignal(float, float)
     add_waypoint_requested = pyqtSignal(float, float)
     set_home_requested = pyqtSignal(float, float)
     center_map_requested = pyqtSignal(float, float)
+    zone_drawing_finished = pyqtSignal(list)
+    zone_drawing_cancelled = pyqtSignal()
+    zone_double_clicked = pyqtSignal(str)
+    zone_context_menu_requested = pyqtSignal(str, int, int)
+    zone_editing_finished = pyqtSignal()
+    zone_vertices_updated = pyqtSignal(str, list)
+    draw_zone_requested = pyqtSignal()
+    page_loaded = pyqtSignal()
 
     def __init__(self, center: tuple = (59.939, 30.315), zoom: int = 14):
         super().__init__()
@@ -401,14 +439,25 @@ class MapWidget(QWidget):
 
         self.bridge.context_menu_requested.connect(self._show_context_menu)
         self.bridge.bounds_changed.connect(self._on_bounds_changed)
+        self.bridge.zone_drawing_finished.connect(self._on_zone_drawing_finished)
+        self.bridge.zone_drawing_cancelled.connect(self.zone_drawing_cancelled.emit)
+        self.bridge.zone_double_clicked.connect(self.zone_double_clicked.emit)
+        self.bridge.zone_context_menu_requested.connect(self.zone_context_menu_requested.emit)
+        self.bridge.zone_editing_finished.connect(self.zone_editing_finished.emit)
+        self.bridge.zone_vertices_updated.connect(self._on_zone_vertices_updated)
 
         self.mouse_moved = self.bridge.mouse_moved
         self.zoom_changed = self.bridge.zoom_changed
 
         html = self._generate_html()
         self.web_view.setHtml(html)
+        self.web_view.loadFinished.connect(self._on_page_loaded)
 
         layout.addWidget(self.web_view)
+
+    def _on_page_loaded(self, ok):
+        if ok:
+            self.page_loaded.emit()
 
     def _on_bounds_changed(self, south, west, north, east):
         # Instantly show cached tiles + queue missing for parallel fetch
@@ -476,6 +525,13 @@ class MapWidget(QWidget):
         action_clear_track.triggered.connect(self._on_clear_track)
         menu.addAction(action_clear_track)
 
+        menu.addSeparator()
+
+        action_draw_zone = QAction("Нарисовать запретную зону", self)
+        action_draw_zone.setIcon(qta.icon("mdi.shield-alert-outline", color=Colors.TEXT_SECONDARY))
+        action_draw_zone.triggered.connect(self._on_draw_zone)
+        menu.addAction(action_draw_zone)
+
         menu.popup(QCursor.pos())
 
     def _on_set_position(self):
@@ -492,6 +548,9 @@ class MapWidget(QWidget):
 
     def _on_clear_track(self):
         self.clear_track()
+
+    def _on_draw_zone(self):
+        self.draw_zone_requested.emit()
 
     def _generate_html(self) -> str:
         return f'''
@@ -681,6 +740,74 @@ class MapWidget(QWidget):
         var showSettlements = false;
 
         var restrictedZonesLayer = L.layerGroup();
+        var restrictedZones = {{}};
+        var drawingMode = false;
+        var drawingPoints = [];
+        var drawingMarkers = [];
+        var drawingPreviewLine = null;
+        var drawingMouseLine = null;
+        var editingZoneId = null;
+        var editingMarkers = [];
+
+        /* ── Hatching pattern helper ── */
+        function _createHatchPattern(bgColor, lineColor, spacing, lineWidth) {{
+            var c = document.createElement('canvas');
+            c.width = spacing; c.height = spacing;
+            var ctx = c.getContext('2d');
+            ctx.fillStyle = bgColor;
+            ctx.fillRect(0, 0, spacing, spacing);
+            ctx.strokeStyle = lineColor;
+            ctx.lineWidth = lineWidth;
+            ctx.beginPath();
+            ctx.moveTo(-1, spacing + 1);
+            ctx.lineTo(spacing + 1, -1);
+            ctx.moveTo(-1 - spacing, 1);
+            ctx.lineTo(1, -1 - spacing + 2);
+            ctx.moveTo(spacing - 1, spacing * 2 + 1);
+            ctx.lineTo(spacing * 2 + 1, spacing - 1);
+            ctx.stroke();
+            return c;
+        }}
+
+        var _settlementHatch = _createHatchPattern(
+            'rgba(239,68,68,0.22)', 'rgba(200,40,40,0.45)', 10, 1.5
+        );
+        var _zoneHatch = _createHatchPattern(
+            'rgba(180,30,30,0.18)', 'rgba(0,0,0,0.55)', 12, 1.5
+        );
+
+        /* Override L.Canvas to support fillPattern */
+        var _origFillStroke = L.Canvas.prototype._fillStroke;
+        L.Canvas.include({{
+            _fillStroke: function(ctx, layer) {{
+                var opt = layer.options;
+                if (opt.fillPattern) {{
+                    if (opt.fill) {{
+                        ctx.globalAlpha = opt.fillOpacity != null ? opt.fillOpacity : 0.2;
+                        ctx.fillStyle = ctx.createPattern(opt.fillPattern, 'repeat');
+                        ctx.fill(opt.fillRule || 'evenodd');
+                    }}
+                    if (opt.stroke && opt.weight !== 0) {{
+                        if (ctx.setLineDash) {{
+                            ctx.setLineDash(layer.options && layer.options._dashArray || []);
+                        }}
+                        ctx.globalAlpha = opt.opacity != null ? opt.opacity : 1;
+                        ctx.lineWidth = opt.weight;
+                        ctx.strokeStyle = opt.color;
+                        ctx.lineCap = opt.lineCap || 'round';
+                        ctx.lineJoin = opt.lineJoin || 'round';
+                        ctx.stroke();
+                    }}
+                }} else {{
+                    _origFillStroke.call(this, ctx, layer);
+                }}
+            }}
+        }});
+
+        map.createPane('restricted');
+        map.getPane('restricted').style.zIndex = 260;
+        var restrictedRenderer = L.canvas({{ pane: 'restricted' }});
+
         map.createPane('settlements');
         map.getPane('settlements').style.zIndex = 250;
         var settlementLayer = L.layerGroup();
@@ -696,7 +823,7 @@ class MapWidget(QWidget):
             if (!showSettlements || !bridge) return;
             if (_settlementTimer) clearTimeout(_settlementTimer);
             _settlementTimer = setTimeout(function() {{
-                _updateSettlementOpacity();
+                _updateOverlayOpacity();
                 if (map.getZoom() <= 12) {{
                     for (var k in settlementTileLayers) {{ _removeTile(k); }}
                     return;
@@ -737,6 +864,7 @@ class MapWidget(QWidget):
                     showRestrictedZones = document.getElementById('chkRestricted').checked;
                     if (showRestrictedZones) {{
                         map.addLayer(restrictedZonesLayer);
+                        _updateOverlayOpacity();
                     }} else {{
                         map.removeLayer(restrictedZonesLayer);
                     }}
@@ -745,7 +873,7 @@ class MapWidget(QWidget):
                     showSettlements = document.getElementById('chkSettlements').checked;
                     if (showSettlements) {{
                         map.addLayer(settlementLayer);
-                        _updateSettlementOpacity();
+                        _updateOverlayOpacity();
                         _requestSettlements();
                     }} else {{
                         map.removeLayer(settlementLayer);
@@ -757,10 +885,11 @@ class MapWidget(QWidget):
 
         var settlementRenderer = L.canvas({{ pane: 'settlements' }});
         var _settlementStyle = {{
-            fillColor: 'rgba(239,68,68,0.35)',
+            fillPattern: _settlementHatch,
             fillOpacity: 1,
             color: 'rgba(239,68,68,0.75)',
             weight: 2,
+            fill: true,
             interactive: false,
             renderer: settlementRenderer
         }};
@@ -817,13 +946,17 @@ class MapWidget(QWidget):
             }}
         }}
 
-        function _updateSettlementOpacity() {{
-            var pane = map.getPane('settlements');
-            if (!pane) return;
+        function _updateOverlayOpacity() {{
             var z = map.getZoom();
-            if (z <= 12 || z >= 17) {{ pane.style.opacity = 0; }}
-            else if (z <= 14) {{ pane.style.opacity = 1; }}
-            else {{ pane.style.opacity = (1 - (z - 14) / 3).toFixed(2); }}
+            var opacity;
+            if (z <= 12 || z >= 17) {{ opacity = 0; }}
+            else if (z <= 14) {{ opacity = 1; }}
+            else {{ opacity = (1 - (z - 14) / 3).toFixed(2); }}
+
+            var sp = map.getPane('settlements');
+            if (sp) sp.style.opacity = opacity;
+            var rp = map.getPane('restricted');
+            if (rp) rp.style.opacity = opacity;
         }}
 
         function addSettlements(tileKey, features) {{
@@ -833,6 +966,307 @@ class MapWidget(QWidget):
                 _renderTile(tileKey, features);
             }}
         }}
+
+        /* ── Restricted Zones ── */
+
+        var _zoneStyle = {{
+            fillPattern: _zoneHatch,
+            fillOpacity: 1,
+            color: 'rgba(100,0,0,0.9)',
+            weight: 2.5,
+            dashArray: '10,6',
+            fill: true,
+            interactive: true,
+            renderer: restrictedRenderer
+        }};
+
+        function addRestrictedZone(zoneId, points, name) {{
+            if (restrictedZones[zoneId]) removeRestrictedZone(zoneId);
+            var polygon = L.polygon(points, _zoneStyle);
+            if (name) {{
+                polygon.bindTooltip(name, {{ permanent: false, direction: 'center' }});
+            }}
+            polygon.on('contextmenu', function(e) {{
+                L.DomEvent.stopPropagation(e);
+                L.DomEvent.preventDefault(e);
+                if (bridge && !drawingMode) {{
+                    bridge.onZoneContextMenu(zoneId, e.originalEvent.screenX, e.originalEvent.screenY);
+                }}
+            }});
+            polygon.on('dblclick', function(e) {{
+                L.DomEvent.stopPropagation(e);
+                L.DomEvent.preventDefault(e);
+                if (bridge && !drawingMode) bridge.onZoneDoubleClicked(zoneId);
+            }});
+            polygon.on('click', function(e) {{
+                L.DomEvent.stopPropagation(e);
+            }});
+            polygon.addTo(restrictedZonesLayer);
+            restrictedZones[zoneId] = {{ polygon: polygon, name: name }};
+        }}
+
+        function removeRestrictedZone(zoneId) {{
+            var z = restrictedZones[zoneId];
+            if (!z) return;
+            if (editingZoneId === zoneId) disableZoneEditing();
+            restrictedZonesLayer.removeLayer(z.polygon);
+            delete restrictedZones[zoneId];
+        }}
+
+        function updateRestrictedZone(zoneId, points) {{
+            var z = restrictedZones[zoneId];
+            if (!z) return;
+            z.polygon.setLatLngs(points);
+        }}
+
+        function clearRestrictedZones() {{
+            disableZoneEditing();
+            for (var id in restrictedZones) {{
+                restrictedZonesLayer.removeLayer(restrictedZones[id].polygon);
+            }}
+            restrictedZones = {{}};
+        }}
+
+        function highlightZone(zoneId) {{
+            var z = restrictedZones[zoneId];
+            if (!z) return;
+            z.polygon.setStyle({{ weight: 4 }});
+        }}
+
+        function unhighlightZone(zoneId) {{
+            var z = restrictedZones[zoneId];
+            if (!z) return;
+            z.polygon.setStyle({{ weight: 2.5 }});
+        }}
+
+        /* ── Drawing Mode ── */
+
+        function startDrawing() {{
+            if (drawingMode) return;
+            drawingMode = true;
+            drawingPoints = [];
+            drawingMarkers = [];
+            map.getContainer().style.cursor = 'crosshair';
+            map.doubleClickZoom.disable();
+        }}
+
+        function cancelDrawing() {{
+            if (!drawingMode) return;
+            _cleanupDrawing();
+            drawingMode = false;
+            map.getContainer().style.cursor = '';
+            map.doubleClickZoom.enable();
+            if (bridge) bridge.onZoneDrawingCancelled();
+        }}
+
+        function _addDrawingVertex(latlng) {{
+            // If 3+ points and click is near the first vertex — finish
+            if (drawingPoints.length >= 3 && drawingMarkers.length > 0) {{
+                var firstPx = map.latLngToContainerPoint(drawingMarkers[0].getLatLng());
+                var clickPx = map.latLngToContainerPoint(latlng);
+                var dist = firstPx.distanceTo(clickPx);
+                if (dist < 20) {{
+                    _finishDrawing();
+                    return;
+                }}
+            }}
+
+            drawingPoints.push([latlng.lat, latlng.lng]);
+            var idx = drawingPoints.length - 1;
+            var marker = L.circleMarker(latlng, {{
+                radius: 5, color: '#fff', fillColor: '#DC2626',
+                fillOpacity: 1, weight: 2
+            }}).addTo(map);
+
+            if (idx === 0) {{
+                marker.setStyle({{ radius: 8 }});
+            }}
+            drawingMarkers.push(marker);
+
+            if (drawingPreviewLine) {{
+                drawingPreviewLine.setLatLngs(drawingPoints);
+            }} else {{
+                drawingPreviewLine = L.polyline(drawingPoints, {{
+                    color: 'rgba(220,38,38,0.8)', weight: 2, dashArray: '6,6', opacity: 0.8
+                }}).addTo(map);
+            }}
+        }}
+
+        function _finishDrawing() {{
+            if (drawingPoints.length < 3) return;
+            var pts = drawingPoints.slice();
+            _cleanupDrawing();
+            drawingMode = false;
+            map.getContainer().style.cursor = '';
+            map.doubleClickZoom.enable();
+            if (bridge) bridge.onZoneDrawingFinished(JSON.stringify(pts));
+        }}
+
+        function _cleanupDrawing() {{
+            drawingMarkers.forEach(function(m) {{ map.removeLayer(m); }});
+            drawingMarkers = [];
+            drawingPoints = [];
+            if (drawingPreviewLine) {{ map.removeLayer(drawingPreviewLine); drawingPreviewLine = null; }}
+            if (drawingMouseLine) {{ map.removeLayer(drawingMouseLine); drawingMouseLine = null; }}
+        }}
+
+        /* ── Zone Vertex Editing ── */
+
+        function _notifyVerticesUpdated(zoneId) {{
+            var z = restrictedZones[zoneId];
+            if (z && bridge) {{
+                var pts = z.polygon.getLatLngs()[0].map(function(ll) {{
+                    return [ll.lat, ll.lng];
+                }});
+                bridge.onZoneVerticesUpdated(zoneId, JSON.stringify(pts));
+            }}
+        }}
+
+        function enableZoneEditing(zoneId) {{
+            disableZoneEditing();
+            var z = restrictedZones[zoneId];
+            if (!z) return;
+            editingZoneId = zoneId;
+            z.polygon.setStyle({{ dashArray: '6,4' }});
+            _refreshEditingMarkers(zoneId);
+        }}
+
+        function disableZoneEditing() {{
+            if (!editingZoneId) return;
+            editingMarkers.forEach(function(m) {{ map.removeLayer(m); }});
+            editingMarkers = [];
+            var z = restrictedZones[editingZoneId];
+            if (z) z.polygon.setStyle({{ dashArray: '10,6' }});
+            editingZoneId = null;
+        }}
+
+        function _refreshEditingMarkers(zoneId) {{
+            editingMarkers.forEach(function(m) {{ map.removeLayer(m); }});
+            editingMarkers = [];
+            var z = restrictedZones[zoneId];
+            if (!z) return;
+            var latlngs = z.polygon.getLatLngs()[0];
+
+            /* vertex markers */
+            latlngs.forEach(function(ll, idx) {{
+                var m = L.circleMarker(ll, {{
+                    radius: 7, color: '#fff', fillColor: '{Colors.PRIMARY}',
+                    fillOpacity: 1, weight: 2
+                }}).addTo(map);
+                m._vertexIdx = idx;
+                m._isVertex = true;
+                _makeVertexDraggable(m, zoneId);
+                /* right-click to delete vertex */
+                m.on('contextmenu', function(e) {{
+                    L.DomEvent.stopPropagation(e);
+                    L.DomEvent.preventDefault(e);
+                    var cur = z.polygon.getLatLngs()[0];
+                    if (cur.length > 3) {{
+                        cur.splice(idx, 1);
+                        z.polygon.setLatLngs([cur]);
+                        _refreshEditingMarkers(zoneId);
+                        _notifyVerticesUpdated(zoneId);
+                    }}
+                }});
+                editingMarkers.push(m);
+            }});
+
+            /* midpoint markers */
+            for (var i = 0; i < latlngs.length; i++) {{
+                var next = (i + 1) % latlngs.length;
+                var midLat = (latlngs[i].lat + latlngs[next].lat) / 2;
+                var midLng = (latlngs[i].lng + latlngs[next].lng) / 2;
+                var mid = L.circleMarker([midLat, midLng], {{
+                    radius: 5, color: '#fff', fillColor: '#888',
+                    fillOpacity: 0.7, weight: 1.5
+                }}).addTo(map);
+                mid._insertAfter = i;
+                mid._isMidpoint = true;
+                _makeMidpointInteractive(mid, zoneId);
+                editingMarkers.push(mid);
+            }}
+        }}
+
+        function _makeVertexDraggable(marker, zoneId) {{
+            var dragging = false;
+            marker.on('mousedown', function(e) {{
+                if (e.originalEvent.button !== 0) return;
+                L.DomEvent.stopPropagation(e);
+                dragging = true;
+                map.dragging.disable();
+                map.on('mousemove', onMove);
+                map.on('mouseup', onUp);
+            }});
+            function onMove(e) {{
+                if (!dragging) return;
+                marker.setLatLng(e.latlng);
+                var z = restrictedZones[zoneId];
+                if (z) {{
+                    var latlngs = z.polygon.getLatLngs()[0];
+                    latlngs[marker._vertexIdx] = e.latlng;
+                    z.polygon.setLatLngs(latlngs);
+                }}
+            }}
+            function onUp() {{
+                if (!dragging) return;
+                dragging = false;
+                map.dragging.enable();
+                map.off('mousemove', onMove);
+                map.off('mouseup', onUp);
+                _refreshEditingMarkers(zoneId);
+                _notifyVerticesUpdated(zoneId);
+            }}
+        }}
+
+        function _makeMidpointInteractive(marker, zoneId) {{
+            var dragging = false, inserted = false, insertIdx = -1;
+            marker.on('mousedown', function(e) {{
+                if (e.originalEvent.button !== 0) return;
+                L.DomEvent.stopPropagation(e);
+                dragging = true;
+                inserted = false;
+                insertIdx = marker._insertAfter + 1;
+                map.dragging.disable();
+                map.on('mousemove', onMove);
+                map.on('mouseup', onUp);
+            }});
+            function onMove(e) {{
+                if (!dragging) return;
+                var z = restrictedZones[zoneId];
+                if (!z) return;
+                if (!inserted) {{
+                    var latlngs = z.polygon.getLatLngs()[0];
+                    latlngs.splice(insertIdx, 0, e.latlng);
+                    z.polygon.setLatLngs([latlngs]);
+                    inserted = true;
+                    marker.setStyle({{ radius: 7, fillColor: '{Colors.PRIMARY}', fillOpacity: 1 }});
+                }}
+                marker.setLatLng(e.latlng);
+                var latlngs = z.polygon.getLatLngs()[0];
+                latlngs[insertIdx] = e.latlng;
+                z.polygon.setLatLngs([latlngs]);
+            }}
+            function onUp() {{
+                dragging = false;
+                map.dragging.enable();
+                map.off('mousemove', onMove);
+                map.off('mouseup', onUp);
+                if (inserted) {{
+                    _refreshEditingMarkers(zoneId);
+                    _notifyVerticesUpdated(zoneId);
+                }}
+            }}
+        }}
+
+        /* ── Drawing event integration ── */
+
+        document.addEventListener('keydown', function(e) {{
+            if (e.key === 'Escape' && drawingMode) cancelDrawing();
+            if (e.key === 'Escape' && editingZoneId) {{
+                disableZoneEditing();
+                if (bridge) bridge.onZoneEditingFinished();
+            }}
+        }});
 
         function createAircraftIcon(heading) {{
             return L.divIcon({{
@@ -1116,7 +1550,7 @@ class MapWidget(QWidget):
         }});
         map.on('zoomend', function() {{
             _requestSettlements();
-            _updateSettlementOpacity();
+            _updateOverlayOpacity();
         }});
 
         var bridge = null;
@@ -1125,8 +1559,25 @@ class MapWidget(QWidget):
         }});
 
         map.on('click', function(e) {{
+            if (drawingMode) {{
+                _addDrawingVertex(e.latlng);
+                return;
+            }}
+            if (editingZoneId) {{
+                disableZoneEditing();
+                if (bridge) bridge.onZoneEditingFinished();
+                return;
+            }}
             if (bridge) {{
                 bridge.onMapClick(e.latlng.lat, e.latlng.lng);
+            }}
+        }});
+
+        map.on('dblclick', function(e) {{
+            if (drawingMode && drawingPoints.length >= 3) {{
+                L.DomEvent.stopPropagation(e);
+                L.DomEvent.preventDefault(e);
+                _finishDrawing();
             }}
         }});
 
@@ -1137,6 +1588,16 @@ class MapWidget(QWidget):
         }});
 
         map.on('mousemove', function(e) {{
+            if (drawingMode && drawingPoints.length > 0) {{
+                var lastPt = drawingPoints[drawingPoints.length - 1];
+                if (drawingMouseLine) {{
+                    drawingMouseLine.setLatLngs([lastPt, [e.latlng.lat, e.latlng.lng]]);
+                }} else {{
+                    drawingMouseLine = L.polyline([lastPt, [e.latlng.lat, e.latlng.lng]], {{
+                        color: 'rgba(220,38,38,0.6)', weight: 1.5, dashArray: '4,4', opacity: 0.6
+                    }}).addTo(map);
+                }}
+            }}
             if (bridge) {{
                 bridge.onMouseMove(e.latlng.lat, e.latlng.lng);
             }}
@@ -1199,3 +1660,57 @@ class MapWidget(QWidget):
         self.web_view.page().runJavaScript(
             f"document.getElementById('{chk_id}').checked = {js_val}; toggleLayer('{layer_name}');"
         )
+
+    # ── Restricted Zones ──
+
+    def _on_zone_drawing_finished(self, points_json):
+        try:
+            points = json.loads(points_json)
+            self.zone_drawing_finished.emit(points)
+        except json.JSONDecodeError:
+            pass
+
+    def _on_zone_vertices_updated(self, zone_id, points_json):
+        try:
+            points = json.loads(points_json)
+            self.zone_vertices_updated.emit(zone_id, points)
+        except json.JSONDecodeError:
+            pass
+
+    def start_zone_drawing(self):
+        self.web_view.page().runJavaScript("startDrawing();")
+
+    def cancel_zone_drawing(self):
+        self.web_view.page().runJavaScript("cancelDrawing();")
+
+    def add_restricted_zone(self, zone_id: str, points: list, name: str = ""):
+        pts_json = json.dumps(points)
+        name_escaped = json.dumps(name)
+        self.web_view.page().runJavaScript(
+            f"addRestrictedZone({json.dumps(zone_id)}, {pts_json}, {name_escaped});"
+        )
+
+    def remove_restricted_zone(self, zone_id: str):
+        self.web_view.page().runJavaScript(f"removeRestrictedZone({json.dumps(zone_id)});")
+
+    def update_restricted_zone(self, zone_id: str, points: list):
+        pts_json = json.dumps(points)
+        self.web_view.page().runJavaScript(
+            f"updateRestrictedZone({json.dumps(zone_id)}, {pts_json});"
+        )
+
+    def enable_zone_editing(self, zone_id: str):
+        self.web_view.page().runJavaScript(f"enableZoneEditing({json.dumps(zone_id)});")
+
+    def disable_zone_editing(self, zone_id: str = ""):
+        self.web_view.page().runJavaScript("disableZoneEditing();")
+
+    def highlight_zone(self, zone_id: str):
+        self.web_view.page().runJavaScript(f"highlightZone({json.dumps(zone_id)});")
+
+    def unhighlight_zone(self, zone_id: str):
+        self.web_view.page().runJavaScript(f"unhighlightZone({json.dumps(zone_id)});")
+
+    def load_all_zones(self, zones: list):
+        for z in zones:
+            self.add_restricted_zone(z['id'], z['points'], z.get('name', ''))
