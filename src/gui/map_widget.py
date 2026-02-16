@@ -2,6 +2,7 @@ import json
 import math
 import os
 import threading
+import time
 import urllib.request
 import urllib.parse
 
@@ -16,15 +17,17 @@ from src.gui.theme import Colors
 
 
 _TILE_GRID = 0.1  # ~10 km tile grid
-_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'cache', 'settlements_v3')
+_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'cache', 'settlements_v5')
 _DP_TOLERANCE = 0.0005  # ~55 m — Douglas-Peucker simplification
 
+_OVERPASS_ENDPOINTS = [
+    'https://overpass-api.de/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter',
+]
 
-_NUM_WORKERS = 4
 
-
-class _TileWorker(QThread):
-    """Single worker that fetches one tile at a time from shared queue."""
+class _FetchWorker(QThread):
+    """Batch-fetches settlements for all queued tiles in one Overpass request."""
     tile_loaded = pyqtSignal(str, list)
 
     def __init__(self, loader):
@@ -36,57 +39,92 @@ class _TileWorker(QThread):
             with self._loader._lock:
                 if not self._loader._queue:
                     return
-                s, w, n, e = self._loader._queue.pop(0)
+                tiles = list(self._loader._queue)
+                self._loader._queue.clear()
 
-            key = SettlementLoader._key((s, w, n, e))
-            if key in self._loader._cache:
-                self.tile_loaded.emit(key, self._loader._cache[key])
-                continue
+            s = min(t[0] for t in tiles)
+            w = min(t[1] for t in tiles)
+            n = max(t[2] for t in tiles)
+            e = max(t[3] for t in tiles)
 
             query = (
-                f'[out:json][timeout:25];('
+                f'[out:json][timeout:30];('
                 f'way["place"~"^(city|town|village|hamlet)$"]({s},{w},{n},{e});'
                 f'relation["place"~"^(city|town|village|hamlet)$"]({s},{w},{n},{e});'
                 f'node["place"~"^(city|town|village|hamlet)$"]({s},{w},{n},{e});'
                 f');out geom;'
             )
-            try:
-                post_data = urllib.parse.urlencode({'data': query}).encode()
-                req = urllib.request.Request(
-                    'https://overpass-api.de/api/interpreter',
-                    data=post_data,
-                )
-                with urllib.request.urlopen(req, timeout=25) as resp:
-                    data = json.loads(resp.read())
 
-                features = SettlementLoader._process_elements(data.get('elements', []))
+            last_err = None
+            for attempt in range(len(_OVERPASS_ENDPOINTS)):
+                try:
+                    ep = _OVERPASS_ENDPOINTS[attempt]
+                    post_data = urllib.parse.urlencode({'data': query}).encode()
+                    req = urllib.request.Request(ep, data=post_data)
+                    with urllib.request.urlopen(req, timeout=30) as resp:
+                        raw = json.loads(resp.read())
+
+                    elements = raw.get('elements', [])
+                    all_features = SettlementLoader._process_elements(elements)
+                    tile_map = self._distribute(all_features, tiles)
+
+                    with self._loader._lock:
+                        for key, features in tile_map.items():
+                            self._loader._cache[key] = features
+                            self._loader._emitted_keys.add(key)
+
+                    for key, features in tile_map.items():
+                        SettlementLoader._save_tile(key, features)
+                        self.tile_loaded.emit(key, features)
+
+                    last_err = None
+                    break
+                except Exception as exc:
+                    last_err = exc
+                    if attempt < len(_OVERPASS_ENDPOINTS) - 1:
+                        time.sleep(2)
+
+            if last_err:
+                print(f"[FIX] Settlement batch failed: {last_err}")
                 with self._loader._lock:
-                    self._loader._cache[key] = features
-                SettlementLoader._save_tile(key, features)
-                self.tile_loaded.emit(key, features)
-            except Exception as e:
-                print(f"Settlement tile {key} error: {e}")
-                with self._loader._lock:
-                    self._loader._loaded_keys.discard(key)
+                    for t in tiles:
+                        self._loader._loaded_keys.discard(SettlementLoader._key(t))
+
+    @staticmethod
+    def _distribute(features, tiles):
+        """Assign features to overlapping tiles by bbox."""
+        tile_map = {}
+        for t in tiles:
+            tile_map[SettlementLoader._key(t)] = []
+        for f in features:
+            if f['F'] == 'p':
+                lats = [c[0] for c in f['c']]
+                lons = [c[1] for c in f['c']]
+                fb = (min(lats), min(lons), max(lats), max(lons))
+            else:
+                fb = (f['lat'], f['lon'], f['lat'], f['lon'])
+            for t in tiles:
+                if not (fb[2] < t[0] or fb[0] > t[2] or fb[3] < t[1] or fb[1] > t[3]):
+                    tile_map[SettlementLoader._key(t)].append(f)
+        return tile_map
 
 
 class SettlementLoader(QObject):
-    """Pool of workers that fetch settlement boundaries in parallel."""
+    """Batch-fetches settlement boundaries with tile caching."""
     tile_loaded = pyqtSignal(str, list)
 
     def __init__(self):
         super().__init__()
         self._queue = []
         self._loaded_keys = set()
+        self._emitted_keys = set()
         self._cache = {}
         self._lock = threading.Lock()
         os.makedirs(_CACHE_DIR, exist_ok=True)
         self._load_disk_cache()
-        self._workers = []
-        for _ in range(_NUM_WORKERS):
-            w = _TileWorker(self)
-            w.tile_loaded.connect(self.tile_loaded)
-            self._workers.append(w)
+        self._worker = _FetchWorker(self)
+        self._worker.tile_loaded.connect(self.tile_loaded)
+        self._worker.finished.connect(self._on_worker_done)
 
     def request(self, south, west, north, east):
         tiles = self._grid_tiles(south, west, north, east)
@@ -99,12 +137,17 @@ class SettlementLoader(QObject):
                     self._queue.append(t)
                     added = True
         if added:
-            self._kick_workers()
+            self._kick_worker()
 
-    def _kick_workers(self):
-        for w in self._workers:
-            if not w.isRunning():
-                w.start()
+    def _kick_worker(self):
+        if not self._worker.isRunning():
+            self._worker.start()
+
+    def _on_worker_done(self):
+        with self._lock:
+            has_work = bool(self._queue)
+        if has_work:
+            self._worker.start()
 
     @staticmethod
     def _process_elements(elements):
@@ -122,19 +165,35 @@ class SettlementLoader(QObject):
                 coords = [[p['lat'], p['lon']] for p in el['geometry']]
                 if len(coords) < 3:
                     continue
-                simplified = SettlementLoader._simplify_dp(coords, _DP_TOLERANCE)
-                polys.append({'F': 'p', 'c': simplified, 't': place})
                 lats = [c[0] for c in coords]
                 lons = [c[1] for c in coords]
+                span = max(max(lats) - min(lats), max(lons) - min(lons))
+                tol = _DP_TOLERANCE
+                if span > 0.5:
+                    tol = 0.005
+                elif span > 0.2:
+                    tol = 0.002
+                elif span > 0.1:
+                    tol = 0.001
+                simplified = SettlementLoader._simplify_dp(coords, tol)
+                polys.append({'F': 'p', 'c': simplified, 't': place})
                 poly_bboxes.append((min(lats), min(lons), max(lats), max(lons)))
 
             elif el['type'] == 'relation' and 'members' in el:
                 ring = SettlementLoader._merge_relation(el['members'])
                 if ring and len(ring) >= 3:
-                    simplified = SettlementLoader._simplify_dp(ring, _DP_TOLERANCE)
-                    polys.append({'F': 'p', 'c': simplified, 't': place})
                     lats = [c[0] for c in ring]
                     lons = [c[1] for c in ring]
+                    span = max(max(lats) - min(lats), max(lons) - min(lons))
+                    tol = _DP_TOLERANCE
+                    if span > 0.5:
+                        tol = 0.005
+                    elif span > 0.2:
+                        tol = 0.002
+                    elif span > 0.1:
+                        tol = 0.001
+                    simplified = SettlementLoader._simplify_dp(ring, tol)
+                    polys.append({'F': 'p', 'c': simplified, 't': place})
                     poly_bboxes.append((min(lats), min(lons), max(lats), max(lons)))
 
             elif el['type'] == 'node':
@@ -273,7 +332,8 @@ class SettlementLoader(QObject):
         tiles = self._grid_tiles(south, west, north, east)
         for t in tiles:
             key = self._key(t)
-            if key in self._cache and self._cache[key]:
+            if key in self._cache and self._cache[key] and key not in self._emitted_keys:
+                self._emitted_keys.add(key)
                 self.tile_loaded.emit(key, self._cache[key])
 
 
@@ -577,17 +637,6 @@ class MapWidget(QWidget):
 <body>
     <div id="map"></div>
 
-    <svg width="0" height="0" style="position:absolute">
-        <defs>
-            <pattern id="settlement-hatch" width="10" height="10"
-                     patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-                <rect width="10" height="10" fill="rgba(239,68,68,0.45)"/>
-                <line x1="0" y1="0" x2="0" y2="10"
-                      stroke="rgba(239,68,68,0.75)" stroke-width="3.5"/>
-            </pattern>
-        </defs>
-    </svg>
-
     <div class="map-layer-panel">
         <div class="map-layer-content" id="layerContent">
             <label><input type="checkbox" id="chkTrack" checked onchange="toggleLayer('track')"> Трек</label>
@@ -632,8 +681,11 @@ class MapWidget(QWidget):
         var showSettlements = false;
 
         var restrictedZonesLayer = L.layerGroup();
+        map.createPane('settlements');
+        map.getPane('settlements').style.zIndex = 250;
         var settlementLayer = L.layerGroup();
-        var settlementRenderedKeys = {{}};
+        var settlementTileLayers = {{}};
+        var settlementTileData = {{}};
 
         function togglePanel() {{
             document.getElementById('layerContent').classList.toggle('open');
@@ -641,10 +693,16 @@ class MapWidget(QWidget):
 
         var _settlementTimer = null;
         function _requestSettlements() {{
-            if (!showSettlements || !bridge || map.getZoom() < 10) return;
+            if (!showSettlements || !bridge) return;
             if (_settlementTimer) clearTimeout(_settlementTimer);
             _settlementTimer = setTimeout(function() {{
-                var b = map.getBounds().pad(0.5);
+                _updateSettlementOpacity();
+                if (map.getZoom() <= 12) {{
+                    for (var k in settlementTileLayers) {{ _removeTile(k); }}
+                    return;
+                }}
+                _cullSettlementTiles();
+                var b = map.getBounds().pad(0.3);
                 bridge.onBoundsChanged(b.getSouth(), b.getWest(), b.getNorth(), b.getEast());
             }}, 150);
         }}
@@ -687,27 +745,37 @@ class MapWidget(QWidget):
                     showSettlements = document.getElementById('chkSettlements').checked;
                     if (showSettlements) {{
                         map.addLayer(settlementLayer);
+                        _updateSettlementOpacity();
                         _requestSettlements();
                     }} else {{
                         map.removeLayer(settlementLayer);
+                        for (var k in settlementTileLayers) {{ _removeTile(k); }}
                     }}
                     break;
             }}
         }}
 
+        var settlementRenderer = L.canvas({{ pane: 'settlements' }});
         var _settlementStyle = {{
-            fillColor: 'rgba(239,68,68,0.45)',
+            fillColor: 'rgba(239,68,68,0.35)',
             fillOpacity: 1,
             color: 'rgba(239,68,68,0.75)',
-            weight: 2.5,
-            smoothFactor: 3,
-            interactive: false
+            weight: 2,
+            interactive: false,
+            renderer: settlementRenderer
         }};
         var _fallbackRadii = {{city: 5000, town: 2000, village: 700, hamlet: 300}};
 
-        function addSettlements(tileKey, features) {{
-            if (settlementRenderedKeys[tileKey]) return;
-            settlementRenderedKeys[tileKey] = true;
+        function _isTileVisible(tileKey) {{
+            var p = tileKey.split(',');
+            var ts = parseFloat(p[0]), tw = parseFloat(p[1]), g = 0.1;
+            var b = map.getBounds();
+            return !(ts + g < b.getSouth() || ts > b.getNorth() || tw + g < b.getWest() || tw > b.getEast());
+        }}
+
+        function _renderTile(tileKey, features) {{
+            if (settlementTileLayers[tileKey]) return;
+            var layers = [];
             features.forEach(function(f) {{
                 var shape;
                 if (f.F === 'p') {{
@@ -716,11 +784,54 @@ class MapWidget(QWidget):
                     var r = _fallbackRadii[f.t] || 700;
                     shape = L.circle([f.lat, f.lon], Object.assign({{radius: r}}, _settlementStyle));
                 }}
-                shape.on('add', function() {{
-                    if (shape._path) shape._path.style.fill = 'url(#settlement-hatch)';
-                }});
                 shape.addTo(settlementLayer);
+                layers.push(shape);
             }});
+            settlementTileLayers[tileKey] = layers;
+        }}
+
+        function _removeTile(tileKey) {{
+            var layers = settlementTileLayers[tileKey];
+            if (!layers) return;
+            layers.forEach(function(l) {{ settlementLayer.removeLayer(l); }});
+            delete settlementTileLayers[tileKey];
+        }}
+
+        function _cullSettlementTiles() {{
+            var b = map.getBounds();
+            var pad = 0.05, g = 0.1;
+            var south = b.getSouth() - pad, north = b.getNorth() + pad;
+            var west = b.getWest() - pad, east = b.getEast() + pad;
+            for (var key in settlementTileLayers) {{
+                var p = key.split(',');
+                var ts = parseFloat(p[0]), tw = parseFloat(p[1]);
+                if (ts + g < south || ts > north || tw + g < west || tw > east) _removeTile(key);
+            }}
+            for (var key in settlementTileData) {{
+                if (settlementTileLayers[key]) continue;
+                var p = key.split(',');
+                var ts = parseFloat(p[0]), tw = parseFloat(p[1]);
+                if (ts + g >= south && ts <= north && tw + g >= west && tw <= east) {{
+                    _renderTile(key, settlementTileData[key]);
+                }}
+            }}
+        }}
+
+        function _updateSettlementOpacity() {{
+            var pane = map.getPane('settlements');
+            if (!pane) return;
+            var z = map.getZoom();
+            if (z <= 12 || z >= 17) {{ pane.style.opacity = 0; }}
+            else if (z <= 14) {{ pane.style.opacity = 1; }}
+            else {{ pane.style.opacity = (1 - (z - 14) / 3).toFixed(2); }}
+        }}
+
+        function addSettlements(tileKey, features) {{
+            if (settlementTileData[tileKey]) return;
+            settlementTileData[tileKey] = features;
+            if (showSettlements && _isTileVisible(tileKey)) {{
+                _renderTile(tileKey, features);
+            }}
         }}
 
         function createAircraftIcon(heading) {{
@@ -1005,6 +1116,7 @@ class MapWidget(QWidget):
         }});
         map.on('zoomend', function() {{
             _requestSettlements();
+            _updateSettlementOpacity();
         }});
 
         var bridge = null;
