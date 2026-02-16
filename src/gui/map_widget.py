@@ -722,16 +722,110 @@ class MapWidget(QWidget):
         }}).addTo(map);
 
         var aircraftMarker = null;
-        var trackLine = null;
         var trackPoints = [];
         var waypointMarkers = [];
         var routeLines = [];
-        var activeWaypointLine = null;
         var waypointData = [];
         var activeWaypointIdx = 0;
         var followAircraft = false;
         var lastHeading = 0;
         var lastAircraftPos = null;
+
+        /* ── Hot Path Canvas — track + active waypoint line ── */
+        var _hpCanvas = document.createElement('canvas');
+        _hpCanvas.style.cssText = 'position:absolute;left:0;top:0;z-index:399;pointer-events:none;';
+        map.getContainer().appendChild(_hpCanvas);
+        var _hpCtx = _hpCanvas.getContext('2d');
+        var _hpZoom = -1, _hpScale = 0;
+        var _hpTrackWorld = [];
+        var _hpAcWorld = null;
+        var _hpWpWorld = null;
+        var _hpDrawRaf = null;
+        var _hpDpr = window.devicePixelRatio || 1;
+
+        (function _hpResize() {{
+            var c = map.getContainer();
+            _hpCanvas.width = c.clientWidth * _hpDpr;
+            _hpCanvas.height = c.clientHeight * _hpDpr;
+            _hpCanvas.style.width = c.clientWidth + 'px';
+            _hpCanvas.style.height = c.clientHeight + 'px';
+            _hpCtx.setTransform(_hpDpr, 0, 0, _hpDpr, 0, 0);
+            map.on('resize', _hpResize);
+        }})();
+
+        function _hpProject(lat, lng) {{
+            var x = _hpScale * (lng / 360 + 0.5);
+            var r = lat * 0.017453292519943295;
+            var s = Math.sin(r);
+            var y = _hpScale * (0.5 - Math.log((1 + s) / (1 - s)) * 0.07957747154594767);
+            return [x, y];
+        }}
+
+        function _hpSyncZoom() {{
+            var z = map.getZoom();
+            if (z === _hpZoom) return;
+            _hpZoom = z;
+            _hpScale = 256 * Math.pow(2, z);
+            for (var i = 0; i < trackPoints.length; i++) {{
+                _hpTrackWorld[i] = _hpProject(trackPoints[i][0], trackPoints[i][1]);
+            }}
+            _hpTrackWorld.length = trackPoints.length;
+            if (lastAircraftPos) _hpAcWorld = _hpProject(lastAircraftPos[0], lastAircraftPos[1]);
+            if (_hpWpWorld && waypointData.length > activeWaypointIdx) {{
+                var wp = waypointData[activeWaypointIdx];
+                _hpWpWorld = _hpProject(wp.lat, wp.lon);
+            }}
+        }}
+
+        function _hpScheduleDraw() {{
+            if (_hpDrawRaf) return;
+            _hpDrawRaf = requestAnimationFrame(_hpDraw);
+        }}
+
+        function _hpDraw() {{
+            _hpDrawRaf = null;
+            var w = _hpCanvas.width / _hpDpr, h = _hpCanvas.height / _hpDpr;
+            if (!w) return;
+            _hpSyncZoom();
+            var origin = map.getPixelOrigin();
+            var pp = map._getMapPanePos();
+            var ox = pp.x - origin.x, oy = pp.y - origin.y;
+            var ctx = _hpCtx;
+            ctx.clearRect(0, 0, w, h);
+
+            /* track */
+            if (showTrack && _hpTrackWorld.length > 1) {{
+                ctx.beginPath();
+                var p = _hpTrackWorld[0];
+                ctx.moveTo(p[0] + ox, p[1] + oy);
+                for (var i = 1; i < _hpTrackWorld.length; i++) {{
+                    p = _hpTrackWorld[i];
+                    ctx.lineTo(p[0] + ox, p[1] + oy);
+                }}
+                ctx.strokeStyle = '{Colors.SUCCESS}';
+                ctx.lineWidth = 2;
+                ctx.globalAlpha = 0.7;
+                ctx.stroke();
+                ctx.globalAlpha = 1;
+            }}
+
+            /* active waypoint line */
+            if (showWaypoints && _hpAcWorld && _hpWpWorld) {{
+                ctx.beginPath();
+                ctx.moveTo(_hpAcWorld[0] + ox, _hpAcWorld[1] + oy);
+                ctx.lineTo(_hpWpWorld[0] + ox, _hpWpWorld[1] + oy);
+                ctx.setLineDash([4, 8]);
+                ctx.strokeStyle = '{Colors.PRIMARY}';
+                ctx.lineWidth = 2;
+                ctx.globalAlpha = 0.8;
+                ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.globalAlpha = 1;
+            }}
+        }}
+
+        map.on('move', _hpScheduleDraw);
+        map.on('zoomanim', _hpScheduleDraw);
 
         var showTrack = true;
         var showWaypoints = true;
@@ -739,7 +833,6 @@ class MapWidget(QWidget):
         var showRestrictedZones = false;
         var showSettlements = false;
 
-        var restrictedZonesLayer = L.layerGroup();
         var restrictedZones = {{}};
         var drawingMode = false;
         var drawingPoints = [];
@@ -810,12 +903,10 @@ class MapWidget(QWidget):
 
         map.createPane('restricted');
         map.getPane('restricted').style.zIndex = 260;
-        var restrictedRenderer = L.canvas({{ pane: 'restricted', padding: 0.5 }});
 
         map.createPane('settlements');
         map.getPane('settlements').style.zIndex = 250;
-        var settlementLayer = L.layerGroup();
-        var settlementTileLayers = {{}};
+
         var settlementTileData = {{}};
 
         function togglePanel() {{
@@ -828,126 +919,10 @@ class MapWidget(QWidget):
             if (_settlementTimer) clearTimeout(_settlementTimer);
             _settlementTimer = setTimeout(function() {{
                 _updateOverlayOpacity();
-                if (map.getZoom() <= 12) {{
-                    for (var k in settlementTileLayers) {{ _removeTile(k); }}
-                    return;
-                }}
-                _cullSettlementTiles();
+                if (map.getZoom() <= 12) return;
                 var b = map.getBounds().pad(0.3);
                 bridge.onBoundsChanged(b.getSouth(), b.getWest(), b.getNorth(), b.getEast());
             }}, 300);
-        }}
-
-        function toggleLayer(name) {{
-            switch (name) {{
-                case 'track':
-                    showTrack = document.getElementById('chkTrack').checked;
-                    if (trackLine) {{
-                        showTrack ? map.addLayer(trackLine) : map.removeLayer(trackLine);
-                    }}
-                    break;
-                case 'waypoints':
-                    showWaypoints = document.getElementById('chkWaypoints').checked;
-                    waypointMarkers.forEach(function(m) {{
-                        showWaypoints ? map.addLayer(m) : map.removeLayer(m);
-                    }});
-                    routeLines.forEach(function(l) {{
-                        showWaypoints ? map.addLayer(l) : map.removeLayer(l);
-                    }});
-                    if (activeWaypointLine) {{
-                        showWaypoints ? map.addLayer(activeWaypointLine) : map.removeLayer(activeWaypointLine);
-                    }}
-                    break;
-                case 'hud':
-                    showHud = document.getElementById('chkHud').checked;
-                    if (homeMarker) {{
-                        showHud ? map.addLayer(homeMarker) : map.removeLayer(homeMarker);
-                    }}
-                    break;
-                case 'restricted':
-                    showRestrictedZones = document.getElementById('chkRestricted').checked;
-                    if (showRestrictedZones) {{
-                        map.addLayer(restrictedZonesLayer);
-                        _updateOverlayOpacity();
-                    }} else {{
-                        map.removeLayer(restrictedZonesLayer);
-                    }}
-                    break;
-                case 'settlements':
-                    showSettlements = document.getElementById('chkSettlements').checked;
-                    if (showSettlements) {{
-                        map.addLayer(settlementLayer);
-                        _updateOverlayOpacity();
-                        _requestSettlements();
-                    }} else {{
-                        map.removeLayer(settlementLayer);
-                        for (var k in settlementTileLayers) {{ _removeTile(k); }}
-                    }}
-                    break;
-            }}
-        }}
-
-        var settlementRenderer = L.canvas({{ pane: 'settlements', padding: 0.5, tolerance: 3 }});
-        var _settlementStyle = {{
-            fillPattern: _settlementHatch,
-            fillOpacity: 1,
-            color: 'rgba(239,68,68,0.75)',
-            weight: 2,
-            fill: true,
-            interactive: false,
-            renderer: settlementRenderer
-        }};
-        var _fallbackRadii = {{city: 5000, town: 2000, village: 700, hamlet: 300}};
-
-        function _isTileVisible(tileKey) {{
-            var p = tileKey.split(',');
-            var ts = parseFloat(p[0]), tw = parseFloat(p[1]), g = 0.1;
-            var b = map.getBounds();
-            return !(ts + g < b.getSouth() || ts > b.getNorth() || tw + g < b.getWest() || tw > b.getEast());
-        }}
-
-        function _renderTile(tileKey, features) {{
-            if (settlementTileLayers[tileKey]) return;
-            var layers = [];
-            features.forEach(function(f) {{
-                var shape;
-                if (f.F === 'p') {{
-                    shape = L.polygon(f.c, _settlementStyle);
-                }} else {{
-                    var r = _fallbackRadii[f.t] || 700;
-                    shape = L.circle([f.lat, f.lon], Object.assign({{radius: r}}, _settlementStyle));
-                }}
-                shape.addTo(settlementLayer);
-                layers.push(shape);
-            }});
-            settlementTileLayers[tileKey] = layers;
-        }}
-
-        function _removeTile(tileKey) {{
-            var layers = settlementTileLayers[tileKey];
-            if (!layers) return;
-            layers.forEach(function(l) {{ settlementLayer.removeLayer(l); }});
-            delete settlementTileLayers[tileKey];
-        }}
-
-        function _cullSettlementTiles() {{
-            var b = map.getBounds();
-            var pad = 0.05, g = 0.1;
-            var south = b.getSouth() - pad, north = b.getNorth() + pad;
-            var west = b.getWest() - pad, east = b.getEast() + pad;
-            for (var key in settlementTileLayers) {{
-                var p = key.split(',');
-                var ts = parseFloat(p[0]), tw = parseFloat(p[1]);
-                if (ts + g < south || ts > north || tw + g < west || tw > east) _removeTile(key);
-            }}
-            for (var key in settlementTileData) {{
-                if (settlementTileLayers[key]) continue;
-                var p = key.split(',');
-                var ts = parseFloat(p[0]), tw = parseFloat(p[1]);
-                if (ts + g >= south && ts <= north && tw + g >= west && tw <= east) {{
-                    _renderTile(key, settlementTileData[key]);
-                }}
-            }}
         }}
 
         function _updateOverlayOpacity() {{
@@ -963,84 +938,341 @@ class MapWidget(QWidget):
             if (rp) rp.style.opacity = opacity;
         }}
 
+        /* ── Shared Overlay Tile Mixin ── */
+        var _OverlayTileMixin = {{
+            _latLngToTilePixel: function(lat, lng, zoom, tileX, tileY) {{
+                var n = Math.pow(2, zoom);
+                var px = ((lng + 180) / 360) * n * 256 - tileX * 256;
+                var latRad = lat * Math.PI / 180;
+                var py = (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n * 256 - tileY * 256;
+                return [px, py];
+            }},
+            _tileBounds: function(coords) {{
+                var n = Math.pow(2, coords.z);
+                var west = coords.x / n * 360 - 180;
+                var east = (coords.x + 1) / n * 360 - 180;
+                var north = Math.atan(Math.sinh(Math.PI * (1 - 2 * coords.y / n))) * 180 / Math.PI;
+                var south = Math.atan(Math.sinh(Math.PI * (1 - 2 * (coords.y + 1) / n))) * 180 / Math.PI;
+                return {{ south: south, west: west, north: north, east: east }};
+            }},
+            _boundsOverlap: function(a, b) {{
+                return !(a.south > b.north || a.north < b.south || a.west > b.east || a.east < b.west);
+            }},
+            _metersToPixels: function(lat, meters, zoom) {{
+                return meters / (40075016.686 * Math.cos(lat * Math.PI / 180) / Math.pow(2, zoom + 8));
+            }}
+        }};
+
+        /* ── SettlementGridLayer ── */
+        var _fallbackRadii = {{city: 5000, town: 2000, village: 700, hamlet: 300}};
+        var _settlementHatchPattern = null;
+
+        var SettlementGridLayer = L.GridLayer.extend({{
+            options: {{
+                pane: 'settlements',
+                tileSize: 256,
+                updateWhenZooming: false,
+                updateWhenIdle: true
+            }},
+
+            initialize: function(opts) {{
+                L.GridLayer.prototype.initialize.call(this, opts);
+                this._data = {{}};
+                this._allFeatures = [];
+                this._dirtyFlag = 0;
+            }},
+
+            setData: function(key, features) {{
+                if (this._data[key]) return;
+                this._data[key] = features;
+                for (var i = 0; i < features.length; i++) {{
+                    var f = features[i];
+                    if (f.F === 'p') {{
+                        var lats = f.c.map(function(c) {{ return c[0]; }});
+                        var lons = f.c.map(function(c) {{ return c[1]; }});
+                        f._bbox = {{ south: Math.min.apply(null, lats), north: Math.max.apply(null, lats),
+                                     west: Math.min.apply(null, lons), east: Math.max.apply(null, lons) }};
+                    }} else {{
+                        var r = (_fallbackRadii[f.t] || 700) / 111000;
+                        f._bbox = {{ south: f.lat - r, north: f.lat + r, west: f.lon - r, east: f.lon + r }};
+                    }}
+                    this._allFeatures.push(f);
+                }}
+                this._scheduleRedraw();
+            }},
+
+            _scheduleRedraw: function() {{
+                var self = this;
+                if (self._redrawRaf) return;
+                self._redrawRaf = requestAnimationFrame(function() {{
+                    self._redrawRaf = null;
+                    self._dirtyFlag++;
+                    self.redraw();
+                }});
+            }},
+
+            createTile: function(coords) {{
+                var tile = document.createElement('canvas');
+                var sz = this.getTileSize();
+                tile.width = sz.x;
+                tile.height = sz.y;
+                this._drawTile(tile, coords);
+                return tile;
+            }},
+
+            _drawTile: function(canvas, coords) {{
+                var ctx = canvas.getContext('2d');
+                var tb = _OverlayTileMixin._tileBounds(coords);
+                var features = this._allFeatures;
+                var drawn = false;
+
+                for (var i = 0; i < features.length; i++) {{
+                    var f = features[i];
+                    if (!_OverlayTileMixin._boundsOverlap(f._bbox, tb)) continue;
+
+                    ctx.beginPath();
+                    if (f.F === 'p') {{
+                        var c = f.c;
+                        for (var j = 0; j < c.length; j++) {{
+                            var p = _OverlayTileMixin._latLngToTilePixel(c[j][0], c[j][1], coords.z, coords.x, coords.y);
+                            if (j === 0) ctx.moveTo(p[0], p[1]);
+                            else ctx.lineTo(p[0], p[1]);
+                        }}
+                        ctx.closePath();
+                    }} else {{
+                        var cp = _OverlayTileMixin._latLngToTilePixel(f.lat, f.lon, coords.z, coords.x, coords.y);
+                        var rPx = _OverlayTileMixin._metersToPixels(f.lat, _fallbackRadii[f.t] || 700, coords.z);
+                        ctx.arc(cp[0], cp[1], rPx, 0, Math.PI * 2);
+                    }}
+
+                    /* hatch fill — aligned across tiles */
+                    if (!_settlementHatchPattern) {{
+                        _settlementHatchPattern = ctx.createPattern(_settlementHatch, 'repeat');
+                    }}
+                    ctx.save();
+                    var originPx = _OverlayTileMixin._latLngToTilePixel(0, 0, coords.z, 0, 0);
+                    ctx.translate(-(coords.x * 256 % 10), -(coords.y * 256 % 10));
+                    ctx.fillStyle = _settlementHatchPattern;
+                    ctx.fill('evenodd');
+                    ctx.restore();
+
+                    /* stroke */
+                    ctx.strokeStyle = 'rgba(239,68,68,0.75)';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+
+                    drawn = true;
+                }}
+            }}
+        }});
+
+        var settlementGridLayer = new SettlementGridLayer();
+
         function addSettlements(tileKey, features) {{
             if (settlementTileData[tileKey]) return;
             settlementTileData[tileKey] = features;
-            if (showSettlements && _isTileVisible(tileKey)) {{
-                _renderTile(tileKey, features);
+            settlementGridLayer.setData(tileKey, features);
+        }}
+
+        function toggleLayer(name) {{
+            switch (name) {{
+                case 'track':
+                    showTrack = document.getElementById('chkTrack').checked;
+                    _hpScheduleDraw();
+                    break;
+                case 'waypoints':
+                    showWaypoints = document.getElementById('chkWaypoints').checked;
+                    waypointMarkers.forEach(function(m) {{
+                        showWaypoints ? map.addLayer(m) : map.removeLayer(m);
+                    }});
+                    routeLines.forEach(function(l) {{
+                        showWaypoints ? map.addLayer(l) : map.removeLayer(l);
+                    }});
+                    _hpScheduleDraw();
+                    break;
+                case 'hud':
+                    showHud = document.getElementById('chkHud').checked;
+                    if (homeMarker) {{
+                        showHud ? map.addLayer(homeMarker) : map.removeLayer(homeMarker);
+                    }}
+                    break;
+                case 'restricted':
+                    showRestrictedZones = document.getElementById('chkRestricted').checked;
+                    if (showRestrictedZones) {{
+                        map.addLayer(restrictedGridLayer);
+                        map.addLayer(restrictedHitLayer);
+                        _updateOverlayOpacity();
+                    }} else {{
+                        map.removeLayer(restrictedGridLayer);
+                        map.removeLayer(restrictedHitLayer);
+                    }}
+                    break;
+                case 'settlements':
+                    showSettlements = document.getElementById('chkSettlements').checked;
+                    if (showSettlements) {{
+                        map.addLayer(settlementGridLayer);
+                        _updateOverlayOpacity();
+                        _requestSettlements();
+                    }} else {{
+                        map.removeLayer(settlementGridLayer);
+                    }}
+                    break;
             }}
         }}
 
-        /* ── Restricted Zones ── */
+        /* ── Restricted Zones — GridLayer + Hit Layer ── */
 
-        var _zoneStyle = {{
-            fillPattern: _zoneHatch,
-            fillOpacity: 1,
-            color: 'rgba(100,0,0,0.9)',
-            weight: 2.5,
-            dashArray: '10,6',
-            fill: true,
-            interactive: true,
-            renderer: restrictedRenderer
-        }};
+        var _zoneHatchPattern = null;
 
-        function addRestrictedZone(zoneId, points, name) {{
-            if (restrictedZones[zoneId]) removeRestrictedZone(zoneId);
-            var polygon = L.polygon(points, _zoneStyle);
-            if (name) {{
-                polygon.bindTooltip(name, {{ permanent: false, direction: 'center' }});
+        var RestrictedGridLayer = L.GridLayer.extend({{
+            options: {{
+                pane: 'restricted',
+                tileSize: 256,
+                updateWhenZooming: false,
+                updateWhenIdle: true
+            }},
+
+            initialize: function(opts) {{
+                L.GridLayer.prototype.initialize.call(this, opts);
+                this._highlightId = null;
+                this._editingZoneId = null;
+            }},
+
+            createTile: function(coords) {{
+                var tile = document.createElement('canvas');
+                var sz = this.getTileSize();
+                tile.width = sz.x;
+                tile.height = sz.y;
+                this._drawTile(tile, coords);
+                return tile;
+            }},
+
+            _drawTile: function(canvas, coords) {{
+                var ctx = canvas.getContext('2d');
+                var tb = _OverlayTileMixin._tileBounds(coords);
+
+                for (var zoneId in restrictedZones) {{
+                    if (this._editingZoneId === zoneId) continue;
+                    var z = restrictedZones[zoneId];
+                    if (!z.points || z.points.length < 3) continue;
+
+                    /* bbox pre-filter */
+                    var lats = z.points.map(function(p) {{ return p[0]; }});
+                    var lons = z.points.map(function(p) {{ return p[1]; }});
+                    var zb = {{ south: Math.min.apply(null, lats), north: Math.max.apply(null, lats),
+                               west: Math.min.apply(null, lons), east: Math.max.apply(null, lons) }};
+                    if (!_OverlayTileMixin._boundsOverlap(zb, tb)) continue;
+
+                    ctx.beginPath();
+                    for (var j = 0; j < z.points.length; j++) {{
+                        var p = _OverlayTileMixin._latLngToTilePixel(z.points[j][0], z.points[j][1], coords.z, coords.x, coords.y);
+                        if (j === 0) ctx.moveTo(p[0], p[1]);
+                        else ctx.lineTo(p[0], p[1]);
+                    }}
+                    ctx.closePath();
+
+                    /* hatch fill — aligned across tiles */
+                    if (!_zoneHatchPattern) {{
+                        _zoneHatchPattern = ctx.createPattern(_zoneHatch, 'repeat');
+                    }}
+                    ctx.save();
+                    ctx.translate(-(coords.x * 256 % 12), -(coords.y * 256 % 12));
+                    ctx.fillStyle = _zoneHatchPattern;
+                    ctx.fill('evenodd');
+                    ctx.restore();
+
+                    /* dashed stroke */
+                    var isHighlighted = (this._highlightId === zoneId);
+                    ctx.strokeStyle = 'rgba(100,0,0,0.9)';
+                    ctx.lineWidth = isHighlighted ? 4 : 2.5;
+                    ctx.setLineDash([10, 6]);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                }}
+            }},
+
+            _scheduleRedraw: function() {{
+                var self = this;
+                if (self._redrawRaf) return;
+                self._redrawRaf = requestAnimationFrame(function() {{
+                    self._redrawRaf = null;
+                    self.redraw();
+                }});
             }}
-            polygon.on('contextmenu', function(e) {{
+        }});
+
+        var restrictedGridLayer = new RestrictedGridLayer();
+        var restrictedHitLayer = L.layerGroup();
+
+        function _createHitPolygon(zoneId, points, name) {{
+            var hitPoly = L.polygon(points, {{
+                fillOpacity: 0, stroke: false, interactive: true
+            }});
+            if (name) {{
+                hitPoly.bindTooltip(name, {{ permanent: false, direction: 'center' }});
+            }}
+            hitPoly.on('contextmenu', function(e) {{
                 L.DomEvent.stopPropagation(e);
                 L.DomEvent.preventDefault(e);
                 if (bridge && !drawingMode) {{
                     bridge.onZoneContextMenu(zoneId, e.originalEvent.screenX, e.originalEvent.screenY);
                 }}
             }});
-            polygon.on('dblclick', function(e) {{
+            hitPoly.on('dblclick', function(e) {{
                 L.DomEvent.stopPropagation(e);
                 L.DomEvent.preventDefault(e);
                 if (bridge && !drawingMode) bridge.onZoneDoubleClicked(zoneId);
             }});
-            polygon.on('click', function(e) {{
+            hitPoly.on('click', function(e) {{
                 L.DomEvent.stopPropagation(e);
             }});
-            polygon.addTo(restrictedZonesLayer);
-            restrictedZones[zoneId] = {{ polygon: polygon, name: name }};
+            hitPoly.addTo(restrictedHitLayer);
+            return hitPoly;
+        }}
+
+        function addRestrictedZone(zoneId, points, name) {{
+            if (restrictedZones[zoneId]) removeRestrictedZone(zoneId);
+            var hitPoly = _createHitPolygon(zoneId, points, name);
+            restrictedZones[zoneId] = {{ points: points, name: name, hitPoly: hitPoly }};
+            restrictedGridLayer._scheduleRedraw();
         }}
 
         function removeRestrictedZone(zoneId) {{
             var z = restrictedZones[zoneId];
             if (!z) return;
             if (editingZoneId === zoneId) disableZoneEditing();
-            restrictedZonesLayer.removeLayer(z.polygon);
+            if (z.hitPoly) restrictedHitLayer.removeLayer(z.hitPoly);
             delete restrictedZones[zoneId];
+            restrictedGridLayer._scheduleRedraw();
         }}
 
         function updateRestrictedZone(zoneId, points) {{
             var z = restrictedZones[zoneId];
             if (!z) return;
-            z.polygon.setLatLngs(points);
+            z.points = points;
+            if (z.hitPoly) z.hitPoly.setLatLngs(points);
+            restrictedGridLayer._scheduleRedraw();
         }}
 
         function clearRestrictedZones() {{
             disableZoneEditing();
             for (var id in restrictedZones) {{
-                restrictedZonesLayer.removeLayer(restrictedZones[id].polygon);
+                if (restrictedZones[id].hitPoly) restrictedHitLayer.removeLayer(restrictedZones[id].hitPoly);
             }}
             restrictedZones = {{}};
+            restrictedGridLayer._scheduleRedraw();
         }}
 
         function highlightZone(zoneId) {{
-            var z = restrictedZones[zoneId];
-            if (!z) return;
-            z.polygon.setStyle({{ weight: 4 }});
+            restrictedGridLayer._highlightId = zoneId;
+            restrictedGridLayer._scheduleRedraw();
         }}
 
         function unhighlightZone(zoneId) {{
-            var z = restrictedZones[zoneId];
-            if (!z) return;
-            z.polygon.setStyle({{ weight: 2.5 }});
+            if (restrictedGridLayer._highlightId === zoneId) {{
+                restrictedGridLayer._highlightId = null;
+                restrictedGridLayer._scheduleRedraw();
+            }}
         }}
 
         /* ── Drawing Mode ── */
@@ -1116,10 +1348,11 @@ class MapWidget(QWidget):
 
         /* ── Zone Vertex Editing ── */
 
+        var _editTempPolygon = null;
+
         function _notifyVerticesUpdated(zoneId) {{
-            var z = restrictedZones[zoneId];
-            if (z && bridge) {{
-                var pts = z.polygon.getLatLngs()[0].map(function(ll) {{
+            if (_editTempPolygon && bridge) {{
+                var pts = _editTempPolygon.getLatLngs()[0].map(function(ll) {{
                     return [ll.lat, ll.lng];
                 }});
                 bridge.onZoneVerticesUpdated(zoneId, JSON.stringify(pts));
@@ -1131,7 +1364,18 @@ class MapWidget(QWidget):
             var z = restrictedZones[zoneId];
             if (!z) return;
             editingZoneId = zoneId;
-            z.polygon.setStyle({{ dashArray: '6,4' }});
+            /* hide zone in GridLayer, show temp polygon for editing */
+            restrictedGridLayer._editingZoneId = zoneId;
+            restrictedGridLayer._scheduleRedraw();
+            _editTempPolygon = L.polygon(z.points, {{
+                fillPattern: _zoneHatch,
+                fillOpacity: 1,
+                color: 'rgba(100,0,0,0.9)',
+                weight: 2.5,
+                dashArray: '6,4',
+                fill: true,
+                interactive: false
+            }}).addTo(map);
             _refreshEditingMarkers(zoneId);
         }}
 
@@ -1139,17 +1383,29 @@ class MapWidget(QWidget):
             if (!editingZoneId) return;
             editingMarkers.forEach(function(m) {{ map.removeLayer(m); }});
             editingMarkers = [];
-            var z = restrictedZones[editingZoneId];
-            if (z) z.polygon.setStyle({{ dashArray: '10,6' }});
+            /* extract final coords from temp polygon, update zone data */
+            if (_editTempPolygon) {{
+                var z = restrictedZones[editingZoneId];
+                if (z) {{
+                    var finalPts = _editTempPolygon.getLatLngs()[0].map(function(ll) {{
+                        return [ll.lat, ll.lng];
+                    }});
+                    z.points = finalPts;
+                    if (z.hitPoly) z.hitPoly.setLatLngs(finalPts);
+                }}
+                map.removeLayer(_editTempPolygon);
+                _editTempPolygon = null;
+            }}
+            restrictedGridLayer._editingZoneId = null;
+            restrictedGridLayer._scheduleRedraw();
             editingZoneId = null;
         }}
 
         function _refreshEditingMarkers(zoneId) {{
             editingMarkers.forEach(function(m) {{ map.removeLayer(m); }});
             editingMarkers = [];
-            var z = restrictedZones[zoneId];
-            if (!z) return;
-            var latlngs = z.polygon.getLatLngs()[0];
+            if (!_editTempPolygon) return;
+            var latlngs = _editTempPolygon.getLatLngs()[0];
 
             /* vertex markers */
             latlngs.forEach(function(ll, idx) {{
@@ -1164,10 +1420,11 @@ class MapWidget(QWidget):
                 m.on('contextmenu', function(e) {{
                     L.DomEvent.stopPropagation(e);
                     L.DomEvent.preventDefault(e);
-                    var cur = z.polygon.getLatLngs()[0];
+                    if (!_editTempPolygon) return;
+                    var cur = _editTempPolygon.getLatLngs()[0];
                     if (cur.length > 3) {{
                         cur.splice(idx, 1);
-                        z.polygon.setLatLngs([cur]);
+                        _editTempPolygon.setLatLngs([cur]);
                         _refreshEditingMarkers(zoneId);
                         _notifyVerticesUpdated(zoneId);
                     }}
@@ -1204,11 +1461,10 @@ class MapWidget(QWidget):
             function onMove(e) {{
                 if (!dragging) return;
                 marker.setLatLng(e.latlng);
-                var z = restrictedZones[zoneId];
-                if (z) {{
-                    var latlngs = z.polygon.getLatLngs()[0];
+                if (_editTempPolygon) {{
+                    var latlngs = _editTempPolygon.getLatLngs()[0];
                     latlngs[marker._vertexIdx] = e.latlng;
-                    z.polygon.setLatLngs(latlngs);
+                    _editTempPolygon.setLatLngs(latlngs);
                 }}
             }}
             function onUp() {{
@@ -1235,20 +1491,18 @@ class MapWidget(QWidget):
                 map.on('mouseup', onUp);
             }});
             function onMove(e) {{
-                if (!dragging) return;
-                var z = restrictedZones[zoneId];
-                if (!z) return;
+                if (!dragging || !_editTempPolygon) return;
                 if (!inserted) {{
-                    var latlngs = z.polygon.getLatLngs()[0];
+                    var latlngs = _editTempPolygon.getLatLngs()[0];
                     latlngs.splice(insertIdx, 0, e.latlng);
-                    z.polygon.setLatLngs([latlngs]);
+                    _editTempPolygon.setLatLngs([latlngs]);
                     inserted = true;
                     marker.setStyle({{ radius: 7, fillColor: '{Colors.PRIMARY}', fillOpacity: 1 }});
                 }}
                 marker.setLatLng(e.latlng);
-                var latlngs = z.polygon.getLatLngs()[0];
+                var latlngs = _editTempPolygon.getLatLngs()[0];
                 latlngs[insertIdx] = e.latlng;
-                z.polygon.setLatLngs([latlngs]);
+                _editTempPolygon.setLatLngs([latlngs]);
             }}
             function onUp() {{
                 dragging = false;
@@ -1284,9 +1538,29 @@ class MapWidget(QWidget):
             }});
         }}
 
+        /* ── rAF-batched aircraft update ── */
+        var _pendingAircraft = null;
+        var _rafScheduled = false;
+
         function updateAircraft(lat, lon, heading) {{
+            _pendingAircraft = [lat, lon, heading];
+            if (!_rafScheduled) {{
+                _rafScheduled = true;
+                requestAnimationFrame(_flushAircraftUpdate);
+            }}
+        }}
+
+        function _flushAircraftUpdate() {{
+            _rafScheduled = false;
+            if (!_pendingAircraft) return;
+            var lat = _pendingAircraft[0];
+            var lon = _pendingAircraft[1];
+            var heading = _pendingAircraft[2];
+            _pendingAircraft = null;
+
             lastAircraftPos = [lat, lon];
 
+            /* aircraft marker — lightweight div/CSS update */
             if (!aircraftMarker) {{
                 aircraftMarker = L.marker([lat, lon], {{
                     icon: createAircraftIcon(heading),
@@ -1294,30 +1568,40 @@ class MapWidget(QWidget):
                 }}).addTo(map);
             }} else {{
                 aircraftMarker.setLatLng([lat, lon]);
-                if (Math.abs(heading - lastHeading) > 1) {{
+                if (Math.abs(heading - lastHeading) > 5) {{
                     aircraftMarker.setIcon(createAircraftIcon(heading));
                     lastHeading = heading;
                 }}
             }}
 
+            /* track — push to raw + world-pixel cache */
             trackPoints.push([lat, lon]);
             if (trackPoints.length > 1000) trackPoints.shift();
-
-            if (trackLine) {{
-                trackLine.setLatLngs(trackPoints);
-            }} else {{
-                trackLine = L.polyline(trackPoints, {{
-                    color: '{Colors.SUCCESS}',
-                    weight: 2,
-                    opacity: 0.7
-                }});
-                if (showTrack) trackLine.addTo(map);
+            if (_hpScale > 0) {{
+                _hpTrackWorld.push(_hpProject(lat, lon));
+                if (_hpTrackWorld.length > 1000) _hpTrackWorld.shift();
             }}
 
-            updateActiveWaypointLine();
+            /* active waypoint line target + aircraft pos in world coords */
+            if (_hpScale > 0) _hpAcWorld = _hpProject(lat, lon);
+            if (waypointData.length > activeWaypointIdx) {{
+                var wp = waypointData[activeWaypointIdx];
+                _hpWpWorld = _hpScale > 0 ? _hpProject(wp.lat, wp.lon) : null;
+            }} else {{
+                _hpWpWorld = null;
+            }}
+
+            _hpScheduleDraw();
 
             if (followAircraft) {{
-                map.panTo([lat, lon], {{animate: false}});
+                var center = map.getCenter();
+                var centerPx = map.latLngToContainerPoint(center);
+                var posPx = map.latLngToContainerPoint([lat, lon]);
+                var size = map.getSize();
+                var threshold = Math.min(size.x, size.y) * 0.15;
+                if (centerPx.distanceTo(posPx) > threshold) {{
+                    map.panTo([lat, lon], {{animate: false}});
+                }}
             }}
         }}
 
@@ -1326,21 +1610,21 @@ class MapWidget(QWidget):
         }}
 
         function setAircraftPosition(lat, lon) {{
+            lastAircraftPos = [lat, lon];
             if (aircraftMarker) {{
                 aircraftMarker.setLatLng([lat, lon]);
             }}
             trackPoints = [[lat, lon]];
-            if (trackLine) {{
-                trackLine.setLatLngs(trackPoints);
-            }}
+            _hpTrackWorld = _hpScale > 0 ? [_hpProject(lat, lon)] : [];
+            if (_hpScale > 0) _hpAcWorld = _hpProject(lat, lon);
+            _hpScheduleDraw();
             map.setView([lat, lon], map.getZoom());
         }}
 
         function clearTrack() {{
             trackPoints = [];
-            if (trackLine) {{
-                trackLine.setLatLngs([]);
-            }}
+            _hpTrackWorld = [];
+            _hpScheduleDraw();
         }}
 
         function formatTooltip(wp, index, isActive) {{
@@ -1484,24 +1768,16 @@ class MapWidget(QWidget):
         }}
 
         function updateActiveWaypointLine() {{
-            if (activeWaypointLine) {{
-                map.removeLayer(activeWaypointLine);
-                activeWaypointLine = null;
-            }}
-
             if (lastAircraftPos && waypointData.length > activeWaypointIdx) {{
                 var wp = waypointData[activeWaypointIdx];
-                activeWaypointLine = L.polyline([
-                    lastAircraftPos,
-                    [wp.lat, wp.lon]
-                ], {{
-                    color: '{Colors.PRIMARY}',
-                    weight: 2,
-                    opacity: 0.8,
-                    dashArray: '4, 8'
-                }});
-                if (showWaypoints) activeWaypointLine.addTo(map);
+                if (_hpScale > 0) {{
+                    _hpWpWorld = _hpProject(wp.lat, wp.lon);
+                    _hpAcWorld = _hpProject(lastAircraftPos[0], lastAircraftPos[1]);
+                }}
+            }} else {{
+                _hpWpWorld = null;
             }}
+            _hpScheduleDraw();
         }}
 
         function setRouteConflicts(conflicts) {{
@@ -1623,33 +1899,8 @@ class MapWidget(QWidget):
             }}
         }}
 
-        // Hide heavy canvas layers during animation to eliminate lag
-        var _settlementPane = null;
-        var _restrictedPane = null;
-        function _getHeavyPanes() {{
-            if (!_settlementPane) _settlementPane = document.querySelector('.leaflet-settlements-pane');
-            if (!_restrictedPane) _restrictedPane = document.querySelector('.leaflet-restricted-pane');
-        }}
-        function _hideHeavyPanes() {{
-            _getHeavyPanes();
-            if (_settlementPane) _settlementPane.style.visibility = 'hidden';
-            if (_restrictedPane) _restrictedPane.style.visibility = 'hidden';
-        }}
-        function _showHeavyPanes() {{
-            if (_settlementPane) _settlementPane.style.visibility = '';
-            if (_restrictedPane) _restrictedPane.style.visibility = '';
-        }}
-        map.on('movestart', _hideHeavyPanes);
-        map.on('moveend', function() {{
-            _showHeavyPanes();
-            _requestSettlements();
-        }});
-        map.on('zoomanim', _hideHeavyPanes);
-        map.on('zoomend', function() {{
-            _showHeavyPanes();
-            _requestSettlements();
-            _updateOverlayOpacity();
-        }});
+        map.on('moveend', function() {{ _requestSettlements(); }});
+        map.on('zoomend', function() {{ _requestSettlements(); _updateOverlayOpacity(); }});
 
         var bridge = null;
         new QWebChannel(qt.webChannelTransport, function(channel) {{
