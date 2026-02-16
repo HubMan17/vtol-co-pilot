@@ -46,28 +46,33 @@ class _SectionHeader(QWidget):
 
 
 class _MetricCell(QWidget):
-    """Compact metric: small label on top, bold value below."""
+    """Compact metric: small label on top, large colored value below (Mission Planner style)."""
 
-    def __init__(self, label: str, unit: str = ""):
+    def __init__(self, label: str, unit: str = "", color: str = Colors.TEXT_PRIMARY):
         super().__init__()
         self._unit = unit
+        self._color = color
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 6, 10, 6)
-        layout.setSpacing(1)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(2)
 
         self.name_label = QLabel(label)
-        self.name_label.setStyleSheet(f"color: {Colors.TEXT_TERTIARY}; font-size: 10px;")
+        self.name_label.setStyleSheet(f"color: {Colors.TEXT_DIM}; font-size: 10px; border: none;")
         layout.addWidget(self.name_label)
 
         self.value_label = QLabel("---")
-        self.value_label.setStyleSheet(f"""
-            color: {Colors.TEXT_PRIMARY};
-            font-family: "{Fonts.MONO}";
-            font-size: 16px;
-            font-weight: 700;
-        """)
+        self._apply_value_style(color)
         layout.addWidget(self.value_label)
+
+    def _apply_value_style(self, color: str):
+        self.value_label.setStyleSheet(f"""
+            color: {color};
+            font-family: "{Fonts.MONO}";
+            font-size: 26px;
+            font-weight: 700;
+            border: none;
+        """)
 
     def set_value(self, value: float, decimals: int = 1):
         text = f"{int(value)}" if decimals == 0 else f"{value:.{decimals}f}"
@@ -79,12 +84,8 @@ class _MetricCell(QWidget):
         self.value_label.setText(text)
 
     def set_color(self, color: str):
-        self.value_label.setStyleSheet(f"""
-            color: {color};
-            font-family: "{Fonts.MONO}";
-            font-size: 16px;
-            font-weight: 700;
-        """)
+        self._color = color
+        self._apply_value_style(color)
 
 
 def _metric_row(*cells) -> QFrame:
@@ -129,7 +130,6 @@ class StatusPanel(QWidget):
         self._setup_ui()
 
     def _setup_ui(self):
-        self.setFixedWidth(310)
         self.setStyleSheet(f"background-color: {Colors.BG_SIDEBAR};")
 
         outer = QVBoxLayout(self)
@@ -150,28 +150,28 @@ class StatusPanel(QWidget):
         # ── TELEMETRY ──
         lay.addWidget(_SectionHeader("mdi.antenna", "Телеметрия"))
 
-        self.m_airspeed = _MetricCell("IAS", "м/с")
-        self.m_groundspeed = _MetricCell("GS", "м/с")
+        self.m_airspeed = _MetricCell("IAS", "м/с", Colors.METRIC_SPEED)
+        self.m_groundspeed = _MetricCell("GS", "м/с", Colors.METRIC_GS)
         lay.addWidget(_metric_row(self.m_airspeed, self.m_groundspeed))
 
-        self.m_heading = _MetricCell("HDG", "°")
-        self.m_track = _MetricCell("TRK", "°")
+        self.m_heading = _MetricCell("HDG", "°", Colors.METRIC_HDG)
+        self.m_track = _MetricCell("TRK", "°", Colors.METRIC_HDG)
         lay.addWidget(_metric_row(self.m_heading, self.m_track))
 
-        self.m_altitude = _MetricCell("ALT MSL", "м")
-        self.m_altitude_agl = _MetricCell("ALT AGL", "м")
+        self.m_altitude = _MetricCell("ALT MSL", "м", Colors.METRIC_ALT)
+        self.m_altitude_agl = _MetricCell("ALT AGL", "м", Colors.METRIC_ALT)
         lay.addWidget(_metric_row(self.m_altitude, self.m_altitude_agl))
 
-        self.m_climb = _MetricCell("V/S", "м/с")
-        self.m_wind = _MetricCell("WIND")
+        self.m_climb = _MetricCell("V/S", "м/с", Colors.METRIC_VS)
+        self.m_wind = _MetricCell("WIND", "", Colors.METRIC_WIND)
         lay.addWidget(_metric_row(self.m_climb, self.m_wind))
 
-        self.m_roll = _MetricCell("ROLL", "°")
-        self.m_pitch = _MetricCell("PITCH", "°")
+        self.m_roll = _MetricCell("ROLL", "°", Colors.METRIC_ATT)
+        self.m_pitch = _MetricCell("PITCH", "°", Colors.METRIC_ATT)
         lay.addWidget(_metric_row(self.m_roll, self.m_pitch))
 
-        self.m_battery = _MetricCell("BAT", "В")
-        self.m_gps = _MetricCell("GPS")
+        self.m_battery = _MetricCell("BAT", "В", Colors.METRIC_BAT)
+        self.m_gps = _MetricCell("GPS", "", Colors.METRIC_GPS)
         lay.addWidget(_metric_row(self.m_battery, self.m_gps))
 
         # Wind override
@@ -218,7 +218,7 @@ class StatusPanel(QWidget):
 
         # ── NAVIGATION ──
         lay.addWidget(_Separator())
-        lay.addWidget(_SectionHeader("mdi.navigation-variant-outline", "Навигация"))
+        lay.addWidget(_SectionHeader("mdi6.navigation-variant-outline", "Навигация"))
 
         self.m_waypoint = _MetricCell("WPT")
         self.m_distance = _MetricCell("DIST")
@@ -238,12 +238,13 @@ class StatusPanel(QWidget):
 
         # ── AUTOPILOT ──
         lay.addWidget(_Separator())
-        lay.addWidget(_SectionHeader("mdi.airplane-cog", "Автопилот"))
+        lay.addWidget(_SectionHeader("mdi6.airplane-cog", "Автопилот"))
 
         # Mode + action row
         ap_card = QFrame()
+        ap_card.setObjectName("ap_card")
         ap_card.setStyleSheet(f"""
-            QFrame {{
+            #ap_card {{
                 background-color: {Colors.BG_CARD};
                 border: 1px solid {Colors.BORDER};
                 border-radius: 8px;
@@ -256,7 +257,7 @@ class StatusPanel(QWidget):
         mode_row = QHBoxLayout()
         mode_row.setSpacing(8)
         mode_lbl = QLabel("Режим")
-        mode_lbl.setStyleSheet(f"color: {Colors.TEXT_TERTIARY}; font-size: 10px;")
+        mode_lbl.setStyleSheet(f"color: {Colors.TEXT_TERTIARY}; font-size: 12px; border: none;")
         mode_row.addWidget(mode_lbl)
         mode_row.addStretch()
 
@@ -264,9 +265,9 @@ class StatusPanel(QWidget):
         self.lbl_ap_mode.setStyleSheet(f"""
             color: {Colors.TEXT_DIM};
             font-family: "{Fonts.MONO}";
-            font-size: 12px;
+            font-size: 13px;
             font-weight: 700;
-            padding: 2px 8px;
+            padding: 3px 10px;
             border-radius: 4px;
             background-color: {Colors.BG_INPUT};
         """)
@@ -278,28 +279,30 @@ class StatusPanel(QWidget):
         self.lbl_ap_action.setStyleSheet(f"""
             color: {Colors.TEXT_DIM};
             font-family: "{Fonts.MONO}";
-            font-size: 11px;
+            font-size: 13px;
+            border: none;
         """)
         ap_card_lay.addWidget(self.lbl_ap_action)
 
         # Data rows
         for attr, label_text in [
-            ("lbl_ap_target", "Цел. курс"),
-            ("lbl_ap_error", "Ош. курса"),
-            ("lbl_ap_alt_error", "Ош. высоты"),
+            ("lbl_ap_target", "Целевой курс"),
+            ("lbl_ap_error", "Ошибка курса"),
+            ("lbl_ap_alt_error", "Ошибка высоты"),
         ]:
             row = QHBoxLayout()
             row.setSpacing(0)
             lbl = QLabel(label_text)
-            lbl.setStyleSheet(f"color: {Colors.TEXT_TERTIARY}; font-size: 10px;")
+            lbl.setStyleSheet(f"color: {Colors.TEXT_TERTIARY}; font-size: 12px; border: none;")
             row.addWidget(lbl)
             row.addStretch()
             val = QLabel("---")
             val.setStyleSheet(f"""
                 color: {Colors.TEXT_PRIMARY};
                 font-family: "{Fonts.MONO}";
-                font-size: 13px;
+                font-size: 15px;
                 font-weight: 600;
+                border: none;
             """)
             row.addWidget(val)
             setattr(self, attr, val)
@@ -309,53 +312,86 @@ class StatusPanel(QWidget):
 
         # Controls grid
         ctrl_card = QFrame()
+        ctrl_card.setObjectName("ctrl_card")
         ctrl_card.setStyleSheet(f"""
-            QFrame {{
+            #ctrl_card {{
                 background-color: {Colors.BG_CARD};
                 border: 1px solid {Colors.BORDER};
                 border-radius: 8px;
             }}
         """)
-        ctrl_lay = QGridLayout(ctrl_card)
+        ctrl_lay = QVBoxLayout(ctrl_card)
         ctrl_lay.setContentsMargins(10, 8, 10, 8)
-        ctrl_lay.setSpacing(6)
+        ctrl_lay.setSpacing(8)
 
-        for row_idx, (label_text, attr_spin, attr_btn, suffix, lo, hi, default) in enumerate([
-            ("ALT", "spin_target_alt", "btn_set_altitude", " м", 10, 5000, 100),
-            ("RAD", "spin_orbit_radius", "btn_set_radius", " м", 30, 500, 150),
-            ("SPD", "spin_target_speed", "btn_set_speed", " м/с", 15, 35, 20),
-        ]):
+        spin_style = f"""
+            QSpinBox {{
+                background-color: {Colors.BG_INPUT};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 4px 10px;
+                font-family: "{Fonts.MONO}";
+                font-size: 14px;
+                font-weight: 600;
+                selection-background-color: {Colors.PRIMARY};
+            }}
+            QSpinBox:focus {{
+                border-color: {Colors.PRIMARY};
+            }}
+            QSpinBox:disabled {{
+                background-color: {Colors.BG_CARD};
+                color: {Colors.TEXT_DIM};
+                border-color: {Colors.BORDER_SUBTLE};
+            }}
+            QSpinBox::up-button, QSpinBox::down-button {{
+                width: 0; height: 0; border: none;
+            }}
+        """
+        btn_style = f"""
+            QPushButton {{
+                background-color: {Colors.PRIMARY};
+                border: none;
+                border-radius: 8px;
+            }}
+            QPushButton:hover {{ background-color: {Colors.PRIMARY_HOVER}; }}
+            QPushButton:disabled {{
+                background-color: {Colors.BG_INPUT};
+                border: 1px solid {Colors.BORDER};
+            }}
+        """
+
+        for label_text, attr_spin, attr_btn, suffix, lo, hi, default in [
+            ("Высота", "spin_target_alt", "btn_set_altitude", " м", 10, 5000, 100),
+            ("Радиус", "spin_orbit_radius", "btn_set_radius", " м", 30, 500, 150),
+            ("Скорость", "spin_target_speed", "btn_set_speed", " м/с", 15, 35, 20),
+        ]:
             lbl = QLabel(label_text)
-            lbl.setStyleSheet(f"color: {Colors.TEXT_TERTIARY}; font-size: 10px; font-weight: 600;")
-            ctrl_lay.addWidget(lbl, row_idx, 0)
+            lbl.setStyleSheet(f"color: {Colors.TEXT_TERTIARY}; font-size: 11px; font-weight: 600; border: none;")
+            ctrl_lay.addWidget(lbl)
+
+            input_row = QHBoxLayout()
+            input_row.setSpacing(6)
 
             spin = QSpinBox()
             spin.setRange(lo, hi)
             spin.setValue(default)
             spin.setSuffix(suffix)
             spin.setEnabled(False)
-            spin.setFixedHeight(26)
+            spin.setFixedHeight(34)
+            spin.setStyleSheet(spin_style)
             setattr(self, attr_spin, spin)
-            ctrl_lay.addWidget(spin, row_idx, 1)
+            input_row.addWidget(spin)
 
             btn = QPushButton()
             btn.setIcon(qta.icon("mdi.check", color="#fff"))
-            btn.setFixedSize(26, 26)
+            btn.setFixedSize(34, 34)
             btn.setEnabled(False)
-            btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {Colors.PRIMARY};
-                    border: none;
-                    border-radius: 6px;
-                }}
-                QPushButton:hover {{ background-color: {Colors.PRIMARY_HOVER}; }}
-                QPushButton:disabled {{
-                    background-color: {Colors.BG_INPUT};
-                    border: 1px solid {Colors.BORDER};
-                }}
-            """)
+            btn.setStyleSheet(btn_style)
             setattr(self, attr_btn, btn)
-            ctrl_lay.addWidget(btn, row_idx, 2)
+            input_row.addWidget(btn)
+
+            ctrl_lay.addLayout(input_row)
 
         self.btn_set_altitude.clicked.connect(self._on_set_altitude)
         self.btn_set_radius.clicked.connect(self._on_set_radius)
@@ -435,16 +471,16 @@ class StatusPanel(QWidget):
         if mode == 'MANUAL':
             self.lbl_ap_mode.setStyleSheet(f"""
                 color: {Colors.TEXT_DIM};
-                font-family: "{Fonts.MONO}"; font-size: 12px; font-weight: 700;
-                padding: 2px 8px; border-radius: 4px;
+                font-family: "{Fonts.MONO}"; font-size: 13px; font-weight: 700;
+                padding: 3px 10px; border-radius: 4px;
                 background-color: {Colors.BG_INPUT};
             """)
             if status and status.get('disengage_reason'):
                 self.lbl_ap_action.setText(status['disengage_reason'])
-                self.lbl_ap_action.setStyleSheet(f"color: {Colors.WARNING}; font-family: '{Fonts.MONO}'; font-size: 11px;")
+                self.lbl_ap_action.setStyleSheet(f"color: {Colors.WARNING}; font-family: '{Fonts.MONO}'; font-size: 13px; border: none;")
             else:
                 self.lbl_ap_action.setText("---")
-                self.lbl_ap_action.setStyleSheet(f"color: {Colors.TEXT_DIM}; font-family: '{Fonts.MONO}'; font-size: 11px;")
+                self.lbl_ap_action.setStyleSheet(f"color: {Colors.TEXT_DIM}; font-family: '{Fonts.MONO}'; font-size: 13px; border: none;")
 
             self.lbl_ap_target.setText("---")
             self.lbl_ap_error.setText("---")
@@ -462,8 +498,8 @@ class StatusPanel(QWidget):
         else:
             self.lbl_ap_mode.setStyleSheet(f"""
                 color: #fff;
-                font-family: "{Fonts.MONO}"; font-size: 12px; font-weight: 700;
-                padding: 2px 8px; border-radius: 4px;
+                font-family: "{Fonts.MONO}"; font-size: 13px; font-weight: 700;
+                padding: 3px 10px; border-radius: 4px;
                 background-color: {Colors.SUCCESS};
             """)
 
@@ -473,9 +509,9 @@ class StatusPanel(QWidget):
                 self.lbl_ap_action.setText(action_text)
 
                 if status.get('is_orbiting'):
-                    self.lbl_ap_action.setStyleSheet(f"color: {Colors.WARNING}; font-family: '{Fonts.MONO}'; font-size: 11px; font-weight: 700;")
+                    self.lbl_ap_action.setStyleSheet(f"color: {Colors.WARNING}; font-family: '{Fonts.MONO}'; font-size: 13px; font-weight: 700; border: none;")
                 else:
-                    self.lbl_ap_action.setStyleSheet(f"color: {Colors.PRIMARY_LIGHT}; font-family: '{Fonts.MONO}'; font-size: 11px;")
+                    self.lbl_ap_action.setStyleSheet(f"color: {Colors.PRIMARY_LIGHT}; font-family: '{Fonts.MONO}'; font-size: 13px; border: none;")
 
                 th = status.get('target_heading')
                 if th is not None:

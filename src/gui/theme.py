@@ -29,10 +29,21 @@ class Colors:
     WARNING_BG = "rgba(245, 158, 11, 0.12)"
 
     # Text
-    TEXT_PRIMARY = "#F1F5F9"
-    TEXT_SECONDARY = "#94A3B8"
-    TEXT_TERTIARY = "#64748B"
-    TEXT_DIM = "#475569"
+    TEXT_PRIMARY = "#FFFFFF"
+    TEXT_SECONDARY = "#E2E8F0"
+    TEXT_TERTIARY = "#CBD5E1"
+    TEXT_DIM = "#94A3B8"
+
+    # Metric colors (Mission Planner style)
+    METRIC_SPEED = "#FF9F43"       # orange — airspeed
+    METRIC_GS = "#2ED573"          # green — groundspeed
+    METRIC_HDG = "#FFFFFF"         # white — heading/track
+    METRIC_ALT = "#FECA57"         # yellow — altitude
+    METRIC_VS = "#DCDDE1"          # light gray — vertical speed
+    METRIC_WIND = "#48DBFB"        # cyan — wind
+    METRIC_ATT = "#C8A2FF"         # lavender — roll/pitch
+    METRIC_BAT = "#FF6B6B"         # red — battery
+    METRIC_GPS = "#2ED573"         # green — gps
 
     # Borders
     BORDER = "#1E293B"
@@ -298,11 +309,13 @@ QStatusBar QLabel {{
 
 /* ===== QSplitter ===== */
 QSplitter::handle {{
-    background-color: {Colors.BORDER_SUBTLE};
-    width: 1px;
+    background-color: {Colors.BORDER};
 }}
 QSplitter::handle:hover {{
     background-color: {Colors.PRIMARY};
+}}
+QSplitter::handle:pressed {{
+    background-color: {Colors.PRIMARY_HOVER};
 }}
 
 /* ===== QMenu ===== */

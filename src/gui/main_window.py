@@ -5,7 +5,7 @@ import qtawesome as qta
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QFrame, QStatusBar, QFileDialog,
-    QMessageBox, QSpinBox, QApplication
+    QMessageBox, QSpinBox, QApplication, QSplitter
 )
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont, QIcon
@@ -52,6 +52,7 @@ class MainWindow(QMainWindow):
         self._setup_timer()
 
         apply_dark_titlebar(int(self.winId()))
+        self.showMaximized()
 
     # ────────────────────── UI ──────────────────────
 
@@ -59,19 +60,22 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("VTOL Co-Pilot")
         self.setMinimumSize(1200, 800)
 
-        central = QWidget()
-        self.setCentralWidget(central)
-        root = QHBoxLayout(central)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
+        # ── Splitter: Map | Panel ──
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(4)
+        self.setCentralWidget(splitter)
 
         # ── LEFT: Map ──
         self.map_widget = MapWidget(self.config.gui.map_center, self.config.gui.map_zoom)
-        root.addWidget(self.map_widget, 1)
+        self.map_widget.setMinimumWidth(400)
+        splitter.addWidget(self.map_widget)
 
         # ── RIGHT: Panel ──
         right = QWidget()
         right.setStyleSheet(f"background-color: {Colors.BG_SIDEBAR};")
+        right.setMinimumWidth(280)
+        right.setMaximumWidth(800)
         right_lay = QVBoxLayout(right)
         right_lay.setContentsMargins(0, 0, 0, 0)
         right_lay.setSpacing(0)
@@ -98,18 +102,43 @@ class MainWindow(QMainWindow):
         # Controls footer
         right_lay.addWidget(self._build_controls())
 
-        # Vertical separator between map and panel
-        vsep = QFrame()
-        vsep.setFixedWidth(1)
-        vsep.setStyleSheet(f"background-color: {Colors.BORDER_SUBTLE};")
+        splitter.addWidget(right)
 
-        root.addWidget(vsep)
-        root.addWidget(right)
+        # Initial proportions: ~60% map, ~40% panel
+        splitter.setSizes([900, 580])
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 0)
 
         # Status bar
         self.statusbar = QStatusBar()
         self.setStatusBar(self.statusbar)
         self.statusbar.showMessage("Отключено")
+
+        sb_label_style = f"color: {Colors.TEXT_TERTIARY}; font-size: 11px; border: none; padding: 0 6px;"
+        sb_value_style = f'color: {Colors.TEXT_PRIMARY}; font-family: "{Fonts.MONO}"; font-size: 11px; font-weight: 600; border: none; padding: 0 4px;'
+        sb_dim_style = f'color: {Colors.TEXT_DIM}; font-family: "{Fonts.MONO}"; font-size: 11px; border: none; padding: 0 4px;'
+
+        self.sb_zoom_lbl = QLabel("Масштаб")
+        self.sb_zoom_lbl.setStyleSheet(sb_label_style)
+        self.sb_zoom_val = QLabel(f"{self.config.gui.map_zoom}")
+        self.sb_zoom_val.setStyleSheet(sb_value_style)
+
+        self.sb_layer_val = QLabel("Спутник")
+        self.sb_layer_val.setStyleSheet(sb_dim_style)
+
+        self.sb_ac_lbl = QLabel("ЛА")
+        self.sb_ac_lbl.setStyleSheet(sb_label_style)
+        self.sb_ac_val = QLabel("--- , ---")
+        self.sb_ac_val.setStyleSheet(sb_value_style)
+
+        self.sb_cur_lbl = QLabel("Курсор")
+        self.sb_cur_lbl.setStyleSheet(sb_label_style)
+        self.sb_cur_val = QLabel("--- , ---")
+        self.sb_cur_val.setStyleSheet(sb_dim_style)
+
+        for w in (self.sb_zoom_lbl, self.sb_zoom_val, self.sb_layer_val,
+                  self.sb_ac_lbl, self.sb_ac_val, self.sb_cur_lbl, self.sb_cur_val):
+            self.statusbar.addPermanentWidget(w)
 
     def _build_panel_header(self) -> QWidget:
         """Connection controls + mode badge."""
@@ -322,6 +351,8 @@ class MainWindow(QMainWindow):
         self.map_widget.set_position_requested.connect(self._on_context_set_position)
         self.map_widget.add_waypoint_requested.connect(self._on_context_add_waypoint)
         self.map_widget.set_home_requested.connect(self._on_context_set_home)
+        self.map_widget.mouse_moved.connect(self._on_map_mouse_move)
+        self.map_widget.zoom_changed.connect(self._on_map_zoom_changed)
 
         self.status_panel.orbit_radius_changed.connect(self._on_orbit_radius_changed)
         self.status_panel.target_altitude_changed.connect(self._on_target_altitude_changed)
@@ -557,6 +588,12 @@ class MainWindow(QMainWindow):
         self.map_widget.update_active_waypoint(next_wp - 1)
         self.statusbar.showMessage(f"WPT {data.get('reached', 0)} reached → {next_wp}/{total}")
 
+    def _on_map_mouse_move(self, lat, lon):
+        self.sb_cur_val.setText(f"{lat:.6f} , {lon:.6f}")
+
+    def _on_map_zoom_changed(self, zoom):
+        self.sb_zoom_val.setText(str(zoom))
+
     # ────────────────────── Param changes ──────────────────────
 
     def _on_orbit_radius_changed(self, r):
@@ -585,6 +622,7 @@ class MainWindow(QMainWindow):
         pos = telemetry.position
         if pos:
             self.map_widget.update_aircraft(pos.lat, pos.lon, telemetry.heading)
+            self.sb_ac_val.setText(f"{pos.lat:.6f} , {pos.lon:.6f}")
 
             ap = self.autopilot.get_status()
             if ap.get('returning_home') and self._home_position:

@@ -1,18 +1,292 @@
 import json
+import math
+import os
+import threading
+import urllib.request
+import urllib.parse
 
 import qtawesome as qta
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QMenu, QAction
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 from PyQt5.QtWebChannel import QWebChannel
-from PyQt5.QtCore import QObject, pyqtSlot, pyqtSignal, QPoint
+from PyQt5.QtCore import QObject, pyqtSlot, pyqtSignal, QThread
 from PyQt5.QtGui import QCursor, QColor
 
 from src.gui.theme import Colors
 
 
+_TILE_GRID = 0.1  # ~10 km tile grid
+_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'cache', 'settlements_v3')
+_DP_TOLERANCE = 0.0005  # ~55 m — Douglas-Peucker simplification
+
+
+_NUM_WORKERS = 4
+
+
+class _TileWorker(QThread):
+    """Single worker that fetches one tile at a time from shared queue."""
+    tile_loaded = pyqtSignal(str, list)
+
+    def __init__(self, loader):
+        super().__init__()
+        self._loader = loader
+
+    def run(self):
+        while True:
+            with self._loader._lock:
+                if not self._loader._queue:
+                    return
+                s, w, n, e = self._loader._queue.pop(0)
+
+            key = SettlementLoader._key((s, w, n, e))
+            if key in self._loader._cache:
+                self.tile_loaded.emit(key, self._loader._cache[key])
+                continue
+
+            query = (
+                f'[out:json][timeout:25];('
+                f'way["place"~"^(city|town|village|hamlet)$"]({s},{w},{n},{e});'
+                f'relation["place"~"^(city|town|village|hamlet)$"]({s},{w},{n},{e});'
+                f'node["place"~"^(city|town|village|hamlet)$"]({s},{w},{n},{e});'
+                f');out geom;'
+            )
+            try:
+                post_data = urllib.parse.urlencode({'data': query}).encode()
+                req = urllib.request.Request(
+                    'https://overpass-api.de/api/interpreter',
+                    data=post_data,
+                )
+                with urllib.request.urlopen(req, timeout=25) as resp:
+                    data = json.loads(resp.read())
+
+                features = SettlementLoader._process_elements(data.get('elements', []))
+                with self._loader._lock:
+                    self._loader._cache[key] = features
+                SettlementLoader._save_tile(key, features)
+                self.tile_loaded.emit(key, features)
+            except Exception as e:
+                print(f"Settlement tile {key} error: {e}")
+                with self._loader._lock:
+                    self._loader._loaded_keys.discard(key)
+
+
+class SettlementLoader(QObject):
+    """Pool of workers that fetch settlement boundaries in parallel."""
+    tile_loaded = pyqtSignal(str, list)
+
+    def __init__(self):
+        super().__init__()
+        self._queue = []
+        self._loaded_keys = set()
+        self._cache = {}
+        self._lock = threading.Lock()
+        os.makedirs(_CACHE_DIR, exist_ok=True)
+        self._load_disk_cache()
+        self._workers = []
+        for _ in range(_NUM_WORKERS):
+            w = _TileWorker(self)
+            w.tile_loaded.connect(self.tile_loaded)
+            self._workers.append(w)
+
+    def request(self, south, west, north, east):
+        tiles = self._grid_tiles(south, west, north, east)
+        added = False
+        with self._lock:
+            for t in tiles:
+                key = self._key(t)
+                if key not in self._loaded_keys:
+                    self._loaded_keys.add(key)
+                    self._queue.append(t)
+                    added = True
+        if added:
+            self._kick_workers()
+
+    def _kick_workers(self):
+        for w in self._workers:
+            if not w.isRunning():
+                w.start()
+
+    @staticmethod
+    def _process_elements(elements):
+        """Extract polygons from ways/relations, fall back to nodes for the rest."""
+        polys = []  # {F:'p', c:[[lat,lon],...], t:'village'}
+        nodes = []  # {F:'n', lat, lon, t}
+        poly_bboxes = []  # (min_lat, min_lon, max_lat, max_lon)
+
+        for el in elements:
+            place = el.get('tags', {}).get('place', '')
+            if not place:
+                continue
+
+            if el['type'] == 'way' and 'geometry' in el:
+                coords = [[p['lat'], p['lon']] for p in el['geometry']]
+                if len(coords) < 3:
+                    continue
+                simplified = SettlementLoader._simplify_dp(coords, _DP_TOLERANCE)
+                polys.append({'F': 'p', 'c': simplified, 't': place})
+                lats = [c[0] for c in coords]
+                lons = [c[1] for c in coords]
+                poly_bboxes.append((min(lats), min(lons), max(lats), max(lons)))
+
+            elif el['type'] == 'relation' and 'members' in el:
+                ring = SettlementLoader._merge_relation(el['members'])
+                if ring and len(ring) >= 3:
+                    simplified = SettlementLoader._simplify_dp(ring, _DP_TOLERANCE)
+                    polys.append({'F': 'p', 'c': simplified, 't': place})
+                    lats = [c[0] for c in ring]
+                    lons = [c[1] for c in ring]
+                    poly_bboxes.append((min(lats), min(lons), max(lats), max(lons)))
+
+            elif el['type'] == 'node':
+                nodes.append({'F': 'n', 'lat': el['lat'], 'lon': el['lon'], 't': place})
+
+        # Filter out nodes that already have a polygon (bbox check)
+        result = list(polys)
+        for nd in nodes:
+            covered = False
+            for (mn_la, mn_lo, mx_la, mx_lo) in poly_bboxes:
+                if mn_la <= nd['lat'] <= mx_la and mn_lo <= nd['lon'] <= mx_lo:
+                    covered = True
+                    break
+            if not covered:
+                result.append(nd)
+        return result
+
+    @staticmethod
+    def _merge_relation(members):
+        """Merge outer way geometries of a relation into a single ring."""
+        segments = []
+        for m in members:
+            if m.get('type') != 'way':
+                continue
+            role = m.get('role', 'outer')
+            if role not in ('outer', ''):
+                continue
+            geom = m.get('geometry')
+            if not geom:
+                continue
+            seg = [[p['lat'], p['lon']] for p in geom]
+            if seg:
+                segments.append(seg)
+        if not segments:
+            return []
+        # Try to chain segments end-to-end
+        ring = list(segments[0])
+        remaining = segments[1:]
+        max_iter = len(remaining) * 2
+        i = 0
+        while remaining and i < max_iter:
+            i += 1
+            matched = False
+            for idx, seg in enumerate(remaining):
+                # ring end -> seg start
+                if _close(ring[-1], seg[0]):
+                    ring.extend(seg[1:])
+                    remaining.pop(idx)
+                    matched = True
+                    break
+                # ring end -> seg end (reversed)
+                if _close(ring[-1], seg[-1]):
+                    ring.extend(reversed(seg[:-1]))
+                    remaining.pop(idx)
+                    matched = True
+                    break
+            if not matched:
+                break
+        return ring
+
+    @staticmethod
+    def _simplify_dp(coords, tolerance):
+        """Douglas-Peucker polyline simplification."""
+        if len(coords) <= 4:
+            return [[round(c[0], 5), round(c[1], 5)] for c in coords]
+
+        def _perp_dist(p, a, b):
+            dx, dy = b[0] - a[0], b[1] - a[1]
+            if dx == 0 and dy == 0:
+                return math.hypot(p[0] - a[0], p[1] - a[1])
+            t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy)
+            t = max(0, min(1, t))
+            proj = [a[0] + t * dx, a[1] + t * dy]
+            return math.hypot(p[0] - proj[0], p[1] - proj[1])
+
+        def _dp(pts, tol):
+            if len(pts) <= 2:
+                return pts
+            max_d, max_i = 0, 0
+            for i in range(1, len(pts) - 1):
+                d = _perp_dist(pts[i], pts[0], pts[-1])
+                if d > max_d:
+                    max_d, max_i = d, i
+            if max_d > tol:
+                left = _dp(pts[:max_i + 1], tol)
+                right = _dp(pts[max_i:], tol)
+                return left[:-1] + right
+            return [pts[0], pts[-1]]
+
+        result = _dp(coords, tolerance)
+        return [[round(c[0], 5), round(c[1], 5)] for c in result]
+
+    @staticmethod
+    def _key(tile):
+        return f"{tile[0]},{tile[1]}"
+
+    @staticmethod
+    def _grid_tiles(south, west, north, east):
+        g = _TILE_GRID
+        tiles = []
+        s = math.floor(south / g) * g
+        while s < north:
+            w_cur = math.floor(west / g) * g
+            while w_cur < east:
+                tiles.append((
+                    round(s, 4), round(w_cur, 4),
+                    round(s + g, 4), round(w_cur + g, 4),
+                ))
+                w_cur += g
+            s += g
+        return tiles
+
+    def _load_disk_cache(self):
+        try:
+            for fname in os.listdir(_CACHE_DIR):
+                if not fname.endswith('.json'):
+                    continue
+                key = fname[:-5]
+                path = os.path.join(_CACHE_DIR, fname)
+                with open(path, 'r', encoding='utf-8') as f:
+                    self._cache[key] = json.load(f)
+                self._loaded_keys.add(key)
+        except Exception as e:
+            print(f"Settlement cache load error: {e}")
+
+    @staticmethod
+    def _save_tile(key, features):
+        try:
+            path = os.path.join(_CACHE_DIR, key + '.json')
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(features, f, ensure_ascii=False, separators=(',', ':'))
+        except Exception as e:
+            print(f"Settlement cache save error: {e}")
+
+    def preload_cached_tiles(self, south, west, north, east):
+        tiles = self._grid_tiles(south, west, north, east)
+        for t in tiles:
+            key = self._key(t)
+            if key in self._cache and self._cache[key]:
+                self.tile_loaded.emit(key, self._cache[key])
+
+
+def _close(a, b, eps=1e-6):
+    return abs(a[0] - b[0]) < eps and abs(a[1] - b[1]) < eps
+
+
 class MapBridge(QObject):
     position_clicked = pyqtSignal(float, float)
     context_menu_requested = pyqtSignal(float, float, int, int)
+    bounds_changed = pyqtSignal(float, float, float, float)
+    mouse_moved = pyqtSignal(float, float)
+    zoom_changed = pyqtSignal(int)
 
     @pyqtSlot(float, float)
     def onMapClick(self, lat, lon):
@@ -21,6 +295,18 @@ class MapBridge(QObject):
     @pyqtSlot(float, float, int, int)
     def onContextMenu(self, lat, lon, screen_x, screen_y):
         self.context_menu_requested.emit(lat, lon, screen_x, screen_y)
+
+    @pyqtSlot(float, float, float, float)
+    def onBoundsChanged(self, south, west, north, east):
+        self.bounds_changed.emit(south, west, north, east)
+
+    @pyqtSlot(float, float)
+    def onMouseMove(self, lat, lon):
+        self.mouse_moved.emit(lat, lon)
+
+    @pyqtSlot(int)
+    def onZoomChanged(self, zoom):
+        self.zoom_changed.emit(zoom)
 
 
 class MapWidget(QWidget):
@@ -35,6 +321,10 @@ class MapWidget(QWidget):
         self.zoom = zoom
         self._context_lat = 0.0
         self._context_lon = 0.0
+
+        self._settlement_loader = SettlementLoader()
+        self._settlement_loader.tile_loaded.connect(self._on_tile_loaded)
+
         self._setup_ui()
 
     def _setup_ui(self):
@@ -50,11 +340,27 @@ class MapWidget(QWidget):
         self.web_view.page().setWebChannel(self.channel)
 
         self.bridge.context_menu_requested.connect(self._show_context_menu)
+        self.bridge.bounds_changed.connect(self._on_bounds_changed)
+
+        self.mouse_moved = self.bridge.mouse_moved
+        self.zoom_changed = self.bridge.zoom_changed
 
         html = self._generate_html()
         self.web_view.setHtml(html)
 
         layout.addWidget(self.web_view)
+
+    def _on_bounds_changed(self, south, west, north, east):
+        # Instantly show cached tiles + queue missing for parallel fetch
+        self._settlement_loader.preload_cached_tiles(south, west, north, east)
+        self._settlement_loader.request(south, west, north, east)
+
+    def _on_tile_loaded(self, key, features):
+        if features:
+            data_json = json.dumps(features)
+            self.web_view.page().runJavaScript(
+                f"addSettlements('{key}', {data_json});"
+            )
 
     def _show_context_menu(self, lat: float, lon: float, screen_x: int, screen_y: int):
         self._context_lat = lat
@@ -202,10 +508,103 @@ class MapWidget(QWidget):
         .leaflet-bar a {{
             border-bottom-color: {Colors.BORDER} !important;
         }}
+
+        .map-layer-panel {{
+            position: fixed;
+            bottom: 16px;
+            left: 16px;
+            z-index: 1000;
+            font-family: 'Segoe UI', Inter, sans-serif;
+        }}
+        .map-layer-toggle {{
+            width: 34px;
+            height: 34px;
+            background: {Colors.BG_CARD};
+            border: 1px solid {Colors.BORDER};
+            border-radius: 8px;
+            color: {Colors.TEXT_SECONDARY};
+            font-size: 16px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            transition: background 0.15s;
+        }}
+        .map-layer-toggle:hover {{
+            background: {Colors.BG_HOVER};
+            color: {Colors.TEXT_PRIMARY};
+        }}
+        .map-layer-content {{
+            display: none;
+            background: {Colors.BG_CARD};
+            border: 1px solid {Colors.BORDER};
+            border-radius: 8px;
+            padding: 8px 12px;
+            margin-bottom: 6px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            min-width: 160px;
+        }}
+        .map-layer-content.open {{
+            display: block;
+        }}
+        .map-layer-content label {{
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 0;
+            color: {Colors.TEXT_SECONDARY};
+            font-size: 12px;
+            cursor: pointer;
+            user-select: none;
+            transition: color 0.15s;
+        }}
+        .map-layer-content label:hover {{
+            color: {Colors.TEXT_PRIMARY};
+        }}
+        .map-layer-content input[type="checkbox"] {{
+            width: 14px;
+            height: 14px;
+            accent-color: {Colors.PRIMARY};
+            cursor: pointer;
+        }}
     </style>
 </head>
 <body>
     <div id="map"></div>
+
+    <svg width="0" height="0" style="position:absolute">
+        <defs>
+            <pattern id="settlement-hatch" width="10" height="10"
+                     patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+                <rect width="10" height="10" fill="rgba(239,68,68,0.45)"/>
+                <line x1="0" y1="0" x2="0" y2="10"
+                      stroke="rgba(239,68,68,0.75)" stroke-width="3.5"/>
+            </pattern>
+        </defs>
+    </svg>
+
+    <div class="map-layer-panel">
+        <div class="map-layer-content" id="layerContent">
+            <label><input type="checkbox" id="chkTrack" checked onchange="toggleLayer('track')"> Трек</label>
+            <label><input type="checkbox" id="chkWaypoints" checked onchange="toggleLayer('waypoints')"> Точки маршрута</label>
+            <label><input type="checkbox" id="chkHud" checked onchange="toggleLayer('hud')"> HUD элементы</label>
+            <label><input type="checkbox" id="chkRestricted" onchange="toggleLayer('restricted')"> Запретные зоны</label>
+            <label><input type="checkbox" id="chkSettlements" onchange="toggleLayer('settlements')"> Нас. пункты</label>
+        </div>
+        <button class="map-layer-toggle" onclick="togglePanel()" title="Слои">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path d="M8 1L1 5l7 4 7-4-7-4z" fill="currentColor" opacity="0.6"/>
+                <path d="M1 8l7 4 7-4" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+                <path d="M1 11l7 4 7-4" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+            </svg>
+        </button>
+    </div>
+
     <script>
         var map = L.map('map', {{attributionControl: false}}).setView([{self.center[0]}, {self.center[1]}], {self.zoom});
 
@@ -226,11 +625,109 @@ class MapWidget(QWidget):
         var lastHeading = 0;
         var lastAircraftPos = null;
 
+        var showTrack = true;
+        var showWaypoints = true;
+        var showHud = true;
+        var showRestrictedZones = false;
+        var showSettlements = false;
+
+        var restrictedZonesLayer = L.layerGroup();
+        var settlementLayer = L.layerGroup();
+        var settlementRenderedKeys = {{}};
+
+        function togglePanel() {{
+            document.getElementById('layerContent').classList.toggle('open');
+        }}
+
+        var _settlementTimer = null;
+        function _requestSettlements() {{
+            if (!showSettlements || !bridge || map.getZoom() < 10) return;
+            if (_settlementTimer) clearTimeout(_settlementTimer);
+            _settlementTimer = setTimeout(function() {{
+                var b = map.getBounds().pad(0.5);
+                bridge.onBoundsChanged(b.getSouth(), b.getWest(), b.getNorth(), b.getEast());
+            }}, 150);
+        }}
+
+        function toggleLayer(name) {{
+            switch (name) {{
+                case 'track':
+                    showTrack = document.getElementById('chkTrack').checked;
+                    if (trackLine) {{
+                        showTrack ? map.addLayer(trackLine) : map.removeLayer(trackLine);
+                    }}
+                    break;
+                case 'waypoints':
+                    showWaypoints = document.getElementById('chkWaypoints').checked;
+                    waypointMarkers.forEach(function(m) {{
+                        showWaypoints ? map.addLayer(m) : map.removeLayer(m);
+                    }});
+                    routeLines.forEach(function(l) {{
+                        showWaypoints ? map.addLayer(l) : map.removeLayer(l);
+                    }});
+                    if (activeWaypointLine) {{
+                        showWaypoints ? map.addLayer(activeWaypointLine) : map.removeLayer(activeWaypointLine);
+                    }}
+                    break;
+                case 'hud':
+                    showHud = document.getElementById('chkHud').checked;
+                    if (homeMarker) {{
+                        showHud ? map.addLayer(homeMarker) : map.removeLayer(homeMarker);
+                    }}
+                    break;
+                case 'restricted':
+                    showRestrictedZones = document.getElementById('chkRestricted').checked;
+                    if (showRestrictedZones) {{
+                        map.addLayer(restrictedZonesLayer);
+                    }} else {{
+                        map.removeLayer(restrictedZonesLayer);
+                    }}
+                    break;
+                case 'settlements':
+                    showSettlements = document.getElementById('chkSettlements').checked;
+                    if (showSettlements) {{
+                        map.addLayer(settlementLayer);
+                        _requestSettlements();
+                    }} else {{
+                        map.removeLayer(settlementLayer);
+                    }}
+                    break;
+            }}
+        }}
+
+        var _settlementStyle = {{
+            fillColor: 'rgba(239,68,68,0.45)',
+            fillOpacity: 1,
+            color: 'rgba(239,68,68,0.75)',
+            weight: 2.5,
+            smoothFactor: 3,
+            interactive: false
+        }};
+        var _fallbackRadii = {{city: 5000, town: 2000, village: 700, hamlet: 300}};
+
+        function addSettlements(tileKey, features) {{
+            if (settlementRenderedKeys[tileKey]) return;
+            settlementRenderedKeys[tileKey] = true;
+            features.forEach(function(f) {{
+                var shape;
+                if (f.F === 'p') {{
+                    shape = L.polygon(f.c, _settlementStyle);
+                }} else {{
+                    var r = _fallbackRadii[f.t] || 700;
+                    shape = L.circle([f.lat, f.lon], Object.assign({{radius: r}}, _settlementStyle));
+                }}
+                shape.on('add', function() {{
+                    if (shape._path) shape._path.style.fill = 'url(#settlement-hatch)';
+                }});
+                shape.addTo(settlementLayer);
+            }});
+        }}
+
         function createAircraftIcon(heading) {{
             return L.divIcon({{
                 html: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" style="transform: rotate(${{heading}}deg); filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));">
                     <path d="M16 2 L14 12 L4 14 L4 18 L14 16 L14 26 L10 28 L10 30 L16 28 L22 30 L22 28 L18 26 L18 16 L28 18 L28 14 L18 12 Z"
-                          fill="{Colors.PRIMARY_LIGHT}" stroke="#fff" stroke-width="0.5" opacity="0.95"/>
+                          fill="{Colors.SUCCESS}" stroke="#fff" stroke-width="0.5" opacity="0.95"/>
                 </svg>`,
                 className: 'aircraft-icon',
                 iconSize: [32, 32],
@@ -261,10 +758,11 @@ class MapWidget(QWidget):
                 trackLine.setLatLngs(trackPoints);
             }} else {{
                 trackLine = L.polyline(trackPoints, {{
-                    color: '{Colors.PRIMARY_LIGHT}',
+                    color: '{Colors.SUCCESS}',
                     weight: 2,
                     opacity: 0.7
-                }}).addTo(map);
+                }});
+                if (showTrack) trackLine.addTo(map);
             }}
 
             updateActiveWaypointLine();
@@ -376,7 +874,8 @@ class MapWidget(QWidget):
                 var marker = L.marker([wp.lat, wp.lon], {{
                     icon: icon,
                     zIndexOffset: isActive ? 100 : (isPast ? -100 : 0)
-                }}).addTo(map);
+                }});
+                if (showWaypoints) marker.addTo(map);
 
                 marker.bindTooltip(formatTooltip(wp, i, isActive), {{
                     permanent: false,
@@ -420,7 +919,8 @@ class MapWidget(QWidget):
                     weight: weight,
                     opacity: opacity,
                     dashArray: dashArray
-                }}).addTo(map);
+                }});
+                if (showWaypoints) line.addTo(map);
                 routeLines.push(line);
             }}
 
@@ -450,7 +950,8 @@ class MapWidget(QWidget):
                     weight: 2,
                     opacity: 0.8,
                     dashArray: '4, 8'
-                }}).addTo(map);
+                }});
+                if (showWaypoints) activeWaypointLine.addTo(map);
             }}
         }}
 
@@ -458,7 +959,8 @@ class MapWidget(QWidget):
             var icon = createWaypointIcon(index, false, false);
             var marker = L.marker([lat, lon], {{
                 icon: icon
-            }}).addTo(map);
+            }});
+            if (showWaypoints) marker.addTo(map);
 
             var tooltip = wpData ? formatTooltip(wpData, index - 1, false) : 'Точка ' + index;
             marker.bindTooltip(tooltip, {{
@@ -492,10 +994,18 @@ class MapWidget(QWidget):
                     iconSize: [24, 24],
                     iconAnchor: [12, 24]
                 }});
-                homeMarker = L.marker([lat, lon], {{icon: homeIcon, zIndexOffset: 500}}).addTo(map);
+                homeMarker = L.marker([lat, lon], {{icon: homeIcon, zIndexOffset: 500}});
+                if (showHud) homeMarker.addTo(map);
                 homeMarker.bindTooltip('Дом', {{permanent: false, direction: 'top'}});
             }}
         }}
+
+        map.on('move', function() {{
+            _requestSettlements();
+        }});
+        map.on('zoomend', function() {{
+            _requestSettlements();
+        }});
 
         var bridge = null;
         new QWebChannel(qt.webChannelTransport, function(channel) {{
@@ -511,6 +1021,18 @@ class MapWidget(QWidget):
         map.on('contextmenu', function(e) {{
             if (bridge) {{
                 bridge.onContextMenu(e.latlng.lat, e.latlng.lng, e.originalEvent.screenX, e.originalEvent.screenY);
+            }}
+        }});
+
+        map.on('mousemove', function(e) {{
+            if (bridge) {{
+                bridge.onMouseMove(e.latlng.lat, e.latlng.lng);
+            }}
+        }});
+
+        map.on('zoomend', function() {{
+            if (bridge) {{
+                bridge.onZoomChanged(map.getZoom());
             }}
         }});
     </script>
@@ -549,3 +1071,19 @@ class MapWidget(QWidget):
 
     def set_home_marker(self, lat: float, lon: float):
         self.web_view.page().runJavaScript(f"setHomeMarker({lat}, {lon});")
+
+    def set_layer_visibility(self, layer_name: str, visible: bool):
+        checkbox_map = {
+            'track': 'chkTrack',
+            'waypoints': 'chkWaypoints',
+            'hud': 'chkHud',
+            'restricted': 'chkRestricted',
+            'settlements': 'chkSettlements',
+        }
+        chk_id = checkbox_map.get(layer_name)
+        if not chk_id:
+            return
+        js_val = 'true' if visible else 'false'
+        self.web_view.page().runJavaScript(
+            f"document.getElementById('{chk_id}').checked = {js_val}; toggleLayer('{layer_name}');"
+        )

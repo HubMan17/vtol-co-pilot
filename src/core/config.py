@@ -37,8 +37,8 @@ class NavigationConfig:
 
 @dataclass
 class GUIConfig:
-    map_center: tuple = (59.939, 30.315)
-    map_zoom: int = 14
+    map_center: tuple = (55.751, 37.618)
+    map_zoom: int = 10
 
 
 @dataclass
