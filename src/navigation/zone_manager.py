@@ -21,6 +21,9 @@ class NoFlyZone:
     color: str = "#1E293B"
     created: str = ""
     modified: str = ""
+    # Per-zone avoidance overrides (None = use global config defaults)
+    avoid_mode: Optional[str] = None   # "disabled" | "always" | "below_altitude"
+    buffer: Optional[float] = None     # meters distance from boundary
 
     def __post_init__(self):
         if not self.created:
@@ -51,6 +54,8 @@ class ZoneManager:
                     color=z.get('color', '#EF4444'),
                     created=z.get('created', ''),
                     modified=z.get('modified', ''),
+                    avoid_mode=z.get('avoid_mode'),
+                    buffer=z.get('buffer'),
                 )
                 self._zones[zone.id] = zone
         except Exception as e:
@@ -70,6 +75,8 @@ class ZoneManager:
                         'color': z.color,
                         'created': z.created,
                         'modified': z.modified,
+                        'avoid_mode': z.avoid_mode,
+                        'buffer': z.buffer,
                     }
                     for z in self._zones.values()
                 ]
@@ -103,7 +110,7 @@ class ZoneManager:
         zone = self._zones.get(zone_id)
         if not zone:
             return None
-        for key in ('name', 'description', 'altitude', 'color'):
+        for key in ('name', 'description', 'altitude', 'color', 'avoid_mode', 'buffer'):
             if key in kwargs:
                 setattr(zone, key, kwargs[key])
         zone.modified = datetime.now().isoformat()

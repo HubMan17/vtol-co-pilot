@@ -3,7 +3,7 @@ import logging
 import math
 from pathlib import Path
 from enum import Enum, auto
-from typing import Optional, TYPE_CHECKING
+from typing import List, Optional, Tuple, TYPE_CHECKING
 
 from src.mavlink.proxy import MAVLinkProxy
 
@@ -29,6 +29,8 @@ from src.navigation.calculations import bearing_to, haversine_distance, project_
 
 if TYPE_CHECKING:
     from src.navigation.route_planner import RoutePlanner
+    from src.navigation.zone_checker import ZoneChecker
+    from src.navigation.path_planner import PathPlanner
 
 
 class AutopilotMode(Enum):
@@ -87,10 +89,35 @@ class AutopilotManager:
 
         self._log_counter = 0
 
+        # Zone avoidance
+        self._zone_checker: Optional['ZoneChecker'] = None
+        self._path_planner: Optional['PathPlanner'] = None
+        self._avoidance_waypoints: List[Tuple[float, float]] = []
+        self._avoidance_wp_idx: int = 0
+        self._avoidance_for_wp_id: int = -1  # target wp for which avoidance was computed
+        self._avoidance_gave_up: int = -1  # wp.id for which plan_path returned None
+        self._avoidance_computing: bool = False  # True while background thread runs
+        self._avoidance_pending_result = None  # result from background thread
+
         self._event_bus.subscribe(Event.CONNECTION_LOST, self._on_connection_lost)
 
     def set_route_planner(self, route_planner: 'RoutePlanner'):
         self._route_planner = route_planner
+
+    def set_zone_checker(self, checker: 'ZoneChecker'):
+        self._zone_checker = checker
+
+    def set_path_planner(self, planner: 'PathPlanner'):
+        self._path_planner = planner
+
+    def reset_zone_avoidance(self):
+        """Reset avoidance cache — call when zone avoidance settings change."""
+        self._avoidance_waypoints = []
+        self._avoidance_wp_idx = 0
+        self._avoidance_for_wp_id = -1
+        self._avoidance_gave_up = -1
+        self._avoidance_computing = False
+        self._avoidance_pending_result = None
 
     def set_home_position(self, position: Optional[LatLon]):
         """Set home position for return-to-home after route completion"""
@@ -147,6 +174,12 @@ class AutopilotManager:
         self._loiter_alt_transition = False
         self._disengage_reason = ""
         self._guided_send_time = 0.0  # force immediate send on engage
+        self._avoidance_waypoints = []
+        self._avoidance_wp_idx = 0
+        self._avoidance_for_wp_id = -1
+        self._avoidance_gave_up = -1
+        self._avoidance_computing = False
+        self._avoidance_pending_result = None
 
         now = time.time()
         self._mode = AutopilotMode.NAV
@@ -342,6 +375,12 @@ class AutopilotManager:
                     else:
                         self._altitude_controller.set_target_altitude(telemetry.altitude_agl)
                 self._active_waypoint_id = wp_check.id
+                self._avoidance_waypoints = []
+                self._avoidance_wp_idx = 0
+                self._avoidance_for_wp_id = -1
+                self._avoidance_gave_up = -1
+                self._avoidance_computing = False
+                self._avoidance_pending_result = None
 
             # Handle return-to-home mode
             if self._returning_home and self._home_position:
@@ -509,6 +548,12 @@ class AutopilotManager:
 
                             if new_idx != old_idx and new_wp:
                                 self._active_waypoint_id = new_wp.id
+                                self._avoidance_waypoints = []
+                                self._avoidance_wp_idx = 0
+                                self._avoidance_for_wp_id = -1
+                                self._avoidance_gave_up = -1
+                                self._avoidance_computing = False
+                                self._avoidance_pending_result = None
                                 if new_wp.climb_enroute:
                                     self._altitude_controller.set_target_altitude(new_wp.altitude)
                                     self._waiting_for_altitude = False
@@ -541,7 +586,15 @@ class AutopilotManager:
                             self._send_guided_commands(target_bearing, position)
                 else:
                     # Flying to waypoint — send GUIDED target
-                    if has_orbit and distance_to_wp <= orbit_radius * 2:
+
+                    # Zone avoidance: compute intermediate waypoints if path crosses obstacles
+                    avoidance_target = self._get_avoidance_target(position, wp, telemetry.altitude_agl)
+
+                    if avoidance_target:
+                        # Navigate to avoidance intermediate point
+                        target_bearing = bearing_to(position.lat, position.lon,
+                                                    avoidance_target[0], avoidance_target[1])
+                    elif has_orbit and distance_to_wp <= orbit_radius * 2:
                         # Tangent approach: curve into orbit circle instead of flying head-on
                         if self._tangent_approach_wp_id != wp.id:
                             self._orbit_ccw = self._choose_orbit_direction_ccw(
@@ -911,6 +964,91 @@ class AutopilotManager:
                     if wp and not self._is_orbiting:
                         self._start_orbit(wp, self._proxy.get_telemetry().heading)
                         logger.info(f"INFINITE ORBIT started at WP{wp.id}")
+
+    def _get_avoidance_target(self, position, wp, altitude: float) -> Optional[Tuple[float, float]]:
+        """Check if path to wp needs avoidance and return current intermediate target.
+        Returns (lat, lon) of avoidance waypoint, or None if direct path is OK.
+        Path computation runs in a background thread to avoid blocking update()."""
+        if not self._zone_checker or not self._path_planner:
+            return None
+
+        # Check for completed background computation
+        if self._avoidance_pending_result is not None:
+            path, for_wp_id = self._avoidance_pending_result
+            self._avoidance_pending_result = None
+            self._avoidance_computing = False
+            if for_wp_id == self._avoidance_for_wp_id:
+                if path:
+                    self._avoidance_waypoints = path
+                    logger.warning("AVOIDANCE: %d intermediate points to WP%d", len(path), for_wp_id)
+                elif path is None:
+                    self._avoidance_gave_up = for_wp_id
+                    logger.warning("AVOIDANCE: no path found to WP%d, flying direct", for_wp_id)
+
+        # Already tried and planner found no path for this wp — fly direct
+        if self._avoidance_gave_up == wp.id:
+            return None
+
+        # Compute avoidance if not yet done for this wp (or needs recompute)
+        if self._avoidance_for_wp_id != wp.id:
+            self._avoidance_for_wp_id = wp.id
+            self._avoidance_waypoints = []
+            self._avoidance_wp_idx = 0
+            self._avoidance_computing = False
+
+            if self._zone_checker.segment_intersects_obstacles(
+                position.lat, position.lon, wp.lat, wp.lon, altitude
+            ):
+                # Start background computation
+                self._avoidance_computing = True
+                self._start_avoidance_computation(
+                    position.lat, position.lon, wp.lat, wp.lon, altitude, wp.id
+                )
+                return None  # no result yet
+
+        # Still computing — don't have result yet
+        if self._avoidance_computing:
+            return None
+
+        if not self._avoidance_waypoints:
+            return None
+
+        # Navigate through avoidance waypoints
+        target = self._avoidance_waypoints[self._avoidance_wp_idx]
+        dist = haversine_distance(position.lat, position.lon, target[0], target[1])
+
+        if dist <= 150.0:
+            # Reached avoidance waypoint — advance
+            self._avoidance_wp_idx += 1
+            if self._avoidance_wp_idx >= len(self._avoidance_waypoints):
+                # All avoidance points passed — path planner guaranteed
+                # clear line from last avoidance point to WP, so fly direct.
+                # Keep _avoidance_for_wp_id = wp.id to prevent unnecessary recompute.
+                self._avoidance_waypoints = []
+                self._avoidance_wp_idx = 0
+                logger.info("AVOIDANCE: all points passed for WP%d, flying direct", wp.id)
+                return None
+            target = self._avoidance_waypoints[self._avoidance_wp_idx]
+
+        return target
+
+    def _start_avoidance_computation(self, start_lat: float, start_lon: float,
+                                     end_lat: float, end_lon: float,
+                                     altitude: float, wp_id: int):
+        """Run plan_path in a background thread."""
+        import threading
+
+        def worker():
+            try:
+                result = self._path_planner.plan_path(
+                    start_lat, start_lon, end_lat, end_lon, altitude
+                )
+            except Exception as e:
+                logger.error("AVOIDANCE computation error: %s", e)
+                result = None
+            self._avoidance_pending_result = (result, wp_id)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _on_connection_lost(self, data):
         self.disengage("Соединение потеряно")

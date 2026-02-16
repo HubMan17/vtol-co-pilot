@@ -31,6 +31,17 @@ class AutopilotConfig:
 
 
 @dataclass
+class ZoneAvoidanceConfig:
+    # Населённые пункты
+    settlement_mode: str = "disabled"       # "disabled" | "always" | "below_altitude"
+    settlement_min_altitude: float = 200.0  # м — не залетать если ниже этой высоты
+    settlement_buffer: float = 500.0        # м — минимальное расстояние от границы
+    # Запретные зоны (глобальные дефолты, per-zone может переопределить)
+    nofly_mode: str = "always"              # "disabled" | "always" | "below_altitude"
+    nofly_buffer: float = 200.0             # м — минимальное расстояние от границы
+
+
+@dataclass
 class NavigationConfig:
     waypoint_radius: float = 150.0
 
@@ -47,6 +58,7 @@ class AppConfig:
     autopilot: AutopilotConfig = field(default_factory=AutopilotConfig)
     navigation: NavigationConfig = field(default_factory=NavigationConfig)
     gui: GUIConfig = field(default_factory=GUIConfig)
+    zone_avoidance: ZoneAvoidanceConfig = field(default_factory=ZoneAvoidanceConfig)
 
 
 def load_config(path: Path = None) -> AppConfig:
@@ -76,6 +88,8 @@ def load_config(path: Path = None) -> AppConfig:
         config.navigation = NavigationConfig(**nav_data)
     if "gui" in data:
         config.gui = GUIConfig(**data["gui"])
+    if "zone_avoidance" in data:
+        config.zone_avoidance = ZoneAvoidanceConfig(**data["zone_avoidance"])
 
     return config
 
@@ -115,6 +129,13 @@ def save_config(config: AppConfig, path: Path = None):
         "gui": {
             "map_center": list(config.gui.map_center),
             "map_zoom": config.gui.map_zoom,
+        },
+        "zone_avoidance": {
+            "settlement_mode": config.zone_avoidance.settlement_mode,
+            "settlement_min_altitude": config.zone_avoidance.settlement_min_altitude,
+            "settlement_buffer": config.zone_avoidance.settlement_buffer,
+            "nofly_mode": config.zone_avoidance.nofly_mode,
+            "nofly_buffer": config.zone_avoidance.nofly_buffer,
         }
     }
 

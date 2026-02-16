@@ -17,10 +17,11 @@ class WaypointDialog(QDialog):
         ("ALTITUDE", "Набор/смена высоты"),
     ]
 
-    def __init__(self, parent=None, lat: float = 0.0, lon: float = 0.0):
+    def __init__(self, parent=None, lat: float = 0.0, lon: float = 0.0, zone_checker=None):
         super().__init__(parent)
         self._lat = lat
         self._lon = lon
+        self._zone_checker = zone_checker
         self._setup_ui()
         apply_dark_titlebar(int(self.winId()))
 
@@ -55,6 +56,7 @@ class WaypointDialog(QDialog):
         self.spin_altitude.setRange(10, 5000)
         self.spin_altitude.setValue(100)
         self.spin_altitude.setSuffix(" м")
+        self.spin_altitude.valueChanged.connect(self._check_zone_restriction)
         params_layout.addRow("Высота:", self.spin_altitude)
 
         self.chk_climb_enroute = QCheckBox("Набирать высоту в процессе полёта")
@@ -93,6 +95,22 @@ class WaypointDialog(QDialog):
         self.orbit_group.setVisible(False)
         layout.addWidget(orbit_group)
 
+        # Zone restriction warning
+        self.lbl_zone_warning = QLabel()
+        self.lbl_zone_warning.setWordWrap(True)
+        self.lbl_zone_warning.setStyleSheet(f"""
+            QLabel {{
+                color: {Colors.ERROR};
+                background-color: {Colors.ERROR_BG};
+                border: 1px solid {Colors.ERROR};
+                border-radius: 4px;
+                padding: 6px 10px;
+                font-weight: 600;
+            }}
+        """)
+        self.lbl_zone_warning.setVisible(False)
+        layout.addWidget(self.lbl_zone_warning)
+
         # Buttons
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(8)
@@ -120,12 +138,29 @@ class WaypointDialog(QDialog):
 
         layout.addLayout(btn_layout)
         self._on_type_changed(0)
+        self._check_zone_restriction()
 
     def _on_type_changed(self, index):
         type_id = self.combo_type.currentData()
         is_orbit = type_id in ("ORBIT_TURNS", "ORBIT_INFINITE", "ALTITUDE")
         self.orbit_group.setVisible(is_orbit)
         self.spin_orbit_turns.setEnabled(type_id == "ORBIT_TURNS")
+        self.adjustSize()
+
+    def _check_zone_restriction(self, _value=None):
+        if not self._zone_checker:
+            return
+        altitude = self.spin_altitude.value()
+        restricted, reason = self._zone_checker.is_point_restricted(
+            self._lat, self._lon, altitude
+        )
+        if restricted:
+            self.lbl_zone_warning.setText(reason)
+            self.lbl_zone_warning.setVisible(True)
+            self.btn_ok.setEnabled(False)
+        else:
+            self.lbl_zone_warning.setVisible(False)
+            self.btn_ok.setEnabled(True)
         self.adjustSize()
 
     def get_waypoint_data(self) -> dict:

@@ -1,5 +1,3 @@
-import math
-
 import qtawesome as qta
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QGridLayout, QHBoxLayout, QLabel, QFrame,
@@ -69,7 +67,7 @@ class _MetricCell(QWidget):
         self.value_label.setStyleSheet(f"""
             color: {color};
             font-family: "{Fonts.MONO}";
-            font-size: 26px;
+            font-size: 20px;
             font-weight: 700;
             border: none;
         """)
@@ -150,71 +148,144 @@ class StatusPanel(QWidget):
         # ── TELEMETRY ──
         lay.addWidget(_SectionHeader("mdi.antenna", "Телеметрия"))
 
-        self.m_airspeed = _MetricCell("IAS", "м/с", Colors.METRIC_SPEED)
-        self.m_groundspeed = _MetricCell("GS", "м/с", Colors.METRIC_GS)
-        lay.addWidget(_metric_row(self.m_airspeed, self.m_groundspeed))
+        self.m_airspeed = _MetricCell("Возд. скорость", "м/с", Colors.METRIC_SPEED)
+        self.m_groundspeed = _MetricCell("Пут. скорость", "м/с", Colors.METRIC_GS)
+        self.m_altitude_agl = _MetricCell("Высота отн.", "м", Colors.METRIC_ALT)
+        lay.addWidget(_metric_row(self.m_airspeed, self.m_groundspeed, self.m_altitude_agl))
 
-        self.m_heading = _MetricCell("HDG", "°", Colors.METRIC_HDG)
-        self.m_track = _MetricCell("TRK", "°", Colors.METRIC_HDG)
-        lay.addWidget(_metric_row(self.m_heading, self.m_track))
+        # Wind cell with dropdown override
+        wind_cell = QWidget()
+        wc_lay = QVBoxLayout(wind_cell)
+        wc_lay.setContentsMargins(10, 8, 10, 8)
+        wc_lay.setSpacing(2)
 
-        self.m_altitude = _MetricCell("ALT MSL", "м", Colors.METRIC_ALT)
-        self.m_altitude_agl = _MetricCell("ALT AGL", "м", Colors.METRIC_ALT)
-        lay.addWidget(_metric_row(self.m_altitude, self.m_altitude_agl))
+        # Header row: label + dropdown arrow
+        wind_hdr = QHBoxLayout()
+        wind_hdr.setContentsMargins(0, 0, 0, 0)
+        wind_hdr.setSpacing(4)
 
-        self.m_climb = _MetricCell("V/S", "м/с", Colors.METRIC_VS)
-        self.m_wind = _MetricCell("WIND", "", Colors.METRIC_WIND)
-        lay.addWidget(_metric_row(self.m_climb, self.m_wind))
+        wind_name = QLabel("Ветер")
+        wind_name.setStyleSheet(f"color: {Colors.TEXT_DIM}; font-size: 10px; border: none;")
+        wind_hdr.addWidget(wind_name)
+        wind_hdr.addStretch()
 
-        self.m_roll = _MetricCell("ROLL", "°", Colors.METRIC_ATT)
-        self.m_pitch = _MetricCell("PITCH", "°", Colors.METRIC_ATT)
-        lay.addWidget(_metric_row(self.m_roll, self.m_pitch))
+        self.btn_wind_dropdown = QPushButton()
+        self.btn_wind_dropdown.setIcon(qta.icon("mdi.chevron-down", color=Colors.TEXT_DIM))
+        self.btn_wind_dropdown.setFixedSize(18, 18)
+        self.btn_wind_dropdown.setCursor(Qt.PointingHandCursor)
+        self.btn_wind_dropdown.setToolTip("Задать ветер")
+        self.btn_wind_dropdown.setStyleSheet(f"""
+            QPushButton {{
+                background-color: transparent;
+                border: none;
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {Colors.BG_HOVER};
+            }}
+        """)
+        self.btn_wind_dropdown.clicked.connect(self._toggle_wind_popup)
+        wind_hdr.addWidget(self.btn_wind_dropdown)
+        wc_lay.addLayout(wind_hdr)
 
-        self.m_battery = _MetricCell("BAT", "В", Colors.METRIC_BAT)
+        self.m_wind_value = QLabel("---")
+        self.m_wind_value.setStyleSheet(f"""
+            color: {Colors.METRIC_WIND};
+            font-family: "{Fonts.MONO}";
+            font-size: 20px;
+            font-weight: 700;
+            border: none;
+        """)
+        wc_lay.addWidget(self.m_wind_value)
+
+        self.m_battery = _MetricCell("Батарея", "В", Colors.METRIC_BAT)
         self.m_gps = _MetricCell("GPS", "", Colors.METRIC_GPS)
-        lay.addWidget(_metric_row(self.m_battery, self.m_gps))
+        lay.addWidget(_metric_row(wind_cell, self.m_battery, self.m_gps))
 
-        # Wind override
-        lay.addWidget(_Separator())
+        # Wind popup (floating, created once, shown/hidden on click)
+        self._wind_popup = QFrame(self, Qt.Popup)
+        self._wind_popup.setStyleSheet(f"""
+            QFrame {{
+                background-color: {Colors.BG_CARD};
+                border: 1px solid {Colors.BORDER_LIGHT};
+                border-radius: 8px;
+            }}
+        """)
+        pop_lay = QVBoxLayout(self._wind_popup)
+        pop_lay.setContentsMargins(12, 10, 12, 10)
+        pop_lay.setSpacing(8)
 
-        wind_row = QHBoxLayout()
-        wind_row.setSpacing(4)
+        pop_title = QLabel("Задать ветер")
+        pop_title.setStyleSheet(f"""
+            color: {Colors.TEXT_TERTIARY};
+            font-size: 11px;
+            font-weight: 700;
+            border: none;
+        """)
+        pop_lay.addWidget(pop_title)
 
-        wlbl = QLabel()
-        wlbl.setPixmap(qta.icon("mdi.weather-windy", color=Colors.TEXT_TERTIARY).pixmap(14, 14))
-        wind_row.addWidget(wlbl)
+        pop_spin_style = f"""
+            QSpinBox {{
+                background-color: {Colors.BG_INPUT};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 6px;
+                padding: 4px 8px;
+                font-family: "{Fonts.MONO}";
+                font-size: 13px;
+                font-weight: 600;
+            }}
+            QSpinBox:focus {{ border-color: {Colors.PRIMARY}; }}
+            QSpinBox::up-button, QSpinBox::down-button {{ width: 0; height: 0; border: none; }}
+        """
+
+        # Direction
+        dir_lbl = QLabel("Направление")
+        dir_lbl.setStyleSheet(f"color: {Colors.TEXT_DIM}; font-size: 10px; border: none;")
+        pop_lay.addWidget(dir_lbl)
 
         self.spin_wind_dir = QSpinBox()
         self.spin_wind_dir.setRange(0, 360)
         self.spin_wind_dir.setWrapping(True)
         self.spin_wind_dir.setSuffix("°")
-        self.spin_wind_dir.setFixedWidth(60)
-        self.spin_wind_dir.setFixedHeight(26)
-        wind_row.addWidget(self.spin_wind_dir)
+        self.spin_wind_dir.setFixedHeight(30)
+        self.spin_wind_dir.setStyleSheet(pop_spin_style)
+        pop_lay.addWidget(self.spin_wind_dir)
+
+        # Speed
+        spd_lbl = QLabel("Скорость")
+        spd_lbl.setStyleSheet(f"color: {Colors.TEXT_DIM}; font-size: 10px; border: none;")
+        pop_lay.addWidget(spd_lbl)
 
         self.spin_wind_speed = QSpinBox()
         self.spin_wind_speed.setRange(0, 30)
         self.spin_wind_speed.setSuffix(" м/с")
-        self.spin_wind_speed.setFixedWidth(68)
-        self.spin_wind_speed.setFixedHeight(26)
-        wind_row.addWidget(self.spin_wind_speed)
+        self.spin_wind_speed.setFixedHeight(30)
+        self.spin_wind_speed.setStyleSheet(pop_spin_style)
+        pop_lay.addWidget(self.spin_wind_speed)
 
-        self.btn_set_wind = QPushButton()
+        # Apply
+        self.btn_set_wind = QPushButton("  Применить")
         self.btn_set_wind.setIcon(qta.icon("mdi.check", color="#fff"))
-        self.btn_set_wind.setFixedSize(26, 26)
+        self.btn_set_wind.setFixedHeight(30)
+        self.btn_set_wind.setCursor(Qt.PointingHandCursor)
         self.btn_set_wind.setStyleSheet(f"""
             QPushButton {{
                 background-color: {Colors.PRIMARY};
+                color: #fff;
                 border: none;
                 border-radius: 6px;
+                font-size: 12px;
+                font-weight: 600;
+                padding: 0 14px;
             }}
             QPushButton:hover {{ background-color: {Colors.PRIMARY_HOVER}; }}
         """)
         self.btn_set_wind.clicked.connect(self._on_set_wind)
-        wind_row.addWidget(self.btn_set_wind)
+        pop_lay.addWidget(self.btn_set_wind)
 
-        wind_row.addStretch()
-        lay.addLayout(wind_row)
+        self._wind_popup.setFixedWidth(180)
+        self._wind_popup.adjustSize()
 
         # ── NAVIGATION ──
         lay.addWidget(_Separator())
@@ -408,16 +479,10 @@ class StatusPanel(QWidget):
     def update_telemetry(self, state: TelemetryState):
         self.m_airspeed.set_value(state.airspeed, 1)
         self.m_groundspeed.set_value(state.groundspeed, 1)
-        self.m_heading.set_value(state.heading, 0)
-        self.m_track.set_value(state.heading, 0)
-        self.m_altitude.set_value(state.altitude, 0)
         self.m_altitude_agl.set_value(state.altitude_agl, 0)
-        self.m_climb.set_value(state.climb_rate, 1)
 
-        self.m_wind.set_text(f"{int(state.wind_direction):03d}°/{state.wind_speed:.0f}")
+        self.m_wind_value.setText(f"{int(state.wind_direction):03d}°/{state.wind_speed:.0f}")
 
-        self.m_roll.set_value(math.degrees(state.roll), 1)
-        self.m_pitch.set_value(math.degrees(state.pitch), 1)
         self.m_battery.set_value(state.battery_voltage, 1)
 
         if state.gps_fix >= 3:
@@ -455,12 +520,23 @@ class StatusPanel(QWidget):
         self.target_airspeed_changed.emit(self.spin_target_speed.value())
         self._confirm_btn(self.btn_set_speed)
 
+    def _toggle_wind_popup(self):
+        if self._wind_popup.isVisible():
+            self._wind_popup.hide()
+            return
+        # Position below the dropdown arrow button
+        btn = self.btn_wind_dropdown
+        pos = btn.mapToGlobal(btn.rect().bottomLeft())
+        self._wind_popup.move(pos.x() - self._wind_popup.width() + btn.width(), pos.y() + 4)
+        self._wind_popup.show()
+
     def _on_set_wind(self):
         self.wind_override_requested.emit(
             self.spin_wind_dir.value(),
             self.spin_wind_speed.value()
         )
         self.btn_set_wind.setIcon(qta.icon("mdi.check", color=Colors.SUCCESS))
+        self._wind_popup.hide()
 
     # ─── Autopilot display ───
 

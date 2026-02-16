@@ -1,7 +1,7 @@
 import qtawesome as qta
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QLabel, QLineEdit, QTextEdit, QSpinBox,
+    QLabel, QLineEdit, QTextEdit, QSpinBox, QComboBox,
     QPushButton, QGroupBox
 )
 from PyQt5.QtCore import Qt
@@ -54,6 +54,33 @@ class ZonePropertiesDialog(QDialog):
         params_layout.addRow("Макс. высота:", self.spin_altitude)
 
         layout.addWidget(params_group)
+
+        # Avoidance overrides
+        avoid_group = QGroupBox("Обход автопилотом")
+        avoid_layout = QFormLayout(avoid_group)
+        avoid_layout.setSpacing(8)
+
+        self.combo_avoid_mode = QComboBox()
+        self.combo_avoid_mode.addItem("По умолчанию (глобальные)", None)
+        self.combo_avoid_mode.addItem("Выключено", "disabled")
+        self.combo_avoid_mode.addItem("Всегда избегать", "always")
+        self.combo_avoid_mode.addItem("Ниже высоты зоны", "below_altitude")
+        if editing and self._zone.avoid_mode:
+            idx = self.combo_avoid_mode.findData(self._zone.avoid_mode)
+            if idx >= 0:
+                self.combo_avoid_mode.setCurrentIndex(idx)
+        avoid_layout.addRow("Режим:", self.combo_avoid_mode)
+
+        self.spin_buffer = QSpinBox()
+        self.spin_buffer.setRange(0, 5000)
+        self.spin_buffer.setSingleStep(50)
+        self.spin_buffer.setSuffix(" м")
+        self.spin_buffer.setSpecialValueText("По умолчанию")
+        if editing and self._zone.buffer is not None:
+            self.spin_buffer.setValue(int(self._zone.buffer))
+        avoid_layout.addRow("Буфер:", self.spin_buffer)
+
+        layout.addWidget(avoid_group)
 
         # Buttons
         btn_layout = QHBoxLayout()
@@ -108,8 +135,11 @@ class ZonePropertiesDialog(QDialog):
 
     def get_zone_data(self) -> dict:
         alt_val = self.spin_altitude.value()
+        buf_val = self.spin_buffer.value()
         return {
             'name': self.edit_name.text().strip(),
             'description': self.edit_description.toPlainText().strip(),
             'altitude': float(alt_val) if alt_val > 0 else None,
+            'avoid_mode': self.combo_avoid_mode.currentData(),
+            'buffer': float(buf_val) if buf_val > 0 else None,
         }

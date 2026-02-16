@@ -749,6 +749,10 @@ class MapWidget(QWidget):
         var editingZoneId = null;
         var editingMarkers = [];
 
+        var conflictLines = [];
+        var conflictMarkers = [];
+        var avoidanceLine = null;
+
         /* ── Hatching pattern helper ── */
         function _createHatchPattern(bgColor, lineColor, spacing, lineWidth) {{
             var c = document.createElement('canvas');
@@ -806,7 +810,7 @@ class MapWidget(QWidget):
 
         map.createPane('restricted');
         map.getPane('restricted').style.zIndex = 260;
-        var restrictedRenderer = L.canvas({{ pane: 'restricted' }});
+        var restrictedRenderer = L.canvas({{ pane: 'restricted', padding: 0.5 }});
 
         map.createPane('settlements');
         map.getPane('settlements').style.zIndex = 250;
@@ -831,7 +835,7 @@ class MapWidget(QWidget):
                 _cullSettlementTiles();
                 var b = map.getBounds().pad(0.3);
                 bridge.onBoundsChanged(b.getSouth(), b.getWest(), b.getNorth(), b.getEast());
-            }}, 150);
+            }}, 300);
         }}
 
         function toggleLayer(name) {{
@@ -883,7 +887,7 @@ class MapWidget(QWidget):
             }}
         }}
 
-        var settlementRenderer = L.canvas({{ pane: 'settlements' }});
+        var settlementRenderer = L.canvas({{ pane: 'settlements', padding: 0.5, tolerance: 3 }});
         var _settlementStyle = {{
             fillPattern: _settlementHatch,
             fillOpacity: 1,
@@ -1500,6 +1504,80 @@ class MapWidget(QWidget):
             }}
         }}
 
+        function setRouteConflicts(conflicts) {{
+            // Clear existing conflict indicators
+            conflictLines.forEach(l => map.removeLayer(l));
+            conflictLines = [];
+            conflictMarkers.forEach(m => map.removeLayer(m));
+            conflictMarkers = [];
+
+            if (!waypointData || waypointData.length < 2) return;
+
+            conflicts.forEach(function(c) {{
+                var fi = c.from_idx;
+                var ti = c.to_idx;
+                if (fi >= waypointData.length || ti >= waypointData.length) return;
+
+                var wp1 = waypointData[fi];
+                var wp2 = waypointData[ti];
+
+                // Red dashed overlay on conflicting segment
+                var line = L.polyline([
+                    [wp1.lat, wp1.lon],
+                    [wp2.lat, wp2.lon]
+                ], {{
+                    color: '#EF4444',
+                    weight: 4,
+                    opacity: 0.8,
+                    dashArray: '6, 8'
+                }});
+                line.addTo(map);
+                conflictLines.push(line);
+
+                // Warning marker at segment midpoint
+                var midLat = (wp1.lat + wp2.lat) / 2;
+                var midLon = (wp1.lon + wp2.lon) / 2;
+                var warningIcon = L.divIcon({{
+                    className: '',
+                    html: '<div style="background:#EF4444;color:#fff;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:bold;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.5);">!</div>',
+                    iconSize: [22, 22],
+                    iconAnchor: [11, 11]
+                }});
+                var marker = L.marker([midLat, midLon], {{ icon: warningIcon }});
+                if (c.reason) marker.bindTooltip(c.reason, {{ direction: 'top', offset: [0, -14] }});
+                marker.addTo(map);
+                conflictMarkers.push(marker);
+            }});
+        }}
+
+        function setAvoidancePath(points) {{
+            if (avoidanceLine) {{
+                map.removeLayer(avoidanceLine);
+                avoidanceLine = null;
+            }}
+            if (!points || points.length < 2) return;
+
+            var latlngs = points.map(function(p) {{ return [p.lat, p.lon]; }});
+            avoidanceLine = L.polyline(latlngs, {{
+                color: '#F97316',
+                weight: 3,
+                opacity: 0.85,
+                dashArray: '8, 6'
+            }});
+            avoidanceLine.addTo(map);
+        }}
+
+        function clearRouteConflicts() {{
+            conflictLines.forEach(l => map.removeLayer(l));
+            conflictLines = [];
+            conflictMarkers.forEach(m => map.removeLayer(m));
+            conflictMarkers = [];
+            if (avoidanceLine) {{
+                map.removeLayer(avoidanceLine);
+                avoidanceLine = null;
+            }}
+        }}
+
         function addWaypoint(lat, lon, index, wpData) {{
             var icon = createWaypointIcon(index, false, false);
             var marker = L.marker([lat, lon], {{
@@ -1545,10 +1623,30 @@ class MapWidget(QWidget):
             }}
         }}
 
-        map.on('move', function() {{
+        // Hide heavy canvas layers during animation to eliminate lag
+        var _settlementPane = null;
+        var _restrictedPane = null;
+        function _getHeavyPanes() {{
+            if (!_settlementPane) _settlementPane = document.querySelector('.leaflet-settlements-pane');
+            if (!_restrictedPane) _restrictedPane = document.querySelector('.leaflet-restricted-pane');
+        }}
+        function _hideHeavyPanes() {{
+            _getHeavyPanes();
+            if (_settlementPane) _settlementPane.style.visibility = 'hidden';
+            if (_restrictedPane) _restrictedPane.style.visibility = 'hidden';
+        }}
+        function _showHeavyPanes() {{
+            if (_settlementPane) _settlementPane.style.visibility = '';
+            if (_restrictedPane) _restrictedPane.style.visibility = '';
+        }}
+        map.on('movestart', _hideHeavyPanes);
+        map.on('moveend', function() {{
+            _showHeavyPanes();
             _requestSettlements();
         }});
+        map.on('zoomanim', _hideHeavyPanes);
         map.on('zoomend', function() {{
+            _showHeavyPanes();
             _requestSettlements();
             _updateOverlayOpacity();
         }});
@@ -1660,6 +1758,17 @@ class MapWidget(QWidget):
         self.web_view.page().runJavaScript(
             f"document.getElementById('{chk_id}').checked = {js_val}; toggleLayer('{layer_name}');"
         )
+
+    def set_route_conflicts(self, conflicts: list):
+        c_json = json.dumps(conflicts)
+        self.web_view.page().runJavaScript(f"setRouteConflicts({c_json});")
+
+    def set_avoidance_path(self, points: list):
+        p_json = json.dumps(points)
+        self.web_view.page().runJavaScript(f"setAvoidancePath({p_json});")
+
+    def clear_route_conflicts(self):
+        self.web_view.page().runJavaScript("clearRouteConflicts();")
 
     # ── Restricted Zones ──
 
