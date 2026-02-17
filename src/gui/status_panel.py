@@ -1,7 +1,7 @@
 import qtawesome as qta
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QGridLayout, QHBoxLayout, QLabel, QFrame,
-    QSpinBox, QPushButton, QScrollArea, QSizePolicy
+    QSpinBox, QPushButton, QScrollArea, QSizePolicy, QAbstractSpinBox
 )
 from PyQt5.QtGui import QFont, QColor
 from PyQt5.QtCore import Qt, pyqtSignal
@@ -107,6 +107,7 @@ def _metric_row(*cells) -> QFrame:
             sep.setStyleSheet(f"background-color: {Colors.BORDER};")
             grid.addWidget(sep, 0, i * 2 - 1)
         grid.addWidget(cell, 0, i * 2)
+        grid.setColumnStretch(i * 2, 1)
 
     return card
 
@@ -236,7 +237,6 @@ class StatusPanel(QWidget):
                 font-weight: 600;
             }}
             QSpinBox:focus {{ border-color: {Colors.PRIMARY}; }}
-            QSpinBox::up-button, QSpinBox::down-button {{ width: 0; height: 0; border: none; }}
         """
 
         # Direction
@@ -245,6 +245,7 @@ class StatusPanel(QWidget):
         pop_lay.addWidget(dir_lbl)
 
         self.spin_wind_dir = QSpinBox()
+        self.spin_wind_dir.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.spin_wind_dir.setRange(0, 360)
         self.spin_wind_dir.setWrapping(True)
         self.spin_wind_dir.setSuffix("°")
@@ -258,6 +259,7 @@ class StatusPanel(QWidget):
         pop_lay.addWidget(spd_lbl)
 
         self.spin_wind_speed = QSpinBox()
+        self.spin_wind_speed.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.spin_wind_speed.setRange(0, 30)
         self.spin_wind_speed.setSuffix(" м/с")
         self.spin_wind_speed.setFixedHeight(30)
@@ -415,9 +417,6 @@ class StatusPanel(QWidget):
                 color: {Colors.TEXT_DIM};
                 border-color: {Colors.BORDER_SUBTLE};
             }}
-            QSpinBox::up-button, QSpinBox::down-button {{
-                width: 0; height: 0; border: none;
-            }}
         """
         btn_style = f"""
             QPushButton {{
@@ -445,6 +444,7 @@ class StatusPanel(QWidget):
             input_row.setSpacing(6)
 
             spin = QSpinBox()
+            spin.setButtonSymbols(QAbstractSpinBox.NoButtons)
             spin.setRange(lo, hi)
             spin.setValue(default)
             spin.setSuffix(suffix)

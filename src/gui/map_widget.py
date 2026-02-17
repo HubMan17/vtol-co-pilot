@@ -8,7 +8,7 @@ import urllib.parse
 
 import qtawesome as qta
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QMenu, QAction
-from PyQt5.QtWebEngineWidgets import QWebEngineView
+from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEnginePage
 from PyQt5.QtWebChannel import QWebChannel
 from PyQt5.QtCore import QObject, pyqtSlot, pyqtSignal, QThread
 from PyQt5.QtGui import QCursor, QColor
@@ -18,7 +18,7 @@ from src.gui.theme import Colors
 
 _TILE_GRID = 0.1  # ~10 km tile grid
 _CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'cache', 'settlements_v5')
-_DP_TOLERANCE = 0.0005  # ~55 m — Douglas-Peucker simplification
+_DP_TOLERANCE = 0.0005  # ~55 m - Douglas-Peucker simplification
 
 _OVERPASS_ENDPOINTS = [
     'https://overpass-api.de/api/interpreter',
@@ -423,6 +423,10 @@ class MapWidget(QWidget):
         self._settlement_loader = SettlementLoader()
         self._settlement_loader.tile_loaded.connect(self._on_tile_loaded)
 
+        self._last_aircraft_ts = 0.0
+        self._last_aircraft_lat = 0.0
+        self._last_aircraft_lon = 0.0
+
         self._setup_ui()
 
     def _setup_ui(self):
@@ -430,6 +434,8 @@ class MapWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         self.web_view = QWebEngineView()
+        # Route JS console.warn/console.log to Python logger
+        self.web_view.page().javaScriptConsoleMessage = self._on_js_console
         self.web_view.page().setBackgroundColor(QColor(Colors.BG_APP))
 
         self.bridge = MapBridge()
@@ -454,6 +460,15 @@ class MapWidget(QWidget):
         self.web_view.loadFinished.connect(self._on_page_loaded)
 
         layout.addWidget(self.web_view)
+
+    @staticmethod
+    def _on_js_console(level, message, line, source):
+        import logging
+        _logger = logging.getLogger('map_js')
+        if '[PERF]' in message:
+            _logger.warning(message)
+        elif level == QWebEnginePage.WarningMessageLevel:
+            _logger.warning(message)
 
     def _on_page_loaded(self, ok):
         if ok:
@@ -576,27 +591,6 @@ class MapWidget(QWidget):
         }}
         .leaflet-popup-tip {{ background: {Colors.BG_CARD} !important; }}
         .leaflet-popup-close-button {{ color: {Colors.TEXT_TERTIARY} !important; }}
-        .aircraft-icon {{
-            width: 32px;
-            height: 32px;
-            margin-left: -16px;
-            margin-top: -16px;
-        }}
-        .waypoint-pin {{
-            filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
-        }}
-        .waypoint-pin .pin-body {{
-            transition: transform 0.15s ease;
-        }}
-        .waypoint-pin:hover .pin-body {{
-            transform: scale(1.1);
-        }}
-        .wp-number {{
-            font-family: 'Segoe UI', Inter, sans-serif;
-            font-size: 11px;
-            font-weight: bold;
-            fill: #fff;
-        }}
         .leaflet-tooltip {{
             background: {Colors.BG_TOOLTIP};
             border: 1px solid {Colors.BORDER};
@@ -691,6 +685,55 @@ class MapWidget(QWidget):
             accent-color: {Colors.PRIMARY};
             cursor: pointer;
         }}
+        .wp-index-icon {{
+            width: 24px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+            user-select: none;
+        }}
+        .wp-icon-wrap {{
+            position: relative;
+            width: 24px;
+            height: 32px;
+            display: block;
+        }}
+        .wp-icon-svg {{
+            width: 24px;
+            height: 32px;
+            overflow: visible;
+            filter: drop-shadow(0 1px 3px rgba(0,0,0,0.55));
+        }}
+        .wp-icon-num {{
+            font-family: 'Segoe UI', Inter, sans-serif;
+            font-size: 6px;
+            font-weight: 800;
+            fill: #ffffff;
+            text-anchor: middle;
+            dominant-baseline: middle;
+            paint-order: stroke;
+            stroke: rgba(0,0,0,0.8);
+            stroke-width: 0.8;
+        }}
+        .aircraft-icon {{
+            width: 30px;
+            height: 30px;
+            pointer-events: none;
+            user-select: none;
+        }}
+        .aircraft-icon-wrap {{
+            width: 30px;
+            height: 30px;
+            display: block;
+            transform-origin: 15px 15px;
+            filter: drop-shadow(0 1px 4px rgba(0,0,0,0.55));
+        }}
+        .aircraft-icon-svg {{
+            width: 30px;
+            height: 30px;
+        }}
     </style>
 </head>
 <body>
@@ -713,17 +756,40 @@ class MapWidget(QWidget):
         </button>
     </div>
 
-    <script>
-        var map = L.map('map', {{attributionControl: false}}).setView([{self.center[0]}, {self.center[1]}], {self.zoom});
+    <div id="perfOverlay" style="position:fixed;top:4px;right:4px;z-index:9999;background:rgba(0,0,0,0.75);color:#0f0;font:bold 11px monospace;padding:3px 6px;border-radius:4px;pointer-events:none;"></div>
 
-        L.tileLayer('https://{{s}}.google.com/vt/lyrs=s,h&x={{x}}&y={{y}}&z={{z}}', {{
+    <script>
+        /* РІвЂќР‚РІвЂќР‚ Performance profiler РІвЂќР‚РІвЂќР‚ */
+        var _perfFrames = 0, _perfLastTs = performance.now(), _perfFps = 0;
+        var _perfSlowFrames = 0, _perfUpdateMs = 0;
+        var _perfEl = document.getElementById('perfOverlay');
+
+        function _perfTick() {{
+            _perfFrames++;
+            var now = performance.now();
+            if (now - _perfLastTs >= 1000) {{
+                _perfFps = _perfFrames;
+                _perfFrames = 0;
+                _perfLastTs = now;
+                _perfEl.textContent = 'FPS: ' + _perfFps + ' | upd: ' + _perfUpdateMs.toFixed(1) + 'ms | slow: ' + _perfSlowFrames;
+                _perfSlowFrames = 0;
+            }}
+            requestAnimationFrame(_perfTick);
+        }}
+        requestAnimationFrame(_perfTick);
+
+        var map = L.map('map', {{attributionControl: false, preferCanvas: true}}).setView([{self.center[0]}, {self.center[1]}], {self.zoom});
+
+        L.tileLayer('https://{{s}}.google.com/vt/lyrs=s,h&hl=ru&x={{x}}&y={{y}}&z={{z}}', {{
             maxZoom: 20,
             subdomains: ['mt0', 'mt1', 'mt2', 'mt3']
         }}).addTo(map);
 
-        var aircraftMarker = null;
+        var aircraftHalo = null;
+        var aircraftBody = null;
         var trackPoints = [];
         var waypointMarkers = [];
+        var waypointIndexMarkers = [];
         var routeLines = [];
         var waypointData = [];
         var activeWaypointIdx = 0;
@@ -731,21 +797,24 @@ class MapWidget(QWidget):
         var lastHeading = 0;
         var lastAircraftPos = null;
 
-        /* ── Separate Canvas renderer for track + active waypoint line ── */
+        /* РІвЂќР‚РІвЂќР‚ Separate Canvas renderer for track + active waypoint line РІвЂќР‚РІвЂќР‚ */
         /* Isolates these high-frequency layers from route SVG.            */
-        /* L.canvas renderer lives inside the map pane → moves via CSS     */
+        /* L.canvas renderer lives inside the map pane РІвЂ вЂ™ moves via CSS     */
         /* transform during pan (GPU, zero JS redraw). Only redraws on     */
         /* actual data change or zoom.                                     */
-        var _dynRenderer = L.canvas({{ padding: 0.3 }});
+        /* 3 isolated canvas renderers — updating one does NOT redraw others */
+        var _aircraftRenderer = L.canvas({{ padding: 0.1 }});  /* halo only */
+        var _trackRenderer    = L.canvas({{ padding: 0.3 }});  /* track + wp-line */
+        var _routeRenderer    = L.canvas({{ padding: 0.3 }});  /* waypoints, routes, conflicts */
         var trackLine = L.polyline([], {{
-            renderer: _dynRenderer,
+            renderer: _trackRenderer,
             color: '{Colors.SUCCESS}',
             weight: 2,
             opacity: 0.7,
             interactive: false
         }}).addTo(map);
         var activeWaypointLine = L.polyline([], {{
-            renderer: _dynRenderer,
+            renderer: _trackRenderer,
             color: '{Colors.PRIMARY}',
             weight: 2,
             opacity: 0.8,
@@ -754,6 +823,31 @@ class MapWidget(QWidget):
         }}).addTo(map);
         var _trackUpdateCounter = 0;
         var _wpLineCounter = 0;
+        var _mapInteracting = false;
+        var _trackDirty = false;
+        var _wpLineDirty = false;
+
+        map.on('movestart', function() {{ _mapInteracting = true; }});
+        map.on('moveend', function() {{
+            _mapInteracting = false;
+            /* Flush deferred updates after drag/zoom ends */
+            if (_trackDirty) {{
+                _trackDirty = false;
+                trackLine.setLatLngs(trackPoints);
+            }}
+            if (_wpLineDirty) {{
+                _wpLineDirty = false;
+                if (lastAircraftPos && waypointData.length > activeWaypointIdx) {{
+                    var wp = waypointData[activeWaypointIdx];
+                    activeWaypointLine.setLatLngs([lastAircraftPos, [wp.lat, wp.lon]]);
+                }}
+            }}
+            /* keep aircraft shape in sync after interaction */
+            if (lastAircraftPos && aircraftBody) {{
+                aircraftBody.setLatLng(lastAircraftPos);
+                _setAircraftHeading(lastHeading);
+            }}
+        }});
 
         var showTrack = true;
         var showWaypoints = true;
@@ -773,61 +867,6 @@ class MapWidget(QWidget):
         var conflictLines = [];
         var conflictMarkers = [];
         var avoidanceLine = null;
-
-        /* ── Hatching pattern helper ── */
-        function _createHatchPattern(bgColor, lineColor, spacing, lineWidth) {{
-            var c = document.createElement('canvas');
-            c.width = spacing; c.height = spacing;
-            var ctx = c.getContext('2d');
-            ctx.fillStyle = bgColor;
-            ctx.fillRect(0, 0, spacing, spacing);
-            ctx.strokeStyle = lineColor;
-            ctx.lineWidth = lineWidth;
-            ctx.beginPath();
-            ctx.moveTo(-1, spacing + 1);
-            ctx.lineTo(spacing + 1, -1);
-            ctx.moveTo(-1 - spacing, 1);
-            ctx.lineTo(1, -1 - spacing + 2);
-            ctx.moveTo(spacing - 1, spacing * 2 + 1);
-            ctx.lineTo(spacing * 2 + 1, spacing - 1);
-            ctx.stroke();
-            return c;
-        }}
-
-        var _settlementHatch = _createHatchPattern(
-            'rgba(239,68,68,0.22)', 'rgba(200,40,40,0.45)', 10, 1.5
-        );
-        var _zoneHatch = _createHatchPattern(
-            'rgba(180,30,30,0.18)', 'rgba(0,0,0,0.55)', 12, 1.5
-        );
-
-        /* Override L.Canvas to support fillPattern */
-        var _origFillStroke = L.Canvas.prototype._fillStroke;
-        L.Canvas.include({{
-            _fillStroke: function(ctx, layer) {{
-                var opt = layer.options;
-                if (opt.fillPattern) {{
-                    if (opt.fill) {{
-                        ctx.globalAlpha = opt.fillOpacity != null ? opt.fillOpacity : 0.2;
-                        ctx.fillStyle = ctx.createPattern(opt.fillPattern, 'repeat');
-                        ctx.fill(opt.fillRule || 'evenodd');
-                    }}
-                    if (opt.stroke && opt.weight !== 0) {{
-                        if (ctx.setLineDash) {{
-                            ctx.setLineDash(layer.options && layer.options._dashArray || []);
-                        }}
-                        ctx.globalAlpha = opt.opacity != null ? opt.opacity : 1;
-                        ctx.lineWidth = opt.weight;
-                        ctx.strokeStyle = opt.color;
-                        ctx.lineCap = opt.lineCap || 'round';
-                        ctx.lineJoin = opt.lineJoin || 'round';
-                        ctx.stroke();
-                    }}
-                }} else {{
-                    _origFillStroke.call(this, ctx, layer);
-                }}
-            }}
-        }});
 
         map.createPane('restricted');
         map.getPane('restricted').style.zIndex = 260;
@@ -866,7 +905,7 @@ class MapWidget(QWidget):
             if (rp) rp.style.opacity = opacity;
         }}
 
-        /* ── Shared Overlay Tile Mixin ── */
+        /* РІвЂќР‚РІвЂќР‚ Shared Overlay Tile Mixin РІвЂќР‚РІвЂќР‚ */
         var _OverlayTileMixin = {{
             _latLngToTilePixel: function(lat, lng, zoom, tileX, tileY) {{
                 var n = Math.pow(2, zoom);
@@ -891,9 +930,8 @@ class MapWidget(QWidget):
             }}
         }};
 
-        /* ── SettlementGridLayer ── */
+        /* РІвЂќР‚РІвЂќР‚ SettlementGridLayer РІвЂќР‚РІвЂќР‚ */
         var _fallbackRadii = {{city: 5000, town: 2000, village: 700, hamlet: 300}};
-        var _settlementHatchPattern = null;
 
         var SettlementGridLayer = L.GridLayer.extend({{
             options: {{
@@ -908,6 +946,10 @@ class MapWidget(QWidget):
                 this._data = {{}};
                 this._allFeatures = [];
                 this._dirtyFlag = 0;
+                this._bucketSize = 0.2;
+                this._buckets = {{}};
+                this._fidCounter = 1;
+                this._featureSeen = {{}};
             }},
 
             setData: function(key, features) {{
@@ -915,18 +957,69 @@ class MapWidget(QWidget):
                 this._data[key] = features;
                 for (var i = 0; i < features.length; i++) {{
                     var f = features[i];
+                    if (!f._fid) f._fid = this._fidCounter++;
                     if (f.F === 'p') {{
                         var lats = f.c.map(function(c) {{ return c[0]; }});
                         var lons = f.c.map(function(c) {{ return c[1]; }});
                         f._bbox = {{ south: Math.min.apply(null, lats), north: Math.max.apply(null, lats),
                                      west: Math.min.apply(null, lons), east: Math.max.apply(null, lons) }};
+                        var c0 = f.c[0];
+                        var c1 = f.c[f.c.length - 1];
+                        f._sig = 'p:' + f.c.length + ':' + c0[0] + ',' + c0[1] + ':' + c1[0] + ',' + c1[1];
                     }} else {{
                         var r = (_fallbackRadii[f.t] || 700) / 111000;
                         f._bbox = {{ south: f.lat - r, north: f.lat + r, west: f.lon - r, east: f.lon + r }};
+                        f._sig = 'n:' + f.lat + ',' + f.lon + ':' + (f.t || '');
                     }}
+                    if (this._featureSeen[f._sig]) {{
+                        continue;
+                    }}
+                    this._featureSeen[f._sig] = 1;
                     this._allFeatures.push(f);
+                    this._indexFeature(f);
                 }}
                 this._scheduleRedraw();
+            }},
+
+            _indexFeature: function(f) {{
+                var keys = this._bucketKeys(f._bbox);
+                for (var i = 0; i < keys.length; i++) {{
+                    var k = keys[i];
+                    if (!this._buckets[k]) this._buckets[k] = [];
+                    this._buckets[k].push(f);
+                }}
+            }},
+
+            _bucketKeys: function(bbox) {{
+                var bs = this._bucketSize;
+                var s0 = Math.floor(bbox.south / bs);
+                var s1 = Math.floor(bbox.north / bs);
+                var w0 = Math.floor(bbox.west / bs);
+                var w1 = Math.floor(bbox.east / bs);
+                var out = [];
+                for (var si = s0; si <= s1; si++) {{
+                    for (var wi = w0; wi <= w1; wi++) {{
+                        out.push(si + ':' + wi);
+                    }}
+                }}
+                return out;
+            }},
+
+            _featuresForBounds: function(tb) {{
+                var keys = this._bucketKeys(tb);
+                var seen = {{}};
+                var out = [];
+                for (var i = 0; i < keys.length; i++) {{
+                    var arr = this._buckets[keys[i]];
+                    if (!arr) continue;
+                    for (var j = 0; j < arr.length; j++) {{
+                        var f = arr[j];
+                        if (seen[f._fid]) continue;
+                        seen[f._fid] = 1;
+                        out.push(f);
+                    }}
+                }}
+                return out;
             }},
 
             _scheduleRedraw: function() {{
@@ -949,10 +1042,10 @@ class MapWidget(QWidget):
             }},
 
             _drawTile: function(canvas, coords) {{
+                if (_mapInteracting) return canvas;
                 var ctx = canvas.getContext('2d');
                 var tb = _OverlayTileMixin._tileBounds(coords);
-                var features = this._allFeatures;
-                var drawn = false;
+                var features = this._featuresForBounds(tb);
 
                 for (var i = 0; i < features.length; i++) {{
                     var f = features[i];
@@ -973,23 +1066,13 @@ class MapWidget(QWidget):
                         ctx.arc(cp[0], cp[1], rPx, 0, Math.PI * 2);
                     }}
 
-                    /* hatch fill — aligned across tiles */
-                    if (!_settlementHatchPattern) {{
-                        _settlementHatchPattern = ctx.createPattern(_settlementHatch, 'repeat');
-                    }}
-                    ctx.save();
-                    var originPx = _OverlayTileMixin._latLngToTilePixel(0, 0, coords.z, 0, 0);
-                    ctx.translate(-(coords.x * 256 % 10), -(coords.y * 256 % 10));
-                    ctx.fillStyle = _settlementHatchPattern;
+                    ctx.fillStyle = 'rgba(239,68,68,0.16)';
                     ctx.fill('evenodd');
-                    ctx.restore();
 
                     /* stroke */
-                    ctx.strokeStyle = 'rgba(239,68,68,0.75)';
-                    ctx.lineWidth = 2;
+                    ctx.strokeStyle = 'rgba(239,68,68,0.9)';
+                    ctx.lineWidth = 1.6;
                     ctx.stroke();
-
-                    drawn = true;
                 }}
             }}
         }});
@@ -1011,6 +1094,9 @@ class MapWidget(QWidget):
                 case 'waypoints':
                     showWaypoints = document.getElementById('chkWaypoints').checked;
                     waypointMarkers.forEach(function(m) {{
+                        showWaypoints ? map.addLayer(m) : map.removeLayer(m);
+                    }});
+                    waypointIndexMarkers.forEach(function(m) {{
                         showWaypoints ? map.addLayer(m) : map.removeLayer(m);
                     }});
                     routeLines.forEach(function(l) {{
@@ -1048,9 +1134,7 @@ class MapWidget(QWidget):
             }}
         }}
 
-        /* ── Restricted Zones — GridLayer + Hit Layer ── */
-
-        var _zoneHatchPattern = null;
+        /* РІвЂќР‚РІвЂќР‚ Restricted Zones РІР‚вЂќ GridLayer + Hit Layer РІвЂќР‚РІвЂќР‚ */
 
         var RestrictedGridLayer = L.GridLayer.extend({{
             options: {{
@@ -1076,6 +1160,7 @@ class MapWidget(QWidget):
             }},
 
             _drawTile: function(canvas, coords) {{
+                if (_mapInteracting) return canvas;
                 var ctx = canvas.getContext('2d');
                 var tb = _OverlayTileMixin._tileBounds(coords);
 
@@ -1085,11 +1170,7 @@ class MapWidget(QWidget):
                     if (!z.points || z.points.length < 3) continue;
 
                     /* bbox pre-filter */
-                    var lats = z.points.map(function(p) {{ return p[0]; }});
-                    var lons = z.points.map(function(p) {{ return p[1]; }});
-                    var zb = {{ south: Math.min.apply(null, lats), north: Math.max.apply(null, lats),
-                               west: Math.min.apply(null, lons), east: Math.max.apply(null, lons) }};
-                    if (!_OverlayTileMixin._boundsOverlap(zb, tb)) continue;
+                    if (!_OverlayTileMixin._boundsOverlap(z.bbox, tb)) continue;
 
                     ctx.beginPath();
                     for (var j = 0; j < z.points.length; j++) {{
@@ -1099,23 +1180,15 @@ class MapWidget(QWidget):
                     }}
                     ctx.closePath();
 
-                    /* hatch fill — aligned across tiles */
-                    if (!_zoneHatchPattern) {{
-                        _zoneHatchPattern = ctx.createPattern(_zoneHatch, 'repeat');
-                    }}
-                    ctx.save();
-                    ctx.translate(-(coords.x * 256 % 12), -(coords.y * 256 % 12));
-                    ctx.fillStyle = _zoneHatchPattern;
+                    ctx.fillStyle = 'rgba(220,38,38,0.30)';
                     ctx.fill('evenodd');
-                    ctx.restore();
 
                     /* dashed stroke */
                     var isHighlighted = (this._highlightId === zoneId);
-                    ctx.strokeStyle = 'rgba(100,0,0,0.9)';
-                    ctx.lineWidth = isHighlighted ? 4 : 2.5;
-                    ctx.setLineDash([10, 6]);
-                    ctx.stroke();
+                    ctx.strokeStyle = 'rgba(120,0,0,0.95)';
+                    ctx.lineWidth = isHighlighted ? 3.2 : 2.1;
                     ctx.setLineDash([]);
+                    ctx.stroke();
                 }}
             }},
 
@@ -1131,6 +1204,18 @@ class MapWidget(QWidget):
 
         var restrictedGridLayer = new RestrictedGridLayer();
         var restrictedHitLayer = L.layerGroup();
+
+        function _computePointsBBox(points) {{
+            var minLat = Infinity, minLon = Infinity, maxLat = -Infinity, maxLon = -Infinity;
+            for (var i = 0; i < points.length; i++) {{
+                var p = points[i];
+                if (p[0] < minLat) minLat = p[0];
+                if (p[0] > maxLat) maxLat = p[0];
+                if (p[1] < minLon) minLon = p[1];
+                if (p[1] > maxLon) maxLon = p[1];
+            }}
+            return {{ south: minLat, north: maxLat, west: minLon, east: maxLon }};
+        }}
 
         function _createHitPolygon(zoneId, points, name) {{
             var hitPoly = L.polygon(points, {{
@@ -1161,7 +1246,12 @@ class MapWidget(QWidget):
         function addRestrictedZone(zoneId, points, name) {{
             if (restrictedZones[zoneId]) removeRestrictedZone(zoneId);
             var hitPoly = _createHitPolygon(zoneId, points, name);
-            restrictedZones[zoneId] = {{ points: points, name: name, hitPoly: hitPoly }};
+            restrictedZones[zoneId] = {{
+                points: points,
+                bbox: _computePointsBBox(points),
+                name: name,
+                hitPoly: hitPoly
+            }};
             restrictedGridLayer._scheduleRedraw();
         }}
 
@@ -1178,6 +1268,7 @@ class MapWidget(QWidget):
             var z = restrictedZones[zoneId];
             if (!z) return;
             z.points = points;
+            z.bbox = _computePointsBBox(points);
             if (z.hitPoly) z.hitPoly.setLatLngs(points);
             restrictedGridLayer._scheduleRedraw();
         }}
@@ -1203,7 +1294,7 @@ class MapWidget(QWidget):
             }}
         }}
 
-        /* ── Drawing Mode ── */
+        /* РІвЂќР‚РІвЂќР‚ Drawing Mode РІвЂќР‚РІвЂќР‚ */
 
         function startDrawing() {{
             if (drawingMode) return;
@@ -1224,7 +1315,7 @@ class MapWidget(QWidget):
         }}
 
         function _addDrawingVertex(latlng) {{
-            // If 3+ points and click is near the first vertex — finish
+            // If 3+ points and click is near the first vertex РІР‚вЂќ finish
             if (drawingPoints.length >= 3 && drawingMarkers.length > 0) {{
                 var firstPx = map.latLngToContainerPoint(drawingMarkers[0].getLatLng());
                 var clickPx = map.latLngToContainerPoint(latlng);
@@ -1274,7 +1365,7 @@ class MapWidget(QWidget):
             if (drawingMouseLine) {{ map.removeLayer(drawingMouseLine); drawingMouseLine = null; }}
         }}
 
-        /* ── Zone Vertex Editing ── */
+        /* РІвЂќР‚РІвЂќР‚ Zone Vertex Editing РІвЂќР‚РІвЂќР‚ */
 
         var _editTempPolygon = null;
 
@@ -1296,11 +1387,11 @@ class MapWidget(QWidget):
             restrictedGridLayer._editingZoneId = zoneId;
             restrictedGridLayer._scheduleRedraw();
             _editTempPolygon = L.polygon(z.points, {{
-                fillPattern: _zoneHatch,
+                fillColor: 'rgba(220,38,38,0.30)',
                 fillOpacity: 1,
                 color: 'rgba(100,0,0,0.9)',
                 weight: 2.5,
-                dashArray: '6,4',
+                dashArray: null,
                 fill: true,
                 interactive: false
             }}).addTo(map);
@@ -1444,7 +1535,7 @@ class MapWidget(QWidget):
             }}
         }}
 
-        /* ── Drawing event integration ── */
+        /* РІвЂќР‚РІвЂќР‚ Drawing event integration РІвЂќР‚РІвЂќР‚ */
 
         document.addEventListener('keydown', function(e) {{
             if (e.key === 'Escape' && drawingMode) cancelDrawing();
@@ -1454,19 +1545,82 @@ class MapWidget(QWidget):
             }}
         }});
 
-        function createAircraftIcon(heading) {{
-            return L.divIcon({{
-                html: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" style="transform: rotate(${{heading}}deg); filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));">
-                    <path d="M16 2 L14 12 L4 14 L4 18 L14 16 L14 26 L10 28 L10 30 L16 28 L22 30 L22 28 L18 26 L18 16 L28 18 L28 14 L18 12 Z"
-                          fill="{Colors.SUCCESS}" stroke="#fff" stroke-width="0.5" opacity="0.95"/>
-                </svg>`,
-                className: 'aircraft-icon',
-                iconSize: [32, 32],
-                iconAnchor: [16, 16]
-            }});
+        function _headingEndpoint(lat, lon, headingDeg, meters) {{
+            var r = headingDeg * Math.PI / 180;
+            var dLat = (meters * Math.cos(r)) / 111320;
+            var dLon = (meters * Math.sin(r)) / (111320 * Math.cos(lat * Math.PI / 180));
+            return [lat + dLat, lon + dLon];
         }}
 
-        /* ── rAF-batched aircraft update ── */
+        function _aircraftShape(lat, lon, headingDeg, sizeMeters) {{
+            var h = headingDeg * Math.PI / 180;
+            var c = Math.cos(h), s = Math.sin(h);
+            var kLon = 1 / (111320 * Math.cos(lat * Math.PI / 180));
+            function pt(fwd, right) {{
+                var north = fwd * c - right * s;
+                var east = fwd * s + right * c;
+                return [lat + north / 111320, lon + east * kLon];
+            }}
+            var u = sizeMeters;
+            return [
+                pt( 1.20 * u,  0.00 * u),  // nose
+                pt( 0.20 * u, -0.18 * u),  // left root
+                pt(-0.05 * u, -0.82 * u),  // left wing tip
+                pt(-0.24 * u, -0.20 * u),  // left rear root
+                pt(-0.95 * u, -0.12 * u),  // tail left
+                pt(-0.95 * u,  0.12 * u),  // tail right
+                pt(-0.24 * u,  0.20 * u),  // right rear root
+                pt(-0.05 * u,  0.82 * u),  // right wing tip
+                pt( 0.20 * u,  0.18 * u)   // right root
+            ];
+        }}
+
+        function _aircraftIconHtml() {{
+            // Bootstrap Icons airplane-fill (MIT): https://icons.getbootstrap.com/icons/airplane-fill/
+            return `<div class="aircraft-icon-wrap">
+                <svg class="aircraft-icon-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M6.428 1.151C6.708.591 7.213 0 8 0s1.292.592 1.572 1.151C9.861 1.73 10 2.431 10 3v3.691l5.17 2.585a1.5 1.5 0 0 1 .83 1.342V12a.5.5 0 0 1-.582.493l-5.507-.918-.375 2.253 1.318 1.318A.5.5 0 0 1 10.5 16h-5a.5.5 0 0 1-.354-.854l1.319-1.318-.376-2.253-5.507.918A.5.5 0 0 1 0 12v-1.382a1.5 1.5 0 0 1 .83-1.342L6 6.691V3c0-.568.14-1.271.428-1.849" fill="#39FF14" stroke="#F3FFF3" stroke-width="0.55"/>
+                </svg>
+            </div>`;
+        }}
+
+        function _setAircraftHeading(headingDeg) {{
+            if (!aircraftBody) return;
+            var el = aircraftBody.getElement();
+            if (!el) return;
+            var wrap = el.querySelector('.aircraft-icon-wrap');
+            if (wrap) wrap.style.transform = 'rotate(' + headingDeg.toFixed(1) + 'deg)';
+        }}
+
+        function _ensureAircraftLayers(lat, lon) {{
+            if (!aircraftHalo) {{
+                aircraftHalo = L.circleMarker([lat, lon], {{
+                    renderer: _aircraftRenderer,
+                    radius: 7,
+                    color: '#E6FFE8',
+                    weight: 1.5,
+                    opacity: 1,
+                    fillColor: '#63FF4A',
+                    fillOpacity: 0.34,
+                    interactive: false
+                }}).addTo(map);
+            }}
+            if (!aircraftBody) {{
+                aircraftBody = L.marker([lat, lon], {{
+                    icon: L.divIcon({{
+                        className: 'aircraft-icon',
+                        html: _aircraftIconHtml(),
+                        iconSize: [30, 30],
+                        iconAnchor: [15, 15]
+                    }}),
+                    interactive: false,
+                    keyboard: false
+                }}).addTo(map);
+                _setAircraftHeading(lastHeading);
+            }}
+        }}
+
+        /* РІвЂќР‚РІвЂќР‚ rAF-batched aircraft update РІвЂќР‚РІвЂќР‚ */
         var _pendingAircraft = null;
         var _rafScheduled = false;
 
@@ -1479,6 +1633,7 @@ class MapWidget(QWidget):
         }}
 
         function _flushAircraftUpdate() {{
+            var _t0 = performance.now();
             _rafScheduled = false;
             if (!_pendingAircraft) return;
             var lat = _pendingAircraft[0];
@@ -1488,42 +1643,44 @@ class MapWidget(QWidget):
 
             lastAircraftPos = [lat, lon];
 
-            /* aircraft marker — lightweight div/CSS update */
-            if (!aircraftMarker) {{
-                aircraftMarker = L.marker([lat, lon], {{
-                    icon: createAircraftIcon(heading),
-                    zIndexOffset: 1000
-                }}).addTo(map);
-            }} else {{
-                aircraftMarker.setLatLng([lat, lon]);
-                if (Math.abs(heading - lastHeading) > 5) {{
-                    aircraftMarker.setIcon(createAircraftIcon(heading));
-                    lastHeading = heading;
-                }}
+            _ensureAircraftLayers(lat, lon);
+            aircraftHalo.setLatLng([lat, lon]);
+            if (Math.abs(heading - lastHeading) > 1) {{
+                lastHeading = heading;
             }}
+            aircraftBody.setLatLng([lat, lon]);
+            _setAircraftHeading(lastHeading);
 
-            /* track — throttle to every 3rd frame (~3Hz) */
+            /* track РІР‚вЂќ accumulate always, render only when map is idle */
             trackPoints.push([lat, lon]);
-            if (trackPoints.length > 1000) trackPoints.shift();
-            _trackUpdateCounter++;
-            if (_trackUpdateCounter >= 3) {{
-                _trackUpdateCounter = 0;
-                trackLine.setLatLngs(trackPoints);
-            }}
-
-            /* active waypoint line — throttle to every 5th frame (~2Hz) */
-            _wpLineCounter++;
-            if (_wpLineCounter >= 5) {{
-                _wpLineCounter = 0;
-                if (waypointData.length > activeWaypointIdx) {{
-                    var wp = waypointData[activeWaypointIdx];
-                    activeWaypointLine.setLatLngs([[lat, lon], [wp.lat, wp.lon]]);
-                }} else {{
-                    activeWaypointLine.setLatLngs([]);
+            if (trackPoints.length > 1200) trackPoints.splice(0, 200);
+            if (_mapInteracting) {{
+                _trackDirty = true;
+            }} else {{
+                _trackUpdateCounter++;
+                if (_trackUpdateCounter >= 10) {{
+                    _trackUpdateCounter = 0;
+                    trackLine.setLatLngs(trackPoints);
                 }}
             }}
 
-            if (followAircraft) {{
+            /* active waypoint line РІР‚вЂќ skip during map interaction */
+            if (_mapInteracting) {{
+                if (waypointData.length > activeWaypointIdx) _wpLineDirty = true;
+            }} else {{
+                _wpLineCounter++;
+                if (_wpLineCounter >= 10) {{
+                    _wpLineCounter = 0;
+                    if (waypointData.length > activeWaypointIdx) {{
+                        var wp = waypointData[activeWaypointIdx];
+                        activeWaypointLine.setLatLngs([[lat, lon], [wp.lat, wp.lon]]);
+                    }} else {{
+                        activeWaypointLine.setLatLngs([]);
+                    }}
+                }}
+            }}
+
+            if (followAircraft && !_mapInteracting) {{
                 var center = map.getCenter();
                 var centerPx = map.latLngToContainerPoint(center);
                 var posPx = map.latLngToContainerPoint([lat, lon]);
@@ -1533,6 +1690,10 @@ class MapWidget(QWidget):
                     map.panTo([lat, lon], {{animate: false}});
                 }}
             }}
+
+            var _dt = performance.now() - _t0;
+            _perfUpdateMs = _dt;
+            if (_dt > 8) _perfSlowFrames++;
         }}
 
         function setFollowMode(enabled) {{
@@ -1541,9 +1702,10 @@ class MapWidget(QWidget):
 
         function setAircraftPosition(lat, lon) {{
             lastAircraftPos = [lat, lon];
-            if (aircraftMarker) {{
-                aircraftMarker.setLatLng([lat, lon]);
-            }}
+            _ensureAircraftLayers(lat, lon);
+            aircraftHalo.setLatLng([lat, lon]);
+            aircraftBody.setLatLng([lat, lon]);
+            _setAircraftHeading(lastHeading);
             trackPoints = [[lat, lon]];
             trackLine.setLatLngs(trackPoints);
             activeWaypointLine.setLatLngs([]);
@@ -1558,9 +1720,9 @@ class MapWidget(QWidget):
         function formatTooltip(wp, index, isActive) {{
             var actionShort = {{
                 'FLYTHROUGH': '',
-                'ORBIT_TURNS': 'Круж. ' + wp.orbit_turns + 'x',
-                'ORBIT_INFINITE': 'Круж. ∞',
-                'ALTITUDE': '↕ Высота'
+                'ORBIT_TURNS': 'Круг ' + wp.orbit_turns + 'x',
+                'ORBIT_INFINITE': 'Круг ∞',
+                'ALTITUDE': 'Высота'
             }};
 
             var lines = [];
@@ -1572,55 +1734,78 @@ class MapWidget(QWidget):
             }}
 
             if (wp.climb_enroute) {{
-                lines.push('↗ набор');
+                lines.push('Набор');
             }}
 
             return lines.join('<br>');
         }}
 
-        function createWaypointIcon(number, isPast, isActive) {{
-            var size = isActive ? 32 : 28;
-            var fillColor, strokeColor, textColor;
+        function _waypointVisual(index) {{
+            // Keep an invisible-but-clickable canvas marker as a hit target.
+            return {{ radius: 9, color: '#000000', weight: 0, opacity: 0, fillColor: '#000000', fillOpacity: 0 }};
+        }}
 
+        function _waypointIconVisual(index) {{
+            var isPast = index < activeWaypointIdx;
+            var isActive = index === activeWaypointIdx;
             if (isPast) {{
-                fillColor = '{Colors.TEXT_TERTIARY}';
-                strokeColor = '#4b5563';
-                textColor = '{Colors.TEXT_SECONDARY}';
-            }} else if (isActive) {{
-                fillColor = '{Colors.SUCCESS}';
-                strokeColor = '#059669';
-                textColor = '#ffffff';
-            }} else {{
-                fillColor = '{Colors.WARNING}';
-                strokeColor = '#d97706';
-                textColor = '#ffffff';
+                return {{ fill: '#6B7280', stroke: '#D1D5DB' }};
             }}
+            if (isActive) {{
+                return {{ fill: '#39FF14', stroke: '#F3FFF3' }};
+            }}
+            return {{ fill: '#7CFF61', stroke: '#E6FFE8' }};
+        }}
 
-            var glowFilter = isActive ? '<filter id="glow"><feGaussianBlur stdDeviation="2" result="coloredBlur"/><feMerge><feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>' : '';
-            var glowAttr = isActive ? 'filter="url(#glow)"' : '';
+        function _waypointIconHtml(index) {{
+            var v = _waypointIconVisual(index);
+            var num = String(index + 1);
+            // Bootstrap Icons geo-alt-fill (MIT): https://icons.getbootstrap.com/icons/geo-alt-fill/
+            return `<span class="wp-icon-wrap">
+                <svg class="wp-icon-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M8 16s6-5.686 6-10A6 6 0 0 0 2 6c0 4.314 6 10 6 10m0-7a3 3 0 1 1 0-6 3 3 0 0 1 0 6" fill="${{v.fill}}" stroke="${{v.stroke}}" stroke-width="0.65"/>
+                    <text x="8" y="6.15" class="wp-icon-num">${{num}}</text>
+                </svg>
+            </span>`;
+        }}
 
-            var svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 28 36" width="${{size}}" height="${{size * 36/28}}" class="waypoint-pin">
-                <defs>${{glowFilter}}</defs>
-                <g class="pin-body" ${{glowAttr}}>
-                    <path d="M14 0C6.3 0 0 6.3 0 14c0 10.5 14 22 14 22s14-11.5 14-22C28 6.3 21.7 0 14 0z"
-                          fill="${{fillColor}}" stroke="${{strokeColor}}" stroke-width="1.5"/>
-                    <circle cx="14" cy="13" r="9" fill="rgba(255,255,255,0.15)"/>
-                </g>
-                <text x="14" y="17" text-anchor="middle" class="wp-number" fill="${{textColor}}">${{number}}</text>
-            </svg>`;
+        function _updateWaypointIndexIcon(marker, index) {{
+            marker.setIcon(L.divIcon({{
+                className: 'wp-index-icon',
+                html: _waypointIconHtml(index),
+                iconSize: [24, 32],
+                iconAnchor: [12, 32]
+            }}));
+        }}
 
-            return L.divIcon({{
-                html: svg,
-                className: '',
-                iconSize: [size, size * 36/28],
-                iconAnchor: [size/2, size * 36/28],
-                popupAnchor: [0, -size * 36/28]
-            }});
+        function _routeVisual(index) {{
+            var isPast = index < activeWaypointIdx - 1;
+            var isActive = index === activeWaypointIdx - 1;
+            if (isPast) {{
+                return {{ color: '{Colors.TEXT_TERTIARY}', weight: 2, opacity: 0.4, dashArray: null }};
+            }}
+            if (isActive) {{
+                return {{ color: '#66FF45', weight: 3, opacity: 0.95, dashArray: null }};
+            }}
+            return {{ color: '#A3FF89', weight: 2, opacity: 0.8, dashArray: '8, 8' }};
+        }}
+
+        function _applyWaypointStyle(marker, index) {{
+            var s = _waypointVisual(index);
+            marker.setStyle(s);
+            if (index === activeWaypointIdx) marker.bringToFront();
+        }}
+
+        function _applyRouteStyle(line, index) {{
+            line.setStyle(_routeVisual(index));
         }}
 
         function setWaypoints(waypoints, activeIdx) {{
+            var _swT0 = performance.now();
             waypointMarkers.forEach(m => map.removeLayer(m));
             waypointMarkers = [];
+            waypointIndexMarkers.forEach(m => map.removeLayer(m));
+            waypointIndexMarkers = [];
             routeLines.forEach(l => map.removeLayer(l));
             routeLines = [];
 
@@ -1628,71 +1813,69 @@ class MapWidget(QWidget):
             if (activeIdx !== undefined) activeWaypointIdx = activeIdx;
 
             waypoints.forEach((wp, i) => {{
-                var isPast = i < activeWaypointIdx;
-                var isActive = i === activeWaypointIdx;
-
-                var icon = createWaypointIcon(i + 1, isPast, isActive);
-                var marker = L.marker([wp.lat, wp.lon], {{
-                    icon: icon,
-                    zIndexOffset: isActive ? 100 : (isPast ? -100 : 0)
+                var marker = L.circleMarker([wp.lat, wp.lon], {{
+                    renderer: _routeRenderer,
+                    interactive: true
                 }});
+                _applyWaypointStyle(marker, i);
                 if (showWaypoints) marker.addTo(map);
 
-                marker.bindTooltip(formatTooltip(wp, i, isActive), {{
+                marker.bindTooltip(formatTooltip(wp, i, i === activeWaypointIdx), {{
                     permanent: false,
                     direction: 'top',
-                    offset: [0, -32],
+                    offset: [0, -10],
                     className: ''
                 }});
 
                 waypointMarkers.push(marker);
+
+                var idxMarker = L.marker([wp.lat, wp.lon], {{
+                    icon: L.divIcon({{
+                        className: 'wp-index-icon',
+                        html: _waypointIconHtml(i),
+                        iconSize: [24, 32],
+                        iconAnchor: [12, 32]
+                    }}),
+                    interactive: false,
+                    keyboard: false
+                }});
+                if (showWaypoints) idxMarker.addTo(map);
+                waypointIndexMarkers.push(idxMarker);
             }});
 
             for (var i = 0; i < waypoints.length - 1; i++) {{
-                var isPastSegment = i < activeWaypointIdx - 1;
-                var isActiveSegment = i === activeWaypointIdx - 1;
-                var isFutureSegment = i >= activeWaypointIdx;
-
-                var color, weight, opacity, dashArray;
-
-                if (isPastSegment) {{
-                    color = '{Colors.TEXT_TERTIARY}';
-                    weight = 2;
-                    opacity = 0.4;
-                    dashArray = null;
-                }} else if (isActiveSegment) {{
-                    color = '{Colors.PRIMARY_LIGHT}';
-                    weight = 3;
-                    opacity = 0.9;
-                    dashArray = null;
-                }} else {{
-                    color = '{Colors.WARNING}';
-                    weight = 2;
-                    opacity = 0.7;
-                    dashArray = '8, 8';
-                }}
-
                 var line = L.polyline([
                     [waypoints[i].lat, waypoints[i].lon],
                     [waypoints[i + 1].lat, waypoints[i + 1].lon]
                 ], {{
-                    color: color,
-                    weight: weight,
-                    opacity: opacity,
-                    dashArray: dashArray
+                    renderer: _routeRenderer,
+                    interactive: false
                 }});
+                _applyRouteStyle(line, i);
                 if (showWaypoints) line.addTo(map);
                 routeLines.push(line);
             }}
 
             updateActiveWaypointLine();
+            var _swDt = performance.now() - _swT0;
+            if (_swDt > 5) console.warn('[PERF] setWaypoints: ' + _swDt.toFixed(1) + 'ms for ' + waypoints.length + ' wpts');
         }}
 
         function updateActiveWaypoint(idx) {{
+            var prev = activeWaypointIdx;
             activeWaypointIdx = idx;
-            if (waypointData.length > 0) {{
-                setWaypoints(waypointData, idx);
+            if (!waypointData || waypointData.length === 0) return;
+            if (prev === idx) return;
+
+            for (var i = 0; i < waypointMarkers.length; i++) {{
+                _applyWaypointStyle(waypointMarkers[i], i);
+                waypointMarkers[i].setTooltipContent(formatTooltip(waypointData[i], i, i === activeWaypointIdx));
+                _updateWaypointIndexIcon(waypointIndexMarkers[i], i);
             }}
+            for (var j = 0; j < routeLines.length; j++) {{
+                _applyRouteStyle(routeLines[j], j);
+            }}
+            updateActiveWaypointLine();
         }}
 
         function updateActiveWaypointLine() {{
@@ -1726,6 +1909,8 @@ class MapWidget(QWidget):
                     [wp1.lat, wp1.lon],
                     [wp2.lat, wp2.lon]
                 ], {{
+                    renderer: _routeRenderer,
+                    interactive: false,
                     color: '#EF4444',
                     weight: 4,
                     opacity: 0.8,
@@ -1734,16 +1919,17 @@ class MapWidget(QWidget):
                 line.addTo(map);
                 conflictLines.push(line);
 
-                // Warning marker at segment midpoint
+                // Warning marker at segment midpoint (canvas circle)
                 var midLat = (wp1.lat + wp2.lat) / 2;
                 var midLon = (wp1.lon + wp2.lon) / 2;
-                var warningIcon = L.divIcon({{
-                    className: '',
-                    html: '<div style="background:#EF4444;color:#fff;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:bold;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.5);">!</div>',
-                    iconSize: [22, 22],
-                    iconAnchor: [11, 11]
+                var marker = L.circleMarker([midLat, midLon], {{
+                    renderer: _routeRenderer,
+                    radius: 7,
+                    color: '#fff',
+                    weight: 2,
+                    fillColor: '#EF4444',
+                    fillOpacity: 0.95
                 }});
-                var marker = L.marker([midLat, midLon], {{ icon: warningIcon }});
                 if (c.reason) marker.bindTooltip(c.reason, {{ direction: 'top', offset: [0, -14] }});
                 marker.addTo(map);
                 conflictMarkers.push(marker);
@@ -1759,6 +1945,8 @@ class MapWidget(QWidget):
 
             var latlngs = points.map(function(p) {{ return [p.lat, p.lon]; }});
             avoidanceLine = L.polyline(latlngs, {{
+                renderer: _routeRenderer,
+                interactive: false,
                 color: '#F97316',
                 weight: 3,
                 opacity: 0.85,
@@ -1779,20 +1967,33 @@ class MapWidget(QWidget):
         }}
 
         function addWaypoint(lat, lon, index, wpData) {{
-            var icon = createWaypointIcon(index, false, false);
-            var marker = L.marker([lat, lon], {{
-                icon: icon
+            var marker = L.circleMarker([lat, lon], {{
+                renderer: _routeRenderer,
+                interactive: true
             }});
+            _applyWaypointStyle(marker, index - 1);
             if (showWaypoints) marker.addTo(map);
 
             var tooltip = wpData ? formatTooltip(wpData, index - 1, false) : 'Точка ' + index;
             marker.bindTooltip(tooltip, {{
                 permanent: false,
                 direction: 'top',
-                offset: [0, -32]
+                offset: [0, -10]
             }});
 
             waypointMarkers.push(marker);
+            var idxMarker = L.marker([lat, lon], {{
+                icon: L.divIcon({{
+                    className: 'wp-index-icon',
+                    html: _waypointIconHtml(index - 1),
+                    iconSize: [24, 32],
+                    iconAnchor: [12, 32]
+                }}),
+                interactive: false,
+                keyboard: false
+            }});
+            if (showWaypoints) idxMarker.addTo(map);
+            waypointIndexMarkers.push(idxMarker);
 
             if (wpData) {{
                 waypointData.push(wpData);
@@ -1810,7 +2011,7 @@ class MapWidget(QWidget):
                 homeMarker.setLatLng([lat, lon]);
             }} else {{
                 var homeIcon = L.divIcon({{
-                    html: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" style="filter: drop-shadow(0 2px 3px rgba(0,0,0,0.4));">
+                    html: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
                         <path d="M12 3L4 9v12h5v-7h6v7h5V9l-8-6z" fill="{Colors.ERROR}" stroke="#fff" stroke-width="0.8"/>
                     </svg>`,
                     className: 'home-icon',
@@ -1860,6 +2061,7 @@ class MapWidget(QWidget):
             }}
         }});
 
+        var _lastMouseBridgeTs = 0;
         map.on('mousemove', function(e) {{
             if (drawingMode && drawingPoints.length > 0) {{
                 var lastPt = drawingPoints[drawingPoints.length - 1];
@@ -1872,7 +2074,11 @@ class MapWidget(QWidget):
                 }}
             }}
             if (bridge) {{
-                bridge.onMouseMove(e.latlng.lat, e.latlng.lng);
+                var _now = performance.now();
+                if (!_mapInteracting && (_now - _lastMouseBridgeTs) >= 40) {{
+                    _lastMouseBridgeTs = _now;
+                    bridge.onMouseMove(e.latlng.lat, e.latlng.lng);
+                }}
             }}
         }});
 
@@ -1887,6 +2093,16 @@ class MapWidget(QWidget):
 '''
 
     def update_aircraft(self, lat: float, lon: float, heading: float):
+        now = time.monotonic()
+        dt = now - self._last_aircraft_ts
+        dlat = abs(lat - self._last_aircraft_lat)
+        dlon = abs(lon - self._last_aircraft_lon)
+        # Skip IPC if <150ms and position barely moved (~1m)
+        if dt < 0.15 and dlat < 1e-5 and dlon < 1e-5:
+            return
+        self._last_aircraft_ts = now
+        self._last_aircraft_lat = lat
+        self._last_aircraft_lon = lon
         self.web_view.page().runJavaScript(f"updateAircraft({lat}, {lon}, {heading});")
 
     def set_aircraft_position(self, lat: float, lon: float):
@@ -1945,7 +2161,7 @@ class MapWidget(QWidget):
     def clear_route_conflicts(self):
         self.web_view.page().runJavaScript("clearRouteConflicts();")
 
-    # ── Restricted Zones ──
+    # РІвЂќР‚РІвЂќР‚ Restricted Zones РІвЂќР‚РІвЂќР‚
 
     def _on_zone_drawing_finished(self, points_json):
         try:

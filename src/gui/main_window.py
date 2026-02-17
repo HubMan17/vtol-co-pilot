@@ -901,6 +901,9 @@ class MainWindow(QMainWindow):
     # ────────────────────── Display loop ──────────────────────
 
     def _update_display(self):
+        import time as _t
+        _t0 = _t.perf_counter()
+
         # Check for completed GUI avoidance computation (from background thread)
         if self._gui_avoidance_result is not None:
             result, wp1, wp2 = self._gui_avoidance_result
@@ -916,7 +919,9 @@ class MainWindow(QMainWindow):
 
         pos = telemetry.position
         if pos:
+            _t1 = _t.perf_counter()
             self.map_widget.update_aircraft(pos.lat, pos.lon, telemetry.heading)
+            _t2 = _t.perf_counter()
             self.sb_ac_val.setText(f"{pos.lat:.6f} , {pos.lon:.6f}")
 
             ap = self.autopilot.get_status()
@@ -946,6 +951,8 @@ class MainWindow(QMainWindow):
                 total = self.route_planner.get_waypoint_count()
                 self.status_panel.update_navigation(idx + 1, total, dist, eta, xtk)
 
+            _t3 = _t.perf_counter()
+
         self.autopilot.update()
 
         mode = self.autopilot.get_mode()
@@ -954,6 +961,13 @@ class MainWindow(QMainWindow):
             self.status_panel.update_autopilot('MANUAL', status)
         elif mode == AutopilotMode.NAV:
             self.status_panel.update_autopilot('NAV', status)
+
+        _elapsed = (_t.perf_counter() - _t0) * 1000
+        if _elapsed > 10:
+            _js_ms = (_t2 - _t1) * 1000 if pos else 0
+            _nav_ms = (_t3 - _t2) * 1000 if pos else 0
+            logger.warning("[PERF] _update_display: %.1fms (runJS=%.1fms nav=%.1fms)",
+                           _elapsed, _js_ms, _nav_ms)
 
     def closeEvent(self, event):
         self.autopilot.disengage()
