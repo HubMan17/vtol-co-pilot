@@ -131,6 +131,9 @@ class QmlMapWidget(QWidget):
     def set_aircraft_position(self, lat: float, lon: float):
         self._backend.set_aircraft_position(lat, lon)
 
+    def set_track_max_length(self, length: int):
+        self._backend.set_track_max_length(length)
+
     def clear_track(self):
         self._backend.clear_track()
 
@@ -161,6 +164,12 @@ class QmlMapWidget(QWidget):
 
     def set_avoidance_path(self, points: list):
         self._backend.set_avoidance_path(points)
+
+    def set_planned_direct_path(self, points: list):
+        self._backend.set_planned_direct_path(points)
+
+    def set_conflict_points(self, points: list):
+        self._backend.set_conflict_points(points)
 
     def clear_route_conflicts(self):
         self._backend.clear_route_conflicts()

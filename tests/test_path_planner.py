@@ -109,3 +109,31 @@ class TestPlanPath:
         for lat, lon in result:
             assert not point_in_polygon(lat, lon, buffered), \
                 f"Point ({lat:.6f}, {lon:.6f}) is inside buffered obstacle"
+
+    def test_prune_keeps_direct_blockers(self, monkeypatch):
+        """Pruning must keep at least one obstacle that blocks direct segment."""
+        import src.navigation.path_planner as pp
+        from src.navigation.calculations import segment_intersects_polygon
+
+        monkeypatch.setattr(pp, "_MAX_OBSTACLE_VERTICES", 20)
+        planner = _make_planner()
+
+        # 10 small optional obstacles near midpoint, but away from the direct line.
+        optional = []
+        for i in range(10):
+            lat = 55.60 + i * 0.001
+            optional.append([
+                [lat, 37.20],
+                [lat, 37.205],
+                [lat + 0.001, 37.205],
+                [lat + 0.001, 37.20],
+            ])
+
+        # One blocking obstacle crossing direct segment y=55.5 from lon 37.0 to 38.0.
+        blocker = [[55.49, 37.45], [55.49, 37.55], [55.51, 37.55], [55.51, 37.45]]
+        obstacles = optional + [blocker]
+
+        pruned = planner._prune_obstacles(obstacles, 55.5, 37.0, 55.5, 38.0)
+        assert any(
+            segment_intersects_polygon(55.5, 37.0, 55.5, 38.0, poly) for poly in pruned
+        ), "Direct-blocking obstacle was dropped by pruning"

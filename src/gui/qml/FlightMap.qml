@@ -1,6 +1,7 @@
 import QtQuick 2.15
 import QtLocation 5.15
 import QtPositioning 5.15
+import QtQuick.Controls 2.15
 
 Item {
     id: root
@@ -368,6 +369,85 @@ Item {
                     QtPositioning.coordinate(model.fromLat, model.fromLon),
                     QtPositioning.coordinate(model.toLat, model.toLon)
                 ]
+            }
+        }
+
+        // ── Planned direct path (start -> target, intersects obstacle) ──
+        MapPolyline {
+            id: plannedDirectLine
+            visible: backend ? backend.plannedDirectPath.length > 0 : false
+            line.width: 4
+            line.color: "#FDE047"
+            opacity: 0.95
+            path: backend ? backend.plannedDirectPath : []
+        }
+
+        // ── Conflict points with reason tooltip ──
+        MapItemView {
+            model: backend ? backend.conflictPointModel : null
+            delegate: MapQuickItem {
+                coordinate: QtPositioning.coordinate(model.lat, model.lon)
+                anchorPoint.x: 12
+                anchorPoint.y: 12
+                zoomLevel: 0
+
+                sourceItem: Item {
+                    id: warningRoot
+                    width: 24
+                    height: 24
+
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: 12
+                        color: "#FEE2E2"
+                        border.width: 2
+                        border.color: "#EF4444"
+                    }
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "!"
+                        color: "#B91C1C"
+                        font.pixelSize: 15
+                        font.bold: true
+                    }
+
+                    MouseArea {
+                        id: warningHoverAreaLegacy
+                        anchors.fill: parent
+                        acceptedButtons: Qt.NoButton
+                        hoverEnabled: true
+                    }
+
+                    HoverHandler {
+                        id: warningHover
+                    }
+
+                    Rectangle {
+                        visible: warningHover.hovered || warningHoverAreaLegacy.containsMouse
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.bottom: parent.top
+                        anchors.bottomMargin: 8
+                        radius: 6
+                        color: "#DD111827"
+                        border.width: 1
+                        border.color: "#334155"
+                        z: 2000
+                        width: Math.min(320, tipText.implicitWidth + 14)
+                        height: tipText.implicitHeight + 10
+
+                        Text {
+                            id: tipText
+                            anchors.centerIn: parent
+                            width: parent.width - 10
+                            text: model.reason
+                            color: "#F8FAFC"
+                            font.pixelSize: 11
+                            wrapMode: Text.Wrap
+                            horizontalAlignment: Text.AlignHCenter
+                        }
+                    }
+                }
             }
         }
 

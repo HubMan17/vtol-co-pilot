@@ -50,6 +50,7 @@ class NavigationConfig:
 class GUIConfig:
     map_center: tuple = (55.751, 37.618)
     map_zoom: int = 10
+    track_length: int = 9999  # макс. кол-во точек трека (как NUM_tracklength в MP)
 
 
 @dataclass
@@ -87,7 +88,10 @@ def load_config(path: Path = None) -> AppConfig:
         nav_data.pop('drift_coefficient', None)  # removed field — ignore from old configs
         config.navigation = NavigationConfig(**nav_data)
     if "gui" in data:
-        config.gui = GUIConfig(**data["gui"])
+        gui_data = data["gui"].copy()
+        if "map_center" in gui_data:
+            gui_data["map_center"] = tuple(gui_data["map_center"])
+        config.gui = GUIConfig(**gui_data)
     if "zone_avoidance" in data:
         config.zone_avoidance = ZoneAvoidanceConfig(**data["zone_avoidance"])
 
@@ -129,6 +133,7 @@ def save_config(config: AppConfig, path: Path = None):
         "gui": {
             "map_center": list(config.gui.map_center),
             "map_zoom": config.gui.map_zoom,
+            "track_length": config.gui.track_length,
         },
         "zone_avoidance": {
             "settlement_mode": config.zone_avoidance.settlement_mode,

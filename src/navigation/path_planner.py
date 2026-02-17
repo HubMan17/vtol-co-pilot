@@ -77,13 +77,22 @@ class PathPlanner:
     def _prune_obstacles(self, obstacles: List[List[List[float]]],
                          start_lat: float, start_lon: float,
                          end_lat: float, end_lon: float) -> List[List[List[float]]]:
-        """Keep only the closest obstacles that fit within the vertex budget."""
+        """Keep blockers first, then closest obstacles, within vertex budget."""
         mid_lat = (start_lat + end_lat) / 2
         mid_lon = (start_lon + end_lon) / 2
 
-        # Sort by distance from path midpoint
-        scored = []
+        # Obstacles that intersect the direct segment are mandatory.
+        blocking = []
+        non_blocking = []
         for poly in obstacles:
+            if segment_intersects_polygon(start_lat, start_lon, end_lat, end_lon, poly):
+                blocking.append(poly)
+            else:
+                non_blocking.append(poly)
+
+        # Sort optional obstacles by distance from path midpoint.
+        scored = []
+        for poly in non_blocking:
             cx = sum(v[0] for v in poly) / len(poly)
             cy = sum(v[1] for v in poly) / len(poly)
             d = haversine_distance(mid_lat, mid_lon, cx, cy)
@@ -92,6 +101,11 @@ class PathPlanner:
 
         result = []
         vert_count = 0
+        for poly in blocking:
+            if vert_count + len(poly) > _MAX_OBSTACLE_VERTICES and result:
+                break
+            result.append(poly)
+            vert_count += len(poly)
         for _, poly in scored:
             if vert_count + len(poly) > _MAX_OBSTACLE_VERTICES:
                 break

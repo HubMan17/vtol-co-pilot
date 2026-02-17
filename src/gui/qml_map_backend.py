@@ -208,6 +208,12 @@ class ZoneListModel(QAbstractListModel):
                 self.dataChanged.emit(idx, idx, [self.ZoneCoordsRole])
                 return
 
+    def clear(self):
+        if self._items:
+            self.beginResetModel()
+            self._items = []
+            self.endResetModel()
+
 
 class ZoneBorderModel(QAbstractListModel):
     """Dashed border segments for restricted zones.
@@ -532,6 +538,69 @@ class ConflictSegmentModel(QAbstractListModel):
             self.endResetModel()
 
 
+class ConflictPointModel(QAbstractListModel):
+    """Warning points for route conflicts."""
+    LatRole = Qt.UserRole + 1
+    LonRole = Qt.UserRole + 2
+    ReasonRole = Qt.UserRole + 3
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._items = []
+
+    def roleNames(self):
+        return {
+            self.LatRole: b'lat',
+            self.LonRole: b'lon',
+            self.ReasonRole: b'reason',
+        }
+
+    def rowCount(self, parent=QModelIndex()):
+        return len(self._items)
+
+    def data(self, index, role=Qt.DisplayRole):
+        if not index.isValid() or index.row() >= len(self._items):
+            return QVariant()
+        item = self._items[index.row()]
+        if role == self.LatRole:
+            return item['lat']
+        if role == self.LonRole:
+            return item['lon']
+        if role == self.ReasonRole:
+            return item['reason']
+        return QVariant()
+
+    def set_conflicts(self, conflicts: list, waypoints: list):
+        self.beginResetModel()
+        self._items = []
+        for c in conflicts:
+            fi = c.get('from_idx', -1)
+            ti = c.get('to_idx', -1)
+            if fi < 0 or ti < 0:
+                continue
+            if fi >= len(waypoints) or ti >= len(waypoints):
+                continue
+            wp1 = waypoints[fi]
+            wp2 = waypoints[ti]
+            self._items.append({
+                'lat': (wp1['lat'] + wp2['lat']) / 2.0,
+                'lon': (wp1['lon'] + wp2['lon']) / 2.0,
+                'reason': c.get('reason', 'Конфликт маршрута'),
+            })
+        self.endResetModel()
+
+    def set_points(self, points: list):
+        self.beginResetModel()
+        self._items = list(points)
+        self.endResetModel()
+
+    def clear(self):
+        if self._items:
+            self.beginResetModel()
+            self._items = []
+            self.endResetModel()
+
+
 class SimpleVertexModel(QAbstractListModel):
     """Vertex model for drawing / editing overlays."""
     LatRole = Qt.UserRole + 1
@@ -637,6 +706,7 @@ class QmlMapBackend(QObject):
     drawingPathChanged = pyqtSignal()
     leftClickModeChanged = pyqtSignal()
     avoidancePathChanged = pyqtSignal()
+    plannedDirectPathChanged = pyqtSignal()
 
     # ── Signals: QML → Python communication ──
     mapClicked = pyqtSignal(float, float)
@@ -667,6 +737,7 @@ class QmlMapBackend(QObject):
         self._trackPoints = []  # raw [lat,lon] list for decimation
         self._lastTrackLat = 0.0
         self._lastTrackLon = 0.0
+        self._track_max_length = 9999  # настраивается через set_track_max_length
 
         # Active waypoint
         self._activeWpPosition = QGeoCoordinate()
@@ -702,6 +773,7 @@ class QmlMapBackend(QObject):
 
         # Avoidance path
         self._avoidancePath = []
+        self._plannedDirectPath = []
 
         # Editing mode
         self._editingZoneId = ""
@@ -714,6 +786,7 @@ class QmlMapBackend(QObject):
         self._settlementPolyModel = SettlementPolyModel(self)
         self._settlementCircleModel = SettlementCircleModel(self)
         self._conflictModel = ConflictSegmentModel(self)
+        self._conflictPointModel = ConflictPointModel(self)
         self._settlementBorderModel = SettlementBorderModel(self)
         self._drawingVertexModel = SimpleVertexModel(self)
         self._editingVertexModel = SimpleVertexModel(self)
@@ -867,6 +940,10 @@ class QmlMapBackend(QObject):
         return self._conflictModel
 
     @pyqtProperty(QObject, constant=True)
+    def conflictPointModel(self):
+        return self._conflictPointModel
+
+    @pyqtProperty(QObject, constant=True)
     def drawingVertexModel(self):
         return self._drawingVertexModel
 
@@ -881,6 +958,10 @@ class QmlMapBackend(QObject):
     @pyqtProperty('QVariantList', notify=avoidancePathChanged)
     def avoidancePath(self):
         return self._avoidancePath
+
+    @pyqtProperty('QVariantList', notify=plannedDirectPathChanged)
+    def plannedDirectPath(self):
+        return self._plannedDirectPath
 
     # ════════════════════ Python API (called by QmlMapWidget) ════════════════════
 
@@ -901,9 +982,11 @@ class QmlMapBackend(QObject):
                 self._lastTrackLon = lon
                 self._trackPoints.append([lat, lon])
                 self._trackPath.append(QGeoCoordinate(lat, lon))
-                if len(self._trackPoints) > 1200:
-                    self._trackPoints = self._trackPoints[200:]
-                    self._trackPath = self._trackPath[200:]
+                max_len = self._track_max_length
+                if len(self._trackPoints) > max_len:
+                    trim = max(max_len // 10, 50)  # удаляем 10% за раз
+                    self._trackPoints = self._trackPoints[trim:]
+                    self._trackPath = self._trackPath[trim:]
                     self.trackPathChanged.emit()  # full rebuild after trim
                 else:
                     self.trackCoordinateAdded.emit(lat, lon)  # incremental
@@ -923,6 +1006,9 @@ class QmlMapBackend(QObject):
         if not self._aircraftVisible:
             self._aircraftVisible = True
             self.aircraftVisibleChanged.emit()
+
+    def set_track_max_length(self, length: int):
+        self._track_max_length = max(100, length)
 
     def clear_track(self):
         self._trackPoints.clear()
@@ -1005,6 +1091,7 @@ class QmlMapBackend(QObject):
         self._zoneBorderModel.rebuild(self._zoneModel._items)
 
     def load_all_zones(self, zones: list):
+        self._zoneModel.clear()
         for z in zones:
             self._zoneModel.add_zone(z['id'], z['points'], z.get('name', ''))
         self._zoneBorderModel.rebuild(self._zoneModel._items)
@@ -1025,15 +1112,25 @@ class QmlMapBackend(QObject):
 
     def set_route_conflicts(self, conflicts: list):
         self._conflictModel.set_conflicts(conflicts, self._currentWaypoints)
+        self._conflictPointModel.set_conflicts(conflicts, self._currentWaypoints)
 
     def clear_route_conflicts(self):
         self._conflictModel.clear()
+        self._conflictPointModel.clear()
+        self.set_planned_direct_path([])
         self.set_avoidance_path([])
 
     def set_avoidance_path(self, points: list):
         self._avoidancePath = [QGeoCoordinate(p['lat'], p['lon']) for p in points]
         # Manual notify since we can't use proper notify on avoidancePath
         self.avoidancePathChanged.emit()
+
+    def set_planned_direct_path(self, points: list):
+        self._plannedDirectPath = [QGeoCoordinate(p['lat'], p['lon']) for p in points]
+        self.plannedDirectPathChanged.emit()
+
+    def set_conflict_points(self, points: list):
+        self._conflictPointModel.set_points(points)
 
     # ── Layer visibility ──
 
