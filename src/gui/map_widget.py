@@ -731,101 +731,29 @@ class MapWidget(QWidget):
         var lastHeading = 0;
         var lastAircraftPos = null;
 
-        /* ── Hot Path Canvas — track + active waypoint line ── */
-        var _hpCanvas = document.createElement('canvas');
-        _hpCanvas.style.cssText = 'position:absolute;left:0;top:0;z-index:399;pointer-events:none;';
-        map.getContainer().appendChild(_hpCanvas);
-        var _hpCtx = _hpCanvas.getContext('2d');
-        var _hpZoom = -1, _hpScale = 0;
-        var _hpTrackWorld = [];
-        var _hpAcWorld = null;
-        var _hpWpWorld = null;
-        var _hpDrawRaf = null;
-        var _hpDpr = window.devicePixelRatio || 1;
-
-        (function _hpResize() {{
-            var c = map.getContainer();
-            _hpCanvas.width = c.clientWidth * _hpDpr;
-            _hpCanvas.height = c.clientHeight * _hpDpr;
-            _hpCanvas.style.width = c.clientWidth + 'px';
-            _hpCanvas.style.height = c.clientHeight + 'px';
-            _hpCtx.setTransform(_hpDpr, 0, 0, _hpDpr, 0, 0);
-            map.on('resize', _hpResize);
-        }})();
-
-        function _hpProject(lat, lng) {{
-            var x = _hpScale * (lng / 360 + 0.5);
-            var r = lat * 0.017453292519943295;
-            var s = Math.sin(r);
-            var y = _hpScale * (0.5 - Math.log((1 + s) / (1 - s)) * 0.07957747154594767);
-            return [x, y];
-        }}
-
-        function _hpSyncZoom() {{
-            var z = map.getZoom();
-            if (z === _hpZoom) return;
-            _hpZoom = z;
-            _hpScale = 256 * Math.pow(2, z);
-            for (var i = 0; i < trackPoints.length; i++) {{
-                _hpTrackWorld[i] = _hpProject(trackPoints[i][0], trackPoints[i][1]);
-            }}
-            _hpTrackWorld.length = trackPoints.length;
-            if (lastAircraftPos) _hpAcWorld = _hpProject(lastAircraftPos[0], lastAircraftPos[1]);
-            if (_hpWpWorld && waypointData.length > activeWaypointIdx) {{
-                var wp = waypointData[activeWaypointIdx];
-                _hpWpWorld = _hpProject(wp.lat, wp.lon);
-            }}
-        }}
-
-        function _hpScheduleDraw() {{
-            if (_hpDrawRaf) return;
-            _hpDrawRaf = requestAnimationFrame(_hpDraw);
-        }}
-
-        function _hpDraw() {{
-            _hpDrawRaf = null;
-            var w = _hpCanvas.width / _hpDpr, h = _hpCanvas.height / _hpDpr;
-            if (!w) return;
-            _hpSyncZoom();
-            var origin = map.getPixelOrigin();
-            var pp = map._getMapPanePos();
-            var ox = pp.x - origin.x, oy = pp.y - origin.y;
-            var ctx = _hpCtx;
-            ctx.clearRect(0, 0, w, h);
-
-            /* track */
-            if (showTrack && _hpTrackWorld.length > 1) {{
-                ctx.beginPath();
-                var p = _hpTrackWorld[0];
-                ctx.moveTo(p[0] + ox, p[1] + oy);
-                for (var i = 1; i < _hpTrackWorld.length; i++) {{
-                    p = _hpTrackWorld[i];
-                    ctx.lineTo(p[0] + ox, p[1] + oy);
-                }}
-                ctx.strokeStyle = '{Colors.SUCCESS}';
-                ctx.lineWidth = 2;
-                ctx.globalAlpha = 0.7;
-                ctx.stroke();
-                ctx.globalAlpha = 1;
-            }}
-
-            /* active waypoint line */
-            if (showWaypoints && _hpAcWorld && _hpWpWorld) {{
-                ctx.beginPath();
-                ctx.moveTo(_hpAcWorld[0] + ox, _hpAcWorld[1] + oy);
-                ctx.lineTo(_hpWpWorld[0] + ox, _hpWpWorld[1] + oy);
-                ctx.setLineDash([4, 8]);
-                ctx.strokeStyle = '{Colors.PRIMARY}';
-                ctx.lineWidth = 2;
-                ctx.globalAlpha = 0.8;
-                ctx.stroke();
-                ctx.setLineDash([]);
-                ctx.globalAlpha = 1;
-            }}
-        }}
-
-        map.on('move', _hpScheduleDraw);
-        map.on('zoomanim', _hpScheduleDraw);
+        /* ── Separate Canvas renderer for track + active waypoint line ── */
+        /* Isolates these high-frequency layers from route SVG.            */
+        /* L.canvas renderer lives inside the map pane → moves via CSS     */
+        /* transform during pan (GPU, zero JS redraw). Only redraws on     */
+        /* actual data change or zoom.                                     */
+        var _dynRenderer = L.canvas({{ padding: 0.3 }});
+        var trackLine = L.polyline([], {{
+            renderer: _dynRenderer,
+            color: '{Colors.SUCCESS}',
+            weight: 2,
+            opacity: 0.7,
+            interactive: false
+        }}).addTo(map);
+        var activeWaypointLine = L.polyline([], {{
+            renderer: _dynRenderer,
+            color: '{Colors.PRIMARY}',
+            weight: 2,
+            opacity: 0.8,
+            dashArray: '4, 8',
+            interactive: false
+        }}).addTo(map);
+        var _trackUpdateCounter = 0;
+        var _wpLineCounter = 0;
 
         var showTrack = true;
         var showWaypoints = true;
@@ -1078,7 +1006,7 @@ class MapWidget(QWidget):
             switch (name) {{
                 case 'track':
                     showTrack = document.getElementById('chkTrack').checked;
-                    _hpScheduleDraw();
+                    showTrack ? map.addLayer(trackLine) : map.removeLayer(trackLine);
                     break;
                 case 'waypoints':
                     showWaypoints = document.getElementById('chkWaypoints').checked;
@@ -1088,7 +1016,7 @@ class MapWidget(QWidget):
                     routeLines.forEach(function(l) {{
                         showWaypoints ? map.addLayer(l) : map.removeLayer(l);
                     }});
-                    _hpScheduleDraw();
+                    showWaypoints ? map.addLayer(activeWaypointLine) : map.removeLayer(activeWaypointLine);
                     break;
                 case 'hud':
                     showHud = document.getElementById('chkHud').checked;
@@ -1574,24 +1502,26 @@ class MapWidget(QWidget):
                 }}
             }}
 
-            /* track — push to raw + world-pixel cache */
+            /* track — throttle to every 3rd frame (~3Hz) */
             trackPoints.push([lat, lon]);
             if (trackPoints.length > 1000) trackPoints.shift();
-            if (_hpScale > 0) {{
-                _hpTrackWorld.push(_hpProject(lat, lon));
-                if (_hpTrackWorld.length > 1000) _hpTrackWorld.shift();
+            _trackUpdateCounter++;
+            if (_trackUpdateCounter >= 3) {{
+                _trackUpdateCounter = 0;
+                trackLine.setLatLngs(trackPoints);
             }}
 
-            /* active waypoint line target + aircraft pos in world coords */
-            if (_hpScale > 0) _hpAcWorld = _hpProject(lat, lon);
-            if (waypointData.length > activeWaypointIdx) {{
-                var wp = waypointData[activeWaypointIdx];
-                _hpWpWorld = _hpScale > 0 ? _hpProject(wp.lat, wp.lon) : null;
-            }} else {{
-                _hpWpWorld = null;
+            /* active waypoint line — throttle to every 5th frame (~2Hz) */
+            _wpLineCounter++;
+            if (_wpLineCounter >= 5) {{
+                _wpLineCounter = 0;
+                if (waypointData.length > activeWaypointIdx) {{
+                    var wp = waypointData[activeWaypointIdx];
+                    activeWaypointLine.setLatLngs([[lat, lon], [wp.lat, wp.lon]]);
+                }} else {{
+                    activeWaypointLine.setLatLngs([]);
+                }}
             }}
-
-            _hpScheduleDraw();
 
             if (followAircraft) {{
                 var center = map.getCenter();
@@ -1615,16 +1545,14 @@ class MapWidget(QWidget):
                 aircraftMarker.setLatLng([lat, lon]);
             }}
             trackPoints = [[lat, lon]];
-            _hpTrackWorld = _hpScale > 0 ? [_hpProject(lat, lon)] : [];
-            if (_hpScale > 0) _hpAcWorld = _hpProject(lat, lon);
-            _hpScheduleDraw();
+            trackLine.setLatLngs(trackPoints);
+            activeWaypointLine.setLatLngs([]);
             map.setView([lat, lon], map.getZoom());
         }}
 
         function clearTrack() {{
             trackPoints = [];
-            _hpTrackWorld = [];
-            _hpScheduleDraw();
+            trackLine.setLatLngs([]);
         }}
 
         function formatTooltip(wp, index, isActive) {{
@@ -1770,14 +1698,10 @@ class MapWidget(QWidget):
         function updateActiveWaypointLine() {{
             if (lastAircraftPos && waypointData.length > activeWaypointIdx) {{
                 var wp = waypointData[activeWaypointIdx];
-                if (_hpScale > 0) {{
-                    _hpWpWorld = _hpProject(wp.lat, wp.lon);
-                    _hpAcWorld = _hpProject(lastAircraftPos[0], lastAircraftPos[1]);
-                }}
+                activeWaypointLine.setLatLngs([lastAircraftPos, [wp.lat, wp.lon]]);
             }} else {{
-                _hpWpWorld = null;
+                activeWaypointLine.setLatLngs([]);
             }}
-            _hpScheduleDraw();
         }}
 
         function setRouteConflicts(conflicts) {{
