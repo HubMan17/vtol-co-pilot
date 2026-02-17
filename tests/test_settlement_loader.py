@@ -1,6 +1,6 @@
 """Tests for SettlementLoader._process_elements and _FetchWorker._distribute."""
 
-from src.gui.map_widget import SettlementLoader, _FetchWorker, _DP_TOLERANCE
+from src.gui.settlement_loader import SettlementLoader, _FetchWorker, _DP_TOLERANCE
 
 
 class TestProcessElements:

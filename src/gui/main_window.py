@@ -21,7 +21,7 @@ from src.navigation.calculations import haversine_distance, eta_seconds
 from src.navigation.route_planner import RoutePlanner
 from src.autopilot.autopilot_manager import AutopilotManager, AutopilotMode
 from src.gui.status_panel import StatusPanel
-from src.gui.map_widget import MapWidget
+from src.gui.qml_map_widget import QmlMapWidget
 from src.gui.waypoint_dialog import WaypointDialog
 from src.gui.zone_dialog import ZonePropertiesDialog
 from src.gui.zone_settings_dialog import ZoneSettingsDialog
@@ -61,6 +61,8 @@ class MainWindow(QMainWindow):
             self.zone_checker.set_settlement_cache_dir(cache_dir)
 
         self._gui_avoidance_result = None  # (result, wp1, wp2) from background thread
+        self._gui_avoidance_active = False  # True when GUI avoidance path is displayed
+        self._last_avoidance_check_pos = None  # (lat, lon) of last aircraft-to-WP avoidance check
 
         self._set_position_mode = False
         self._set_home_mode = False
@@ -89,7 +91,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(splitter)
 
         # ── LEFT: Map ──
-        self.map_widget = MapWidget(self.config.gui.map_center, self.config.gui.map_zoom)
+        self.map_widget = QmlMapWidget(self.config.gui.map_center, self.config.gui.map_zoom)
         self.map_widget.setMinimumWidth(400)
         splitter.addWidget(self.map_widget)
 
@@ -383,7 +385,7 @@ class MainWindow(QMainWindow):
         self.btn_wp_next.clicked.connect(self._on_wp_next)
         self.spin_waypoint.valueChanged.connect(self._on_wp_select)
 
-        self.map_widget.bridge.position_clicked.connect(self._on_map_clicked)
+        self.map_widget.bridge.mapClicked.connect(self._on_map_clicked)
         self.map_widget.set_position_requested.connect(self._on_context_set_position)
         self.map_widget.add_waypoint_requested.connect(self._on_context_add_waypoint)
         self.map_widget.set_home_requested.connect(self._on_context_set_home)
@@ -466,6 +468,7 @@ class MainWindow(QMainWindow):
 
     def _on_set_position_toggle(self):
         self._set_position_mode = self.btn_set_pos.isChecked()
+        self._update_left_click_mode()
         if self._set_position_mode:
             self.statusbar.showMessage("Кликните на карте для коррекции позиции EKF...")
         else:
@@ -473,10 +476,17 @@ class MainWindow(QMainWindow):
 
     def _on_set_home_toggle(self):
         self._set_home_mode = self.btn_set_home.isChecked()
+        self._update_left_click_mode()
         if self._set_home_mode:
             self.statusbar.showMessage("Кликните на карте для установки точки дома...")
         else:
             self.statusbar.showMessage("Режим установки дома отменён")
+
+    def _update_left_click_mode(self):
+        """Enable left-click capture on QML map when in position/home set mode."""
+        need = self._set_position_mode or self._set_home_mode
+        if hasattr(self.map_widget, '_backend'):
+            self.map_widget._backend.leftClickMode = need
 
     def _on_map_clicked(self, lat: float, lon: float):
         if self._set_position_mode:
@@ -491,6 +501,7 @@ class MainWindow(QMainWindow):
         self.proxy.send_position_reset(lat, lon)
         self._set_position_mode = False
         self.btn_set_pos.setChecked(False)
+        self._update_left_click_mode()
         self.map_widget.set_aircraft_position(lat, lon)
         self.statusbar.showMessage(f"Коррекция позиции: {lat:.6f}, {lon:.6f}")
 
@@ -531,6 +542,7 @@ class MainWindow(QMainWindow):
         self.map_widget.set_home_marker(lat, lon)
         self._set_home_mode = False
         self.btn_set_home.setChecked(False)
+        self._update_left_click_mode()
         self.statusbar.showMessage(f"Дом: {lat:.6f}, {lon:.6f}")
 
     # ────────────────────── Route / Waypoints ──────────────────────
@@ -578,12 +590,16 @@ class MainWindow(QMainWindow):
         self._refresh_map_waypoints()
 
     def _check_route_conflicts(self, waypoints: list):
-        """Check route segments for zone conflicts and show on map."""
-        if len(waypoints) < 2:
+        """Check route segments for zone conflicts and show on map.
+        Also checks aircraft→active_WP segment when aircraft position is available."""
+        self._gui_avoidance_active = False
+
+        if not waypoints:
             self.map_widget.clear_route_conflicts()
             return
 
         conflicts = []
+        # Check WP→WP segments
         for i in range(len(waypoints) - 1):
             wp1 = waypoints[i]
             wp2 = waypoints[i + 1]
@@ -604,10 +620,54 @@ class MainWindow(QMainWindow):
 
         if conflicts:
             self.map_widget.set_route_conflicts(conflicts)
-            # Compute avoidance path in background thread to avoid UI freeze
             self._compute_avoidance_async(waypoints, conflicts[0])
-        else:
-            self.map_widget.clear_route_conflicts()
+            return
+
+        # No WP→WP conflicts — check aircraft→active_WP segment
+        active_idx = self.route_planner.get_active_waypoint_index()
+        if 0 <= active_idx < len(waypoints):
+            ac_pos = self._get_aircraft_position()
+            if ac_pos:
+                wp = waypoints[active_idx]
+                alt = wp.get('altitude', 100)
+                if self.zone_checker.segment_intersects_obstacles(
+                    ac_pos[0], ac_pos[1], wp['lat'], wp['lon'], alt
+                ):
+                    self._last_avoidance_check_pos = ac_pos
+                    self._compute_aircraft_avoidance(ac_pos, wp, alt)
+                    return
+
+        self.map_widget.clear_route_conflicts()
+
+    def _get_aircraft_position(self):
+        """Get current aircraft position as (lat, lon) or None."""
+        if self.proxy.is_connected():
+            telemetry = self.proxy.get_telemetry()
+            if telemetry.position:
+                return (telemetry.position.lat, telemetry.position.lon)
+        return None
+
+    def _compute_aircraft_avoidance(self, ac_pos: tuple, wp: dict, alt: float):
+        """Compute avoidance path from aircraft position to waypoint."""
+        import threading
+
+        start = {'lat': ac_pos[0], 'lon': ac_pos[1]}
+        logger.info("[FIX] Aircraft avoidance: computing (%.5f,%.5f) → (%.5f,%.5f) alt=%d",
+                     ac_pos[0], ac_pos[1], wp['lat'], wp['lon'], alt)
+
+        def worker():
+            try:
+                result = self.path_planner.plan_path(
+                    start['lat'], start['lon'], wp['lat'], wp['lon'], alt
+                )
+                logger.info("[FIX] Aircraft avoidance: plan_path returned %s",
+                            f"{len(result)} points" if result else "None")
+            except Exception as e:
+                logger.error("[FIX] Aircraft avoidance error: %s", e)
+                result = None
+            self._gui_avoidance_result = (result, start, wp)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _compute_avoidance_async(self, waypoints: list, conflict: dict):
         """Run plan_path in a background thread, update map on completion."""
@@ -654,9 +714,11 @@ class MainWindow(QMainWindow):
             path_points.append({'lat': wp2['lat'], 'lon': wp2['lon']})
             logger.info("GUI avoidance: drawing %d-point path on map", len(path_points))
             self.map_widget.set_avoidance_path(path_points)
+            self._gui_avoidance_active = True
         else:
             logger.info("GUI avoidance: no path to draw (result=%s)", type(avoidance).__name__)
             self.map_widget.set_avoidance_path([])
+            self._gui_avoidance_active = False
 
     # ────────────────────── Map controls ──────────────────────
 
@@ -954,6 +1016,8 @@ class MainWindow(QMainWindow):
             _t3 = _t.perf_counter()
 
         self.autopilot.update()
+        self._sync_live_avoidance_overlay(telemetry)
+        self._check_aircraft_avoidance_throttled(pos)
 
         mode = self.autopilot.get_mode()
         status = self.autopilot.get_status()
@@ -963,11 +1027,80 @@ class MainWindow(QMainWindow):
             self.status_panel.update_autopilot('NAV', status)
 
         _elapsed = (_t.perf_counter() - _t0) * 1000
+        self.map_widget._backend.tick_fps(_elapsed)
         if _elapsed > 10:
             _js_ms = (_t2 - _t1) * 1000 if pos else 0
             _nav_ms = (_t3 - _t2) * 1000 if pos else 0
-            logger.warning("[PERF] _update_display: %.1fms (runJS=%.1fms nav=%.1fms)",
+            logger.warning("[PERF] _update_display: %.1fms (map=%.1fms nav=%.1fms)",
                            _elapsed, _js_ms, _nav_ms)
+
+    def _sync_live_avoidance_overlay(self, telemetry):
+        """Render autopilot runtime avoidance route (aircraft -> avoidance pts -> active WP)."""
+        if not self.autopilot.is_engaged():
+            # Don't clear GUI avoidance path when autopilot is not engaged
+            return
+
+        pos = telemetry.position if telemetry else None
+        if not pos:
+            return
+
+        wp = self.route_planner.get_active_waypoint()
+        if not wp:
+            if not self._gui_avoidance_active:
+                self.map_widget.set_avoidance_path([])
+            return
+
+        remaining = self.autopilot.get_remaining_avoidance_waypoints()
+        if not remaining:
+            # Autopilot has no avoidance — but don't overwrite GUI avoidance visualization
+            if not self._gui_avoidance_active:
+                self.map_widget.set_avoidance_path([])
+            return
+
+        # Live avoidance takes priority over GUI avoidance
+        self._gui_avoidance_active = False
+        path_points = [{'lat': pos.lat, 'lon': pos.lon}]
+        for lat, lon in remaining:
+            path_points.append({'lat': lat, 'lon': lon})
+        path_points.append({'lat': wp.lat, 'lon': wp.lon})
+        self.map_widget.set_avoidance_path(path_points)
+
+    def _check_aircraft_avoidance_throttled(self, pos):
+        """Periodically check aircraft→active_WP for obstacles (throttled by distance)."""
+        if not pos or self.autopilot.is_engaged():
+            return
+        if self._gui_avoidance_result is not None:
+            return  # computation already in progress
+
+        waypoints = self.route_planner.get_waypoints_for_display()
+        if not waypoints:
+            return
+
+        active_idx = self.route_planner.get_active_waypoint_index()
+        if active_idx < 0 or active_idx >= len(waypoints):
+            return
+
+        # Throttle: only recheck if aircraft moved > 500m since last check
+        ac_pos = (pos.lat, pos.lon)
+        if self._last_avoidance_check_pos:
+            d = haversine_distance(ac_pos[0], ac_pos[1],
+                                   self._last_avoidance_check_pos[0],
+                                   self._last_avoidance_check_pos[1])
+            if d < 500:
+                return
+
+        wp = waypoints[active_idx]
+        alt = wp.get('altitude', 100)
+        if self.zone_checker.segment_intersects_obstacles(
+            ac_pos[0], ac_pos[1], wp['lat'], wp['lon'], alt
+        ):
+            self._last_avoidance_check_pos = ac_pos
+            self._compute_aircraft_avoidance(ac_pos, wp, alt)
+        elif self._gui_avoidance_active:
+            # Path is now clear — remove old avoidance
+            self._last_avoidance_check_pos = ac_pos
+            self._gui_avoidance_active = False
+            self.map_widget.set_avoidance_path([])
 
     def closeEvent(self, event):
         self.autopilot.disengage()

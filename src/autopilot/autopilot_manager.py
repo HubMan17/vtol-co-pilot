@@ -708,6 +708,12 @@ class AutopilotManager:
     def get_heading_error(self) -> float:
         return self._heading_controller.get_current_error()
 
+    def get_remaining_avoidance_waypoints(self) -> List[Tuple[float, float]]:
+        """Return a copy of remaining avoidance points for current target WP."""
+        if not self._avoidance_waypoints:
+            return []
+        return list(self._avoidance_waypoints[self._avoidance_wp_idx:])
+
     def get_status(self) -> dict:
         status = {
             'mode': self._mode.name,
