@@ -140,6 +140,7 @@ public:
     QHash<int, QByteArray> roleNames() const override;
 
     void addPolys(const QVariantList& features);
+    void clear();
 
     static constexpr int MAX_ITEMS = 80;
     const auto& items() const { return m_items; }
@@ -147,6 +148,7 @@ public:
 private:
     QVector<QVariantList> m_items;
     QSet<QString> m_sigs;
+    QVector<QString> m_sigByIndex;
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -167,6 +169,7 @@ public:
     QHash<int, QByteArray> roleNames() const override;
 
     void addCircles(const QVariantList& nodes);
+    void clear();
 
     static constexpr int MAX_ITEMS = 40;
     int itemCount() const { return static_cast<int>(m_items.size()); }
@@ -176,6 +179,7 @@ public:
 private:
     QVector<Item> m_items;
     QSet<QString> m_sigs;
+    QVector<QString> m_sigByIndex;
 
     static double placeRadius(const QString& type);
 };

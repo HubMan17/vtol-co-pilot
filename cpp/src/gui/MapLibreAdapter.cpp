@@ -25,6 +25,12 @@ MapLibreAdapter::MapLibreAdapter(QMapLibre::Map* map, MapBackend* backend, QObje
     addAircraftImage();
     connectSignals();
 
+    // Verify zone source/layers were created
+    SPDLOG_INFO("[MapLibreAdapter] sourceExists('zones')={}, layerExists('zone-fill')={}, layerExists('zone-border')={}",
+                 m_map->sourceExists("zones"), m_map->layerExists("zone-fill"), m_map->layerExists("zone-border"));
+    SPDLOG_INFO("[MapLibreAdapter] sourceExists('stl-polys')={}, layerExists('stl-poly-fill')={}",
+                 m_map->sourceExists("stl-polys"), m_map->layerExists("stl-poly-fill"));
+
     // Initial data push
     updateAircraftSource();
     updateTrackSource();
@@ -210,16 +216,58 @@ void MapLibreAdapter::addAllLayers()
         m_map->addLayer(id, params);
     };
 
-    // --- Settlement polygons ---
-    addFill("stl-poly-fill", "stl-polys", "#FFA500", 0.15);
-    addLine("stl-poly-border", "stl-polys", "#FFA500", 1.5, {4.0, 3.0});
+    // --- Settlement polygons (red) ---
+    addFill("stl-poly-fill", "stl-polys", "#CC0000", 0.18);
+    addLine("stl-poly-border", "stl-polys", "#CC0000", 2.0);
 
-    // --- Settlement circles ---
-    addCircle("stl-circle", "stl-circles", "#FFA500", 4.0, "#FFA500", 1.0);
+    // --- Settlement circles (red) ---
+    addCircle("stl-circle", "stl-circles", "#CC0000", 6.0, "#CC0000", 1.0);
 
-    // --- Zones ---
-    addFill("zone-fill", "zones", "#FF4444", 0.15);
-    addLine("zone-border", "zones", "#FF4444", 2.0, {6.0, 4.0});
+    // --- Zones (dark fill, dark red-black border) ---
+    addFill("zone-fill", "zones", "#000000", 0.60);
+    addLine("zone-border", "zones", "#882020", 2.5);
+
+    // Zone: zoom-dependent visibility (off at zoom ≤11, visible 12-14, fade out 14-15.5)
+    // Using 11.99 ensures zones are invisible when UI shows zoom "11" (int truncation)
+    m_map->setPaintProperty("zone-fill", "fill-opacity",
+        QVariantList{"interpolate", QVariantList{"linear"}, QVariantList{"zoom"},
+            11.99, 0.0,  12.0, 0.60,  14.0, 0.60,  15.5, 0.0});
+    m_map->setPaintProperty("zone-border", "line-opacity",
+        QVariantList{"interpolate", QVariantList{"linear"}, QVariantList{"zoom"},
+            11.99, 0.0,  12.0, 1.0,  14.0, 1.0,  15.5, 0.0});
+    m_map->setPaintProperty("zone-border", "line-width",
+        QVariantList{"interpolate", QVariantList{"linear"}, QVariantList{"zoom"},
+            12, 1.5,  13, 2.0,  14, 2.5});
+
+    // --- Zone labels (QPainter-rendered name icons at polygon centroids) ---
+    // Uses same "zones" source as fill/border — MapLibre places symbols at polygon centroid
+    addSymbol("zone-label-icon", "zones");
+    m_map->setLayoutProperty("zone-label-icon", "icon-image", QVariantList{"get", "icon"});
+    m_map->setLayoutProperty("zone-label-icon", "icon-allow-overlap", true);
+    // Zoom-dependent size: small at z12, grows to full at z14
+    m_map->setLayoutProperty("zone-label-icon", "icon-size",
+        QVariantList{"interpolate", QVariantList{"linear"}, QVariantList{"zoom"},
+            12.0, 0.55,  13.0, 0.75,  14.0, 1.0});
+    m_map->setPaintProperty("zone-label-icon", "icon-opacity",
+        QVariantList{"interpolate", QVariantList{"linear"}, QVariantList{"zoom"},
+            11.99, 0.0,  12.0, 1.0,  14.0, 1.0,  15.5, 0.0});
+
+    // Settlement: zoom-dependent visibility (off at zoom ≤11, visible 12-14, fade out 14-15.5)
+    m_map->setPaintProperty("stl-poly-fill", "fill-opacity",
+        QVariantList{"interpolate", QVariantList{"linear"}, QVariantList{"zoom"},
+            11.99, 0.0,  12.0, 0.18,  14.0, 0.18,  15.5, 0.0});
+    m_map->setPaintProperty("stl-poly-border", "line-opacity",
+        QVariantList{"interpolate", QVariantList{"linear"}, QVariantList{"zoom"},
+            11.99, 0.0,  12.0, 1.0,  14.0, 1.0,  15.5, 0.0});
+    m_map->setPaintProperty("stl-poly-border", "line-width",
+        QVariantList{"interpolate", QVariantList{"linear"}, QVariantList{"zoom"},
+            12, 1.0,  13, 1.5,  14, 2.0});
+    m_map->setPaintProperty("stl-circle", "circle-opacity",
+        QVariantList{"interpolate", QVariantList{"linear"}, QVariantList{"zoom"},
+            11.99, 0.0,  12.0, 1.0,  14.0, 1.0,  15.5, 0.0});
+    m_map->setPaintProperty("stl-circle", "circle-stroke-opacity",
+        QVariantList{"interpolate", QVariantList{"linear"}, QVariantList{"zoom"},
+            11.99, 0.0,  12.0, 1.0,  14.0, 1.0,  15.5, 0.0});
 
     // --- Track ---
     addLine("track-line", "track", "#00E676", 2.0);
@@ -239,8 +287,11 @@ void MapLibreAdapter::addAllLayers()
     // --- Avoidance ---
     addLine("avoidance-line", "avoidance", "#00FF88", 2.0);
 
-    // --- Conflict points ---
-    addCircle("conflict-pt", "conflict-pts", "#FF4444", 8.0, "#FFFFFF", 2.0);
+    // --- Conflict points (warning icon) ---
+    addSymbol("conflict-pt", "conflict-pts");
+    m_map->setLayoutProperty("conflict-pt", "icon-image", "warning-marker");
+    m_map->setLayoutProperty("conflict-pt", "icon-size", 1.0);
+    m_map->setLayoutProperty("conflict-pt", "icon-allow-overlap", true);
 
     // --- Waypoints (numbered icon — no text-field, avoids glyphs dependency) ---
     addSymbol("wp-icon", "waypoints");
@@ -249,9 +300,15 @@ void MapLibreAdapter::addAllLayers()
     m_map->setLayoutProperty("wp-icon", "icon-size", 1.0);
     m_map->setLayoutProperty("wp-icon", "icon-allow-overlap", true);
 
-    // --- Drawing ---
-    addLine("draw-line", "drawing", "#FFAA00", 2.0);
-    addCircle("draw-vertex", "draw-vertices", "#FFAA00", 5.0, "#FFFFFF", 1.5);
+    // --- Drawing (yellow line + vertices, matching Python) ---
+    addLine("draw-line", "drawing", "#FFFF00", 2.0);
+    addCircle("draw-vertex", "draw-vertices", "#FFFFFF", 5.0, "#000000", 1.0);
+    // First vertex is bigger and yellow (data-driven by index property)
+    m_map->setPaintProperty("draw-vertex", "circle-radius",
+        QVariantList{"case", QVariantList{"==", QVariantList{"get", "index"}, 0}, 8.0, 5.0});
+    m_map->setPaintProperty("draw-vertex", "circle-color",
+        QVariantList{"case", QVariantList{"==", QVariantList{"get", "index"}, 0},
+                     QString("#FFFF00"), QString("#FFFFFF")});
 
     // --- Editing ---
     addCircle("edit-vertex", "edit-vertices", "#00AAFF", 6.0, "#FFFFFF", 2.0);
@@ -370,26 +427,68 @@ void MapLibreAdapter::addAircraftImage()
         m_map->addImage(QStringLiteral("wp-%1").arg(n), numImg);
     }
 
-    // Home marker
+    // Home marker (red house icon)
     QImage homeImg(28, 28, QImage::Format_ARGB32_Premultiplied);
     homeImg.fill(Qt::transparent);
     QPainter hp(&homeImg);
     hp.setRenderHint(QPainter::Antialiasing);
+
+    // Shadow
     hp.setBrush(QColor(0, 0, 0, 50));
     hp.setPen(Qt::NoPen);
-    hp.drawEllipse(QPointF(14.5, 14.5), 11.5, 11.5);
-    hp.setBrush(QColor("#FFD700"));
-    hp.setPen(QPen(Qt::white, 2.0));
-    hp.drawEllipse(QPointF(14, 14), 11, 11);
-    // H letter
-    hp.setPen(Qt::NoPen);
+    QPolygonF roofShadow;
+    roofShadow << QPointF(14.5, 3.5) << QPointF(25.5, 14.5) << QPointF(3.5, 14.5);
+    hp.drawPolygon(roofShadow);
+    hp.drawRect(QRectF(6.5, 14.5, 16, 11));
+
+    // House body
+    hp.setBrush(QColor("#D32F2F"));
+    hp.setPen(QPen(Qt::white, 1.5));
+    hp.drawRect(QRectF(6, 14, 16, 11));
+
+    // Roof
+    QPolygonF roof;
+    roof << QPointF(14, 3) << QPointF(25, 14) << QPointF(3, 14);
+    hp.setBrush(QColor("#B71C1C"));
+    hp.drawPolygon(roof);
+
+    // Door
     hp.setBrush(Qt::white);
-    QFont hf("Arial", 11, QFont::Bold);
-    hp.setFont(hf);
-    hp.drawText(QRectF(0, 0, 28, 28), Qt::AlignCenter, "H");
+    hp.setPen(Qt::NoPen);
+    hp.drawRect(QRectF(11.5, 18, 5, 7));
+
     hp.end();
 
     m_map->addImage("home-marker", homeImg);
+
+    // Warning marker (yellow triangle with !)
+    QImage warnImg(28, 28, QImage::Format_ARGB32_Premultiplied);
+    warnImg.fill(Qt::transparent);
+    QPainter wp2(&warnImg);
+    wp2.setRenderHint(QPainter::Antialiasing);
+
+    // Shadow
+    wp2.setBrush(QColor(0, 0, 0, 50));
+    wp2.setPen(Qt::NoPen);
+    QPolygonF triShadow;
+    triShadow << QPointF(14.5, 2.5) << QPointF(26.5, 25.5) << QPointF(2.5, 25.5);
+    wp2.drawPolygon(triShadow);
+
+    // Yellow triangle
+    QPolygonF tri;
+    tri << QPointF(14, 2) << QPointF(26, 25) << QPointF(2, 25);
+    wp2.setBrush(QColor("#FFAB00"));
+    wp2.setPen(QPen(QColor("#E65100"), 1.5));
+    wp2.drawPolygon(tri);
+
+    // "!" text
+    wp2.setPen(QColor("#E65100"));
+    QFont wf("Arial", 14, QFont::ExtraBold);
+    wp2.setFont(wf);
+    wp2.drawText(QRectF(0, 4, 28, 24), Qt::AlignCenter, "!");
+    wp2.end();
+
+    m_map->addImage("warning-marker", warnImg);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -415,6 +514,9 @@ void MapLibreAdapter::connectSignals()
 
     // Drawing
     connect(m_backend, &MapBackend::drawingPathChanged, this, &MapLibreAdapter::updateDrawingSource);
+
+    // Zones (direct signal — bypasses model signal chain for reliability)
+    connect(m_backend, &MapBackend::zonesChanged, this, &MapLibreAdapter::updateZoneSources);
 
     // Visibility toggles
     connect(m_backend, &MapBackend::showTrackChanged, this, &MapLibreAdapter::onShowTrackChanged);
@@ -655,15 +757,20 @@ void MapLibreAdapter::updateZoneSources()
 {
     auto* model = qobject_cast<ZoneListModel*>(m_backend->zoneModel());
     QJsonObject fc = emptyFeatureCollection();
+    QJsonArray features;
+
     if (model) {
         const auto& items = model->items();
-        QJsonArray features;
+        SPDLOG_INFO("[MapLibreAdapter] updateZoneSources: {} zones in model", items.size());
         for (const auto& zone : items) {
             QJsonArray ring;
             for (const auto& pt : zone.points) {
                 auto list = pt.toList();
-                if (list.size() >= 2)
-                    ring.append(coord(list[0].toDouble(), list[1].toDouble()));
+                if (list.size() >= 2) {
+                    double lat = list[0].toDouble();
+                    double lon = list[1].toDouble();
+                    ring.append(coord(lat, lon));
+                }
             }
             // Close the ring
             if (ring.size() >= 3) {
@@ -671,11 +778,51 @@ void MapLibreAdapter::updateZoneSources()
                 QJsonObject props;
                 props["id"] = zone.id;
                 props["name"] = zone.name;
+
+                // Render zone name as icon image (symbol layer reads from same source)
+                if (!zone.name.isEmpty()) {
+                    QString imageId = QStringLiteral("zone-name-%1").arg(zone.id);
+                    QFont font("Arial", 9, QFont::Bold);
+                    QFontMetrics fm(font);
+                    int padding = 4;
+                    int w = fm.horizontalAdvance(zone.name) + padding * 2;
+                    int h = fm.height() + padding * 2;
+                    QImage img(w, h, QImage::Format_ARGB32_Premultiplied);
+                    img.fill(Qt::transparent);
+                    QPainter p(&img);
+                    p.setRenderHint(QPainter::Antialiasing);
+                    p.setBrush(QColor(0, 0, 0, 160));
+                    p.setPen(Qt::NoPen);
+                    p.drawRoundedRect(0, 0, w, h, 4, 4);
+                    p.setPen(Qt::white);
+                    p.setFont(font);
+                    p.drawText(QRect(0, 0, w, h), Qt::AlignCenter, zone.name);
+                    p.end();
+                    m_map->addImage(imageId, img);
+                    props["icon"] = imageId;
+                }
+
                 features.append(makePolygonFeature(ring, props));
+                SPDLOG_INFO("[MapLibreAdapter] Zone '{}' ({}): {} vertices",
+                             zone.name.toStdString(), zone.id.toStdString(), ring.size());
+            } else {
+                SPDLOG_WARN("[MapLibreAdapter] Zone '{}' skipped: only {} points (raw pts={})",
+                             zone.name.toStdString(), ring.size(), zone.points.size());
             }
         }
-        fc["features"] = features;
+    } else {
+        SPDLOG_WARN("[MapLibreAdapter] zoneModel cast failed!");
     }
+
+    fc["features"] = features;
+
+    // Log the actual GeoJSON being sent
+    QByteArray jsonBytes = QJsonDocument(fc).toJson(QJsonDocument::Compact);
+    SPDLOG_INFO("[MapLibreAdapter] zones GeoJSON: {} features, {} bytes, sourceExists={}",
+                 features.size(), jsonBytes.size(), m_map->sourceExists("zones"));
+    if (jsonBytes.size() < 2000)
+        SPDLOG_INFO("[MapLibreAdapter] zones JSON: {}", jsonBytes.toStdString());
+
     setSourceGeoJson("zones", fc);
 }
 

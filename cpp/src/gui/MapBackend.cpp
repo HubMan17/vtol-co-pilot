@@ -3,6 +3,7 @@
 #include <QJsonArray>
 #include <QElapsedTimer>
 #include <cmath>
+#include <algorithm>
 #include <chrono>
 #include <spdlog/spdlog.h>
 
@@ -140,7 +141,28 @@ void MapBackend::setShowZones(bool v) {
     if (m_showZones != v) { m_showZones = v; emit showZonesChanged(); }
 }
 void MapBackend::setShowSettlements(bool v) {
-    if (m_showSettlements != v) { m_showSettlements = v; emit showSettlementsChanged(); }
+    if (m_showSettlements != v) {
+        m_showSettlements = v;
+        emit showSettlementsChanged();
+        if (!v) {
+            // Start delayed unload timer (30 sec)
+            if (!m_settlementUnloadTimer) {
+                m_settlementUnloadTimer = new QTimer(this);
+                m_settlementUnloadTimer->setSingleShot(true);
+                connect(m_settlementUnloadTimer, &QTimer::timeout, this, [this] {
+                    if (!m_showSettlements) {
+                        clearSettlements();
+                        SPDLOG_INFO("[MapBackend] Settlements unloaded (hidden for 30s)");
+                    }
+                });
+            }
+            m_settlementUnloadTimer->start(30000);
+        } else {
+            // Cancel unload if re-enabled
+            if (m_settlementUnloadTimer)
+                m_settlementUnloadTimer->stop();
+        }
+    }
 }
 void MapBackend::setLeftClickMode(bool v) {
     if (m_leftClickMode != v) { m_leftClickMode = v; emit leftClickModeChanged(); }
@@ -185,12 +207,15 @@ void MapBackend::tickFps(double elapsedMs)
 
 void MapBackend::addZone(const QString& id, const QVariantList& points, const QString& name)
 {
+    SPDLOG_INFO("[MapBackend] addZone id={} name={} pts={}", id.toStdString(), name.toStdString(), points.size());
     m_zoneModel.addZone(id, points, name);
+    emit zonesChanged();
 }
 
 void MapBackend::removeZone(const QString& id)
 {
     m_zoneModel.removeZone(id);
+    emit zonesChanged();
 }
 
 void MapBackend::loadAllZones(const QVariantList& zones)
@@ -200,24 +225,57 @@ void MapBackend::loadAllZones(const QVariantList& zones)
         auto map = z.toMap();
         m_zoneModel.addZone(map["id"].toString(), map["points"].toList(), map.value("name", "").toString());
     }
+    SPDLOG_INFO("[MapBackend] loadAllZones: {} zones loaded", zones.size());
+    emit zonesChanged();
 }
 
 // ═══════════════════════ Settlements ═══════════════════════
 
 void MapBackend::addSettlementFeatures(const QVariantList& features)
 {
-    QVariantList polys, nodes;
+    QVariantList polys;
     for (const auto& f : features) {
         auto map = f.toMap();
-        if (map["F"].toString() == "p") polys.append(f);
-        else if (map["F"].toString() == "n") nodes.append(f);
+        if (map["F"].toString() == "p") {
+            polys.append(f);
+        } else if (map["F"].toString() == "n") {
+            // Convert node settlement to circle polygon
+            double lat = map["lat"].toDouble();
+            double lon = map["lon"].toDouble();
+            QString type = map.value("t", "").toString();
+            double radius = 500.0;
+            if (type == "city") radius = 5000.0;
+            else if (type == "town") radius = 2000.0;
+            else if (type == "village") radius = 800.0;
+            else if (type == "hamlet") radius = 400.0;
+
+            constexpr int N = 16;
+            constexpr double DEG_TO_M = 111320.0;
+            double cosLat = std::cos(lat * M_PI / 180.0);
+            QVariantList coords;
+            for (int i = 0; i < N; ++i) {
+                double angle = 2.0 * M_PI * i / N;
+                double dLat = radius * std::cos(angle) / DEG_TO_M;
+                double dLon = radius * std::sin(angle) / (DEG_TO_M * cosLat);
+                coords.append(QVariant(QVariantList{lat + dLat, lon + dLon}));
+            }
+            QVariantMap polyFeat;
+            polyFeat["F"] = "p";
+            polyFeat["c"] = coords;
+            polyFeat["n"] = map.value("n", "");
+            polyFeat["t"] = type;
+            polys.append(polyFeat);
+        }
     }
     if (!polys.isEmpty()) {
         m_settlementPolyModel.addPolys(polys);
     }
-    if (!nodes.isEmpty()) {
-        m_settlementCircleModel.addCircles(nodes);
-    }
+}
+
+void MapBackend::clearSettlements()
+{
+    m_settlementPolyModel.clear();
+    m_settlementCircleModel.clear();
 }
 
 // ═══════════════════════ Conflicts / Avoidance ═══════════════════════
@@ -296,6 +354,7 @@ void MapBackend::cancelDrawing()
 QVariantList MapBackend::finishDrawing()
 {
     auto pts = m_drawingVertexModel.getPoints();
+    SPDLOG_INFO("[MapBackend] finishDrawing: {} raw points from model", pts.size());
     m_drawingMode = false;
     m_drawingPath.clear();
     m_drawingVertexModel.clear();
@@ -303,22 +362,46 @@ QVariantList MapBackend::finishDrawing()
     emit drawingPathChanged();
 
     QVariantList result;
-    for (const auto& p : pts)
-        result.append(QVariantList{p.x(), p.y()});
+    for (const auto& p : pts) {
+        result.append(QVariant::fromValue(QVariantList{p.x(), p.y()}));
+        SPDLOG_INFO("[MapBackend]   point: x(lat)={}, y(lon)={}", p.x(), p.y());
+    }
+    SPDLOG_INFO("[MapBackend] finishDrawing: returning {} QVariantList items", result.size());
     return result;
 }
 
 void MapBackend::addDrawingVertex(double lat, double lon)
 {
     auto pts = m_drawingVertexModel.getPoints();
-    // Snap to first point to close polygon
+    // Snap to first point to close polygon (zoom-dependent threshold ~20px)
     if (pts.size() >= 3) {
+        // ~20 pixels in degrees: 20 * 360 / (256 * 2^zoom)
+        double snapDeg = 7200.0 / (256.0 * std::pow(2.0, m_currentZoom));
+        snapDeg = std::clamp(snapDeg, 0.00005, 0.05);  // 5m..5km bounds
         double d = std::sqrt(std::pow(lat - pts[0].x(), 2) + std::pow(lon - pts[0].y(), 2));
-        if (d < 0.0002) {  // ~20m snap threshold
+        if (d < snapDeg) {
+            SPDLOG_INFO("[MapBackend] SNAP: closing polygon (d={} < snap={})", d, snapDeg);
             auto result = finishDrawing();
             QJsonArray arr;
-            for (const auto& p : result) { QJsonArray pt; pt.append(p.toList()[0].toDouble()); pt.append(p.toList()[1].toDouble()); arr.append(pt); }
-            emit drawingFinished(QJsonDocument(arr).toJson(QJsonDocument::Compact));
+            for (const auto& p : result) {
+                auto list = p.toList();
+                SPDLOG_INFO("[MapBackend] snap: p.toList() size={}", list.size());
+                if (list.size() >= 2) {
+                    QJsonArray pt;
+                    pt.append(list[0].toDouble());
+                    pt.append(list[1].toDouble());
+                    arr.append(pt);
+                }
+            }
+            // Defer signal to avoid crash: finishDrawing() triggers MapLibre source
+            // updates synchronously, and the modal dialog in MainWindow would block
+            // the event loop mid-chain causing re-entrant issues
+            QString json = QJsonDocument(arr).toJson(QJsonDocument::Compact);
+            SPDLOG_INFO("[MapBackend] snap: emitting drawingFinished json='{}' (len={})",
+                         json.toStdString(), json.size());
+            QTimer::singleShot(0, this, [this, json]() {
+                emit drawingFinished(json);
+            });
             return;
         }
     }
@@ -383,14 +466,27 @@ void MapBackend::onMapClick(double lat, double lon)
 void MapBackend::onMapDoubleClick(double lat, double lon)
 {
     if (m_drawingMode) {
+        SPDLOG_INFO("[MapBackend] DOUBLE-CLICK finish drawing");
         auto result = finishDrawing();
         if (result.size() >= 3) {
             QJsonArray arr;
             for (const auto& p : result) {
-                QJsonArray pt; pt.append(p.toList()[0].toDouble()); pt.append(p.toList()[1].toDouble());
-                arr.append(pt);
+                auto list = p.toList();
+                SPDLOG_INFO("[MapBackend] dblclick: p.toList() size={}", list.size());
+                if (list.size() >= 2) {
+                    QJsonArray pt;
+                    pt.append(list[0].toDouble());
+                    pt.append(list[1].toDouble());
+                    arr.append(pt);
+                }
             }
-            emit drawingFinished(QJsonDocument(arr).toJson(QJsonDocument::Compact));
+            // Defer to avoid modal dialog mid-signal-chain crash
+            QString json = QJsonDocument(arr).toJson(QJsonDocument::Compact);
+            SPDLOG_INFO("[MapBackend] dblclick: emitting drawingFinished json='{}' (len={})",
+                         json.toStdString(), json.size());
+            QTimer::singleShot(0, this, [this, json]() {
+                emit drawingFinished(json);
+            });
         } else {
             emit drawingCancelled();
         }
@@ -416,11 +512,15 @@ void MapBackend::onContextMenu(double lat, double lon, int sx, int sy)
 void MapBackend::onBoundsChanged(double south, double west, double north, double east)
 {
     if (std::isnan(south) || std::isnan(west) || std::isnan(north) || std::isnan(east)) return;
+    m_viewSouth = south;
+    m_viewWest = west;
+    m_viewNorth = north;
+    m_viewEast = east;
     emit boundsChanged(south, west, north, east);
 }
 
 void MapBackend::onMouseMove(double lat, double lon) { emit mouseMoved(lat, lon); }
-void MapBackend::onZoomChanged(int zoom) { emit zoomChanged(zoom); }
+void MapBackend::onZoomChanged(int zoom) { m_currentZoom = zoom; emit zoomChanged(zoom); }
 
 void MapBackend::moveEditingVertex(int idx, double lat, double lon)
 {
@@ -429,7 +529,7 @@ void MapBackend::moveEditingVertex(int idx, double lat, double lon)
     rebuildMidpoints(pts);
     if (!m_editingZoneId.isEmpty()) {
         QVariantList ptsList;
-        for (const auto& p : pts) ptsList.append(QVariantList{p.x(), p.y()});
+        for (const auto& p : pts) ptsList.append(QVariant::fromValue(QVariantList{p.x(), p.y()}));
         m_zoneModel.updateZonePoints(m_editingZoneId, ptsList);
         emit zoneVerticesUpdated(m_editingZoneId, ptsList);
     }
@@ -443,7 +543,7 @@ void MapBackend::deleteEditingVertex(int idx)
     rebuildMidpoints(pts);
     if (!m_editingZoneId.isEmpty()) {
         QVariantList ptsList;
-        for (const auto& p : pts) ptsList.append(QVariantList{p.x(), p.y()});
+        for (const auto& p : pts) ptsList.append(QVariant::fromValue(QVariantList{p.x(), p.y()}));
         m_zoneModel.updateZonePoints(m_editingZoneId, ptsList);
         emit zoneVerticesUpdated(m_editingZoneId, ptsList);
     }
@@ -461,7 +561,7 @@ void MapBackend::insertEditingVertex(int midIdx)
     rebuildMidpoints(pts);
     if (!m_editingZoneId.isEmpty()) {
         QVariantList ptsList;
-        for (const auto& p : pts) ptsList.append(QVariantList{p.x(), p.y()});
+        for (const auto& p : pts) ptsList.append(QVariant::fromValue(QVariantList{p.x(), p.y()}));
         m_zoneModel.updateZonePoints(m_editingZoneId, ptsList);
         emit zoneVerticesUpdated(m_editingZoneId, ptsList);
     }

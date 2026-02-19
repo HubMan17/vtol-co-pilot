@@ -1,0 +1,8 @@
+{
+  "name": "Test Route SPB",
+  "waypoints": [
+    {"id": 1, "lat": 59.940, "lon": 30.320, "altitude": 100, "radius": 50, "action": "FLYTHROUGH"},
+    {"id": 2, "lat": 59.945, "lon": 30.325, "altitude": 120, "radius": 50, "action": "FLYTHROUGH"},
+    {"id": 3, "lat": 59.950, "lon": 30.315, "altitude": 100, "radius": 100, "action": "ORBIT"}
+  ]
+}

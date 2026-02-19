@@ -1,0 +1,6 @@
+<RCC>
+    <qresource prefix="/">
+        <file>qml/FlightMap.qml</file>
+        <file>qml/icons/plane-green.svg</file>
+    </qresource>
+</RCC>

@@ -6,6 +6,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
+# --- Force UTF-8 source/execution charset for MSVC ---
+if(MSVC)
+    add_compile_options(/utf-8)
+endif()
+
 # --- Qt6 ---
 find_package(Qt6 REQUIRED COMPONENTS
     Core
@@ -54,6 +59,7 @@ set(SOURCES
     src/gui/MapBackend.cpp
     src/gui/MapWidget.cpp
     src/gui/MapLibreAdapter.cpp
+    src/gui/MapLegend.cpp
     src/gui/StatusPanel.cpp
     src/gui/Dialogs.cpp
     src/gui/SettlementLoader.cpp

@@ -1,5 +1,6 @@
 #include "MapWidget.h"
 #include "MapLibreAdapter.h"
+#include "MapLegend.h"
 
 #include <QMapLibreWidgets/GLWidget>
 #include <QMapLibre/Map>
@@ -7,6 +8,7 @@
 #include <QMapLibre/Types>
 
 #include <QMouseEvent>
+#include <QKeyEvent>
 #include <QContextMenuEvent>
 #include <QShowEvent>
 #include <QResizeEvent>
@@ -72,10 +74,9 @@ void MapWidget::loadMap()
                 QPointF screenPos = m_glWidget->mapFromGlobal(QCursor::pos());
                 onMouseRelease(c.first, c.second, screenPos, Qt::LeftButton);
             });
-    connect(m_glWidget, &QMapLibre::GLWidget::onMouseDoubleClickEvent,
-            this, [this](QMapLibre::Coordinate c) {
-                onMouseDoubleClick(c.first, c.second);
-            });
+    // NOTE: double-click handled ONLY in eventFilter (not via signal)
+    // to prevent calling onMouseDoubleClick twice and to consume the event
+    // when clicking on zones (preventing GLWidget zoom)
     connect(m_glWidget, &QMapLibre::GLWidget::onMouseMoveEvent,
             this, [this](QMapLibre::Coordinate c) {
                 onMouseMove(c.first, c.second);
@@ -93,6 +94,10 @@ void MapWidget::loadMap()
     m_fpsLabel->setFixedHeight(20);
     m_fpsLabel->adjustSize();
     m_fpsLabel->raise();
+
+    // Legend overlay (bottom-left)
+    m_legend = new MapLegend(&m_backend, this);
+    m_legend->raise();
 
     SPDLOG_INFO("[MapWidget] GLWidget created, waiting for initializeGL...");
 }
@@ -212,15 +217,90 @@ void MapWidget::resizeEvent(QResizeEvent* event)
         m_fpsLabel->adjustSize();
         m_fpsLabel->move(width() - m_fpsLabel->width() - 8, 8);
     }
+    if (m_legend) {
+        // Position in bottom-left corner
+        m_legend->adjustSize();
+        m_legend->move(8, height() - m_legend->height() - 8);
+        m_legend->raise();
+    }
 }
 
 bool MapWidget::eventFilter(QObject* obj, QEvent* event)
 {
     if (obj != m_glWidget) return QWidget::eventFilter(obj, event);
 
+    // ── Escape: exit editing / cancel drawing ──
+    if (event->type() == QEvent::KeyPress) {
+        auto* e = static_cast<QKeyEvent*>(event);
+        if (e->key() == Qt::Key_Escape) {
+            if (m_backend.isEditing()) {
+                m_backend.disableZoneEditing();
+                return true;
+            }
+            if (m_backend.drawingMode()) {
+                m_backend.cancelDrawingSlot();
+                return true;
+            }
+        }
+    }
+
+    // ── Vertex drag: intercept BEFORE GLWidget to prevent map panning ──
+    if (event->type() == QEvent::MouseButtonPress) {
+        auto* e = static_cast<QMouseEvent*>(event);
+        if (e->button() == Qt::LeftButton && m_map && m_backend.isEditing()) {
+            int vertIdx = hitTestEditVertex(e->position());
+            if (vertIdx >= 0) {
+                m_draggingVertexIdx = vertIdx;
+                return true;  // consume — no pan
+            }
+            int midIdx = hitTestEditMidpoint(e->position());
+            if (midIdx >= 0) {
+                m_backend.insertEditingVertex(midIdx);
+                m_draggingVertexIdx = midIdx + 1;
+                return true;
+            }
+            // Click outside vertex/midpoint: check if inside editing zone
+            auto coord = m_map->coordinateForPixel(e->position());
+            if (!m_backend.isPointInZone(coord.first, coord.second)) {
+                m_backend.disableZoneEditing();
+                // fall through — let GLWidget handle the click normally
+            }
+        }
+    }
+
+    if (event->type() == QEvent::MouseMove) {
+        // Vertex dragging
+        if (m_draggingVertexIdx >= 0 && m_map) {
+            auto* e = static_cast<QMouseEvent*>(event);
+            auto coord = m_map->coordinateForPixel(e->position());
+            m_backend.moveEditingVertex(m_draggingVertexIdx, coord.first, coord.second);
+            return true;  // consume — no pan
+        }
+        // Block right-button drag to disable map rotation
+        auto* e = static_cast<QMouseEvent*>(event);
+        if (e->buttons() & Qt::RightButton)
+            return true;
+    }
+
+    if (event->type() == QEvent::MouseButtonRelease) {
+        if (m_draggingVertexIdx >= 0) {
+            m_draggingVertexIdx = -1;
+            return true;
+        }
+    }
+
+    // ── Context menu / vertex delete ──
     if (event->type() == QEvent::ContextMenu) {
         auto* e = static_cast<QContextMenuEvent*>(event);
         if (m_map) {
+            // In editing mode: right-click on vertex → delete it
+            if (m_backend.isEditing()) {
+                int vertIdx = hitTestEditVertex(e->pos().toPointF());
+                if (vertIdx >= 0) {
+                    m_backend.deleteEditingVertex(vertIdx);
+                    return true;
+                }
+            }
             auto c = m_map->coordinateForPixel(e->pos().toPointF());
             m_backend.onContextMenu(c.first, c.second,
                                     e->globalPos().x(), e->globalPos().y());
@@ -228,13 +308,18 @@ bool MapWidget::eventFilter(QObject* obj, QEvent* event)
         return true;
     }
 
+    // ── Double-click (single handler — not via signal, to avoid duplicates) ──
     if (event->type() == QEvent::MouseButtonDblClick) {
         auto* e = static_cast<QMouseEvent*>(event);
         if (m_map && e->button() == Qt::LeftButton) {
             auto coord = m_map->coordinateForPixel(e->position());
+            // Check if we'll handle this (zone hit or drawing mode)
+            bool consumed = m_backend.drawingMode() ||
+                            m_backend.isPointInZone(coord.first, coord.second);
             onMouseDoubleClick(coord.first, coord.second);
+            if (consumed) return true;  // prevent GLWidget zoom on zones
         }
-        return false;  // let GLWidget handle it too (zoom etc.)
+        return false;  // let GLWidget zoom on empty area
     }
 
     return QWidget::eventFilter(obj, event);
@@ -306,6 +391,36 @@ void MapWidget::onMouseMove(double lat, double lon)
         }
     }
     m_backend.onMouseMove(lat, lon);
+}
+
+int MapWidget::hitTestEditVertex(const QPointF& screenPos)
+{
+    auto* model = qobject_cast<SimpleVertexModel*>(m_backend.editingVertexModel());
+    if (!model || !m_map) return -1;
+    auto pts = model->getPoints();
+    constexpr double THR_SQ = VERTEX_HIT_THRESHOLD * VERTEX_HIT_THRESHOLD;
+    for (int i = 0; i < pts.size(); ++i) {
+        QPointF px = m_map->pixelForCoordinate({pts[i].x(), pts[i].y()});
+        double dx = screenPos.x() - px.x();
+        double dy = screenPos.y() - px.y();
+        if (dx * dx + dy * dy < THR_SQ) return i;
+    }
+    return -1;
+}
+
+int MapWidget::hitTestEditMidpoint(const QPointF& screenPos)
+{
+    auto* model = qobject_cast<SimpleVertexModel*>(m_backend.editingMidpointModel());
+    if (!model || !m_map) return -1;
+    auto pts = model->getPoints();
+    constexpr double THR_SQ = VERTEX_HIT_THRESHOLD * VERTEX_HIT_THRESHOLD;
+    for (int i = 0; i < pts.size(); ++i) {
+        QPointF px = m_map->pixelForCoordinate({pts[i].x(), pts[i].y()});
+        double dx = screenPos.x() - px.x();
+        double dy = screenPos.y() - px.y();
+        if (dx * dx + dy * dy < THR_SQ) return i;
+    }
+    return -1;
 }
 
 } // namespace vtol

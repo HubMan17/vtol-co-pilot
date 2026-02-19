@@ -6,6 +6,7 @@
 #include <QString>
 #include <QVector>
 #include <QPointF>
+#include <QTimer>
 
 #include "models/MapModels.h"
 
@@ -124,6 +125,7 @@ public:
 
     // Settlements
     void addSettlementFeatures(const QVariantList& features);
+    void clearSettlements();
 
     // Conflicts / avoidance
     void setRouteConflicts(const QVariantList& conflicts);
@@ -142,6 +144,10 @@ public:
     // Editing mode
     void enableZoneEditing(const QString& zoneId);
     void disableZoneEditing();
+
+    // State queries
+    bool isEditing() const { return !m_editingZoneId.isEmpty(); }
+    bool isPointInZone(double lat, double lon) const { return !hitTestZone(lat, lon).isEmpty(); }
 
     // Property setters
     void setFollowAircraft(bool v);
@@ -189,6 +195,7 @@ signals:
     void leftClickModeChanged();
     void avoidancePathChanged();
     void plannedDirectPathChanged();
+    void zonesChanged();
 
     // QML → C++ communication
     void mapClicked(double lat, double lon);
@@ -261,6 +268,13 @@ private:
     // Avoidance
     QVariantList m_avoidancePath;
     QVariantList m_plannedDirectPath;
+
+    // Viewport bounds (for settlement filtering)
+    double m_viewSouth = 0, m_viewWest = 0, m_viewNorth = 0, m_viewEast = 0;
+    int m_currentZoom = 10;
+
+    // Settlement unload timer
+    QTimer* m_settlementUnloadTimer = nullptr;
 
     // Editing
     QString m_editingZoneId;

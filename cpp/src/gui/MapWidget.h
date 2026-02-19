@@ -12,6 +12,7 @@ namespace QMapLibre { class GLWidget; class Map; }
 namespace vtol {
 
 class MapLibreAdapter;
+class MapLegend;
 
 class MapWidget : public QWidget {
     Q_OBJECT
@@ -47,6 +48,7 @@ private:
     QMapLibre::GLWidget* m_glWidget = nullptr;
     QMapLibre::Map* m_map = nullptr;
     MapLibreAdapter* m_adapter = nullptr;
+    MapLegend* m_legend = nullptr;
     QLabel* m_fpsLabel = nullptr;
     QString m_tileUrl;
     bool m_mapSetupDone = false;
@@ -60,6 +62,12 @@ private:
     QPointF m_pressScreenPos;
     bool m_dragging = false;
     static constexpr double CLICK_THRESHOLD = 5.0;  // pixels
+
+    // Vertex drag (zone editing)
+    int m_draggingVertexIdx = -1;
+    static constexpr double VERTEX_HIT_THRESHOLD = 15.0;  // pixels
+    int hitTestEditVertex(const QPointF& screenPos);
+    int hitTestEditMidpoint(const QPointF& screenPos);
 };
 
 } // namespace vtol
