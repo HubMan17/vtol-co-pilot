@@ -47,6 +47,33 @@ PROJECT_PLAN.md
 .claude/
 config/settings.json
 
+# AI tooling
+.ai-factory.json
+.ai-factory/
+
+# C++ build artifacts & third-party prebuilts
+cpp/third_party/
+cpp/build/
+
+# Windows artifacts
+NUL
+
+# pip artifacts
+=*
+
+# Temp output files
+stderr.txt
+stdout.txt
+run_stderr.txt
+run_stdout.txt
+test_run.bat
+
+# Misc
+cache/
+Scripts/
+Lib/
+logs/
+
 # Temporary files
 *.tmp
 *.temp
