@@ -16,7 +16,12 @@ find_package(Qt6 REQUIRED COMPONENTS
     Positioning
     Location
     Concurrent
+    OpenGLWidgets
 )
+
+# --- QMapLibre (built from source for vcpkg Qt 6.10 compatibility) ---
+set(QMapLibre_DIR "C:/ml/install/lib/cmake/QMapLibre")
+find_package(QMapLibre REQUIRED COMPONENTS Core Widgets)
 
 # --- Eigen3 (system or vcpkg) ---
 find_package(Eigen3 REQUIRED NO_MODULE)
@@ -48,6 +53,7 @@ set(SOURCES
     src/gui/FlightMapCanvas.cpp
     src/gui/MapBackend.cpp
     src/gui/MapWidget.cpp
+    src/gui/MapLibreAdapter.cpp
     src/gui/StatusPanel.cpp
     src/gui/Dialogs.cpp
     src/gui/SettlementLoader.cpp
@@ -76,10 +82,13 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt6::Positioning
     Qt6::Location
     Qt6::Concurrent
+    Qt6::OpenGLWidgets
     Eigen3::Eigen
     MAVSDK::mavsdk
     spdlog::spdlog
     nlohmann_json::nlohmann_json
+    QMapLibre::Core
+    QMapLibre::Widgets
 )
 
 # --- Copy config/data/routes to build dir ---
@@ -94,6 +103,39 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         "$<TARGET_FILE_DIR:${PROJECT_NAME}>/logs"
     COMMENT "Copying config/data/routes to build directory"
 )
+
+# --- Copy MapLibre DLLs ---
+set(_MAPLIBRE_BIN "C:/ml/install/bin")
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${_MAPLIBRE_BIN}/QMapLibre.dll"
+        "${_MAPLIBRE_BIN}/QMapLibreWidgets.dll"
+        "$<TARGET_FILE_DIR:${PROJECT_NAME}>/"
+    COMMENT "Copying MapLibre DLLs..."
+)
+
+# --- Copy MAVSDK DLL ---
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/third_party/mavsdk/Release/bin/mavsdk.dll"
+        "$<TARGET_FILE_DIR:${PROJECT_NAME}>/"
+    COMMENT "Copying MAVSDK DLL..."
+)
+
+# --- Copy vcpkg runtime DLLs (spdlog, fmt, brotli) ---
+set(_VCPKG_BIN "${_VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin")
+file(GLOB _RUNTIME_DLLS
+    "${_VCPKG_BIN}/spdlog.dll"
+    "${_VCPKG_BIN}/fmt.dll"
+    "${_VCPKG_BIN}/brotlidec.dll"
+    "${_VCPKG_BIN}/brotlicommon.dll"
+)
+if(_RUNTIME_DLLS)
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_RUNTIME_DLLS} "$<TARGET_FILE_DIR:${PROJECT_NAME}>/"
+        COMMENT "Copying vcpkg runtime DLLs (spdlog, fmt, brotli)..."
+    )
+endif()
 
 # --- Windows: copy Qt DLLs + QML modules ---
 if(WIN32)

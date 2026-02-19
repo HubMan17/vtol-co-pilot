@@ -23,6 +23,8 @@ public:
         ActionRole, WpIndexRole, WpStateRole
     };
 
+    struct Item { double lat, lon, altitude; QString action, state; };
+
     explicit WaypointListModel(QObject* parent = nullptr) : QAbstractListModel(parent) {}
 
     int rowCount(const QModelIndex& parent = {}) const override { return static_cast<int>(m_items.size()); }
@@ -35,7 +37,6 @@ public:
     const auto& items() const { return m_items; }
 
 private:
-    struct Item { double lat, lon, altitude; QString action, state; };
     QVector<Item> m_items;
 };
 
@@ -48,6 +49,8 @@ class RouteSegmentModel : public QAbstractListModel {
 public:
     enum Roles { FromLatRole = Qt::UserRole + 1, FromLonRole, ToLatRole, ToLonRole, SegStateRole };
 
+    struct Item { double fromLat, fromLon, toLat, toLon; QString state; };
+
     explicit RouteSegmentModel(QObject* parent = nullptr) : QAbstractListModel(parent) {}
 
     int rowCount(const QModelIndex& parent = {}) const override { return static_cast<int>(m_items.size()); }
@@ -59,7 +62,6 @@ public:
     const auto& items() const { return m_items; }
 
 private:
-    struct Item { double fromLat, fromLon, toLat, toLon; QString state; };
     QVector<Item> m_items;
 };
 
@@ -71,6 +73,8 @@ class ZoneListModel : public QAbstractListModel {
     Q_OBJECT
 public:
     enum Roles { ZoneIdRole = Qt::UserRole + 1, ZoneCoordsRole, ZoneNameRole };
+
+    struct Item { QString id; QVariantList points; QString name; };
 
     explicit ZoneListModel(QObject* parent = nullptr) : QAbstractListModel(parent) {}
 
@@ -86,7 +90,6 @@ public:
     const auto& items() const { return m_items; }
 
 private:
-    struct Item { QString id; QVariantList points; QString name; };
     QVector<Item> m_items;
 };
 
@@ -155,6 +158,8 @@ class SettlementCircleModel : public QAbstractListModel {
 public:
     enum Roles { LatRole = Qt::UserRole + 1, LonRole, RadiusRole };
 
+    struct Item { double lat, lon, radius; };
+
     explicit SettlementCircleModel(QObject* parent = nullptr) : QAbstractListModel(parent) {}
 
     int rowCount(const QModelIndex& parent = {}) const override { return static_cast<int>(m_items.size()); }
@@ -169,7 +174,6 @@ public:
     const auto& items() const { return m_items; }
 
 private:
-    struct Item { double lat, lon, radius; };
     QVector<Item> m_items;
     QSet<QString> m_sigs;
 
@@ -185,6 +189,8 @@ class ConflictSegmentModel : public QAbstractListModel {
 public:
     enum Roles { FromLatRole = Qt::UserRole + 1, FromLonRole, ToLatRole, ToLonRole };
 
+    struct Item { double fromLat, fromLon, toLat, toLon; };
+
     explicit ConflictSegmentModel(QObject* parent = nullptr) : QAbstractListModel(parent) {}
 
     int rowCount(const QModelIndex& parent = {}) const override { return static_cast<int>(m_items.size()); }
@@ -197,7 +203,6 @@ public:
     const auto& items() const { return m_items; }
 
 private:
-    struct Item { double fromLat, fromLon, toLat, toLon; };
     QVector<Item> m_items;
 };
 
@@ -209,6 +214,8 @@ class ConflictPointModel : public QAbstractListModel {
     Q_OBJECT
 public:
     enum Roles { LatRole = Qt::UserRole + 1, LonRole, ReasonRole };
+
+    struct Item { double lat, lon; QString reason; };
 
     explicit ConflictPointModel(QObject* parent = nullptr) : QAbstractListModel(parent) {}
 
@@ -223,7 +230,6 @@ public:
     const auto& items() const { return m_items; }
 
 private:
-    struct Item { double lat, lon; QString reason; };
     QVector<Item> m_items;
 };
 
