@@ -270,12 +270,49 @@ void MapBackend::addSettlementFeatures(const QVariantList& features)
     if (!polys.isEmpty()) {
         m_settlementPolyModel.addPolys(polys);
     }
+
+    // Add to unlimited cache (for MapLibreAdapter rendering — survives LRU eviction)
+    for (const auto& f : polys) {
+        auto map = f.toMap();
+        auto coords = map["c"].toList();
+        if (coords.size() < 3) continue;
+
+        auto first = coords[0].toList();
+        if (first.size() < 2) continue;
+        QString sig = QString("p_%1_%2_%3")
+            .arg(first[0].toDouble(), 0, 'f', 4)
+            .arg(first[1].toDouble(), 0, 'f', 4)
+            .arg(coords.size());
+
+        if (m_stlPolyCacheSigs.contains(sig)) continue;
+        m_stlPolyCacheSigs.insert(sig);
+
+        // Pre-compute bbox
+        double minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
+        for (const auto& pt : coords) {
+            auto list = pt.toList();
+            if (list.size() >= 2) {
+                double lat = list[0].toDouble(), lon = list[1].toDouble();
+                minLat = std::min(minLat, lat); maxLat = std::max(maxLat, lat);
+                minLon = std::min(minLon, lon); maxLon = std::max(maxLon, lon);
+            }
+        }
+
+        m_stlPolyCache.append({coords, minLat, minLon, maxLat, maxLon});
+    }
 }
 
 void MapBackend::clearSettlements()
 {
     m_settlementPolyModel.clear();
     m_settlementCircleModel.clear();
+    m_stlPolyCache.clear();
+    m_stlPolyCacheSigs.clear();
+}
+
+void MapBackend::setRenderArea(double s, double w, double n, double e)
+{
+    emit renderAreaChanged(s, w, n, e);
 }
 
 // ═══════════════════════ Conflicts / Avoidance ═══════════════════════

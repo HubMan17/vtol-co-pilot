@@ -45,6 +45,7 @@ private:
     QWidget* buildControls();
     void setupConnections();
     void setupTimer();
+    void applyConfig();
     void enableControls(bool enabled);
 
     // ── Connection ──
@@ -87,7 +88,6 @@ private:
     void onZoneDoubleClicked(const QString& zoneId);
     void onZoneEditingFinished();
     void onZoneVerticesUpdated(const QString& zoneId, const QVariantList& points);
-    void onZoneSettings();
     void onSettings();
 
     // ── Settlements ──
@@ -150,7 +150,6 @@ private:
     QPushButton* m_btnFollow = nullptr;
     QPushButton* m_btnHome = nullptr;
     QPushButton* m_btnDrawZone = nullptr;
-    QPushButton* m_btnZoneSettings = nullptr;
     QPushButton* m_btnSettings = nullptr;
     QPushButton* m_btnWpPrev = nullptr;
     QPushButton* m_btnWpNext = nullptr;

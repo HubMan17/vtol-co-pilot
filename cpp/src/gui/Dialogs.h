@@ -9,6 +9,8 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QGroupBox>
+#include <QListWidget>
+#include <QStackedWidget>
 
 #include "core/Config.h"
 #include "navigation/ZoneManager.h"
@@ -92,43 +94,39 @@ private:
     QPushButton* m_btnOk;
 };
 
-// ─── ZoneSettingsDialog ─────────────────────────────────────────────────
-class ZoneSettingsDialog : public QDialog {
-    Q_OBJECT
-public:
-    explicit ZoneSettingsDialog(const ZoneAvoidanceConfig& config,
-                                QWidget* parent = nullptr);
-
-    ZoneAvoidanceConfig getConfig() const;
-
-private:
-    void setupUi();
-    void onSettlementModeChanged();
-
-    ZoneAvoidanceConfig m_config;
-
-    QComboBox*  m_comboSettlementMode;
-    QSpinBox*   m_spinSettlementAltitude;
-    QLabel*     m_lblSettlementAltitude;
-    QSpinBox*   m_spinSettlementBuffer;
-    QComboBox*  m_comboNoflyMode;
-    QSpinBox*   m_spinNoflyBuffer;
-};
-
-// ─── SettingsDialog ─────────────────────────────────────────────────────
+// ─── SettingsDialog (unified, sidebar navigation) ───────────────────────
 class SettingsDialog : public QDialog {
     Q_OBJECT
 public:
-    explicit SettingsDialog(const GuiConfig& config,
+    enum Page { PageMap = 0, PageZones = 1 };
+
+    explicit SettingsDialog(const AppConfig& config,
+                            Page initialPage = PageMap,
                             QWidget* parent = nullptr);
 
-    GuiConfig getGuiConfig() const;
+    AppConfig getConfig() const;
 
 private:
-    void setupUi();
+    void setupUi(Page initialPage);
+    QWidget* createMapPage();
+    QWidget* createZonesPage();
+    void onSettlementModeChanged();
 
-    GuiConfig m_config;
-    QSpinBox* m_spinTrackLength;
+    AppConfig m_config;
+
+    QListWidget*    m_sidebar = nullptr;
+    QStackedWidget* m_stack   = nullptr;
+
+    // Map page
+    QSpinBox* m_spinTrackLength = nullptr;
+
+    // Zones page
+    QComboBox* m_comboSettlementMode     = nullptr;
+    QSpinBox*  m_spinSettlementAltitude  = nullptr;
+    QLabel*    m_lblSettlementAltitude   = nullptr;
+    QSpinBox*  m_spinSettlementBuffer    = nullptr;
+    QComboBox* m_comboNoflyMode          = nullptr;
+    QSpinBox*  m_spinNoflyBuffer         = nullptr;
 };
 
 } // namespace vtol
