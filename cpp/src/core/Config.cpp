@@ -95,8 +95,12 @@ AppConfig loadConfig(const std::string& path)
             cfg.gui.map_center[0] = g["map_center"][0].get<double>();
             cfg.gui.map_center[1] = g["map_center"][1].get<double>();
         }
-        if (g.contains("map_zoom"))     g["map_zoom"].get_to(cfg.gui.map_zoom);
-        if (g.contains("track_length")) g["track_length"].get_to(cfg.gui.track_length);
+        if (g.contains("map_zoom"))          g["map_zoom"].get_to(cfg.gui.map_zoom);
+        if (g.contains("track_length"))     g["track_length"].get_to(cfg.gui.track_length);
+        if (g.contains("show_track"))       g["show_track"].get_to(cfg.gui.show_track);
+        if (g.contains("show_waypoints"))   g["show_waypoints"].get_to(cfg.gui.show_waypoints);
+        if (g.contains("show_zones"))       g["show_zones"].get_to(cfg.gui.show_zones);
+        if (g.contains("show_settlements")) g["show_settlements"].get_to(cfg.gui.show_settlements);
     }
 
     // --- zone_avoidance ---
@@ -153,9 +157,13 @@ void saveConfig(const AppConfig& cfg, const std::string& path)
     };
 
     data["gui"] = {
-        {"map_center",   {cfg.gui.map_center[0], cfg.gui.map_center[1]}},
-        {"map_zoom",     cfg.gui.map_zoom},
-        {"track_length", cfg.gui.track_length}
+        {"map_center",       {cfg.gui.map_center[0], cfg.gui.map_center[1]}},
+        {"map_zoom",         cfg.gui.map_zoom},
+        {"track_length",     cfg.gui.track_length},
+        {"show_track",       cfg.gui.show_track},
+        {"show_waypoints",   cfg.gui.show_waypoints},
+        {"show_zones",       cfg.gui.show_zones},
+        {"show_settlements", cfg.gui.show_settlements}
     };
 
     data["zone_avoidance"] = {

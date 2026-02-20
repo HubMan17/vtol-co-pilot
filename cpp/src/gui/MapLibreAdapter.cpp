@@ -49,6 +49,12 @@ MapLibreAdapter::MapLibreAdapter(QMapLibre::Map* map, MapBackend* backend, QObje
     updateDrawingSource();
     updateEditingSources();
 
+    // Apply current layer visibility from backend (signals fired before adapter existed)
+    onShowTrackChanged();
+    onShowWaypointsChanged();
+    onShowZonesChanged();
+    onShowSettlementsChanged();
+
     SPDLOG_INFO("[MapLibreAdapter] initialized with {} sources", 17);
 }
 

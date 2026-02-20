@@ -49,6 +49,7 @@ MainWindow::MainWindow(AppConfig config, QWidget* parent)
     setupUi();
     setupConnections();
     setupTimer();
+    applyConfig();
 
     theme::applyDarkTitlebar(static_cast<quintptr>(winId()));
     showMaximized();
@@ -78,6 +79,13 @@ void MainWindow::setupUi()
     // ── LEFT: Map ──
     m_mapWidget = new MapWidget(this);
     m_mapWidget->setMinimumWidth(400);
+
+    // Apply saved layer visibility BEFORE loadMap (so MapLegend reads correct state)
+    auto* be = m_mapWidget->backend();
+    be->setShowTrack(m_config.gui.show_track);
+    be->setShowWaypoints(m_config.gui.show_waypoints);
+    be->setShowZones(m_config.gui.show_zones);
+    be->setShowSettlements(m_config.gui.show_settlements);
 
     // Start tile proxy BEFORE loading QML so Plugin gets the URL at creation time
     int port = m_tileProxy.startProxy();
@@ -298,29 +306,9 @@ QWidget* MainWindow::buildControls()
         }
         return QIcon(pm);
     };
-    // Hamburger menu icon — painted
-    auto makeMenuIcon = [](int sz, const QColor& c) {
-        QPixmap pm(sz, sz);
-        pm.fill(Qt::transparent);
-        QPainter p(&pm);
-        p.setRenderHint(QPainter::Antialiasing);
-        p.setPen(QPen(c, 1.5, Qt::SolidLine, Qt::RoundCap));
-        double x1 = sz * 0.22, x2 = sz * 0.78;
-        p.drawLine(QPointF(x1, sz * 0.30), QPointF(x2, sz * 0.30));
-        p.drawLine(QPointF(x1, sz * 0.50), QPointF(x2, sz * 0.50));
-        p.drawLine(QPointF(x1, sz * 0.70), QPointF(x2, sz * 0.70));
-        return QIcon(pm);
-    };
-
-    m_btnZoneSettings = new QPushButton();
-    m_btnZoneSettings->setIcon(makeGearIcon(18, QColor(theme::TEXT_SECONDARY)));
-    m_btnZoneSettings->setIconSize(QSize(18, 18));
-    m_btnZoneSettings->setFixedSize(30, 30);
-    m_btnZoneSettings->setToolTip(QStringLiteral("Настройки обхода зон"));
-    r2->addWidget(m_btnZoneSettings);
 
     m_btnSettings = new QPushButton();
-    m_btnSettings->setIcon(makeMenuIcon(18, QColor(theme::TEXT_SECONDARY)));
+    m_btnSettings->setIcon(makeGearIcon(18, QColor(theme::TEXT_SECONDARY)));
     m_btnSettings->setIconSize(QSize(18, 18));
     m_btnSettings->setFixedSize(30, 30);
     m_btnSettings->setToolTip(QStringLiteral("Настройки"));
@@ -398,7 +386,6 @@ void MainWindow::setupConnections()
     connect(m_btnLoadRoute, &QPushButton::clicked, this, &MainWindow::onLoadRoute);
     connect(m_btnClearTrack, &QPushButton::clicked, this, &MainWindow::onClearTrack);
     connect(m_btnDrawZone, &QPushButton::clicked, this, &MainWindow::onDrawZoneToggle);
-    connect(m_btnZoneSettings, &QPushButton::clicked, this, &MainWindow::onZoneSettings);
     connect(m_btnSettings, &QPushButton::clicked, this, &MainWindow::onSettings);
     connect(m_btnNav, &QPushButton::clicked, this, &MainWindow::onNavToggle);
     connect(m_btnFollow, &QPushButton::clicked, this, &MainWindow::onFollowToggle);
@@ -461,6 +448,24 @@ void MainWindow::setupConnections()
     connect(&m_autopilot, &AutopilotManager::waypointReached,
             this, &MainWindow::onWaypointReached);
 
+    // Layer visibility → save config
+    connect(be, &MapBackend::showTrackChanged, this, [this] {
+        m_config.gui.show_track = m_mapWidget->backend()->showTrack();
+        saveConfig(m_config);
+    });
+    connect(be, &MapBackend::showWaypointsChanged, this, [this] {
+        m_config.gui.show_waypoints = m_mapWidget->backend()->showWaypoints();
+        saveConfig(m_config);
+    });
+    connect(be, &MapBackend::showZonesChanged, this, [this] {
+        m_config.gui.show_zones = m_mapWidget->backend()->showZones();
+        saveConfig(m_config);
+    });
+    connect(be, &MapBackend::showSettlementsChanged, this, [this] {
+        m_config.gui.show_settlements = m_mapWidget->backend()->showSettlements();
+        saveConfig(m_config);
+    });
+
     // Zones loaded deferred via QTimer::singleShot in constructor
 }
 
@@ -471,6 +476,15 @@ void MainWindow::setupTimer()
     m_updateTimer->start(100);
 
     // No demo data — aircraft/waypoints appear on connection or user actions
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+//  Apply saved config to UI
+// ═════════════════════════════════════════════════════════════════════════
+
+void MainWindow::applyConfig()
+{
+    m_mapWidget->backend()->setTrackMaxLength(m_config.gui.track_length);
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -1026,27 +1040,22 @@ void MainWindow::onZoneVerticesUpdated(const QString& zoneId, const QVariantList
     m_zoneManager.updateZonePoints(zoneId.toStdString(), poly);
 }
 
-void MainWindow::onZoneSettings()
-{
-    ZoneSettingsDialog dialog(m_config.zone_avoidance, this);
-    if (dialog.exec() != QDialog::Accepted) return;
-
-    m_config.zone_avoidance = dialog.getConfig();
-    m_zoneChecker.updateConfig(m_config.zone_avoidance);
-    saveConfig(m_config);
-    m_autopilot.resetZoneAvoidance();
-    checkRouteConflicts();
-    statusBar()->showMessage(QStringLiteral("Настройки обхода зон сохранены"));
-}
-
 void MainWindow::onSettings()
 {
-    SettingsDialog dialog(m_config.gui, this);
+    SettingsDialog dialog(m_config, SettingsDialog::PageMap, this);
     if (dialog.exec() != QDialog::Accepted) return;
 
-    m_config.gui = dialog.getGuiConfig();
+    m_config = dialog.getConfig();
     saveConfig(m_config);
+
+    // Apply map settings
     m_mapWidget->backend()->setTrackMaxLength(m_config.gui.track_length);
+
+    // Apply zone settings
+    m_zoneChecker.updateConfig(m_config.zone_avoidance);
+    m_autopilot.resetZoneAvoidance();
+    checkRouteConflicts();
+
     statusBar()->showMessage(QStringLiteral("Настройки сохранены"));
 }
 

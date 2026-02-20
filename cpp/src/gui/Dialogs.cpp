@@ -314,25 +314,118 @@ ZonePropertiesDialog::Result ZonePropertiesDialog::result() const
 }
 
 // ═════════════════════════════════════════════════════════════════════════
-//  ZoneSettingsDialog
+//  SettingsDialog (unified, sidebar navigation)
 // ═════════════════════════════════════════════════════════════════════════
 
-ZoneSettingsDialog::ZoneSettingsDialog(const ZoneAvoidanceConfig& config,
-                                       QWidget* parent)
+SettingsDialog::SettingsDialog(const AppConfig& config, Page initialPage,
+                               QWidget* parent)
     : QDialog(parent), m_config(config)
 {
-    setupUi();
+    setupUi(initialPage);
     theme::applyDarkTitlebar(static_cast<quintptr>(winId()));
 }
 
-void ZoneSettingsDialog::setupUi()
+void SettingsDialog::setupUi(Page initialPage)
 {
-    setWindowTitle(QStringLiteral("Настройки обхода зон"));
-    setMinimumWidth(380);
+    setWindowTitle(QStringLiteral("Настройки"));
+    setMinimumSize(520, 360);
+    resize(520, 360);
 
-    auto* layout = new QVBoxLayout(this);
+    auto* root = new QVBoxLayout(this);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(0);
+
+    // ── Body: sidebar + stack ──
+    auto* body = new QHBoxLayout;
+    body->setContentsMargins(0, 0, 0, 0);
+    body->setSpacing(0);
+
+    m_sidebar = new QListWidget;
+    m_sidebar->setFixedWidth(180);
+    m_sidebar->setFrameShape(QFrame::NoFrame);
+    m_sidebar->setStyleSheet(QStringLiteral(
+        "QListWidget { background-color: %1; border-right: 1px solid %2; "
+        "padding: 8px 0; outline: none; }"
+        "QListWidget::item { color: %3; padding: 10px 16px; border: none; "
+        "font-size: 13px; font-weight: 500; }"
+        "QListWidget::item:selected { background-color: %4; color: %5; "
+        "border-left: 3px solid %6; padding-left: 13px; }"
+        "QListWidget::item:hover:!selected { background-color: %7; }")
+        .arg(theme::BG_SIDEBAR, theme::BORDER, theme::TEXT_SECONDARY,
+             theme::BG_HOVER, theme::TEXT_PRIMARY, theme::PRIMARY,
+             theme::BG_ELEVATED));
+
+    m_sidebar->addItem(QStringLiteral("Карта"));
+    m_sidebar->addItem(QStringLiteral("Зоны"));
+
+    m_stack = new QStackedWidget;
+    m_stack->setStyleSheet(QStringLiteral(
+        "QStackedWidget { background-color: %1; }").arg(theme::BG_CARD));
+    m_stack->addWidget(createMapPage());
+    m_stack->addWidget(createZonesPage());
+
+    connect(m_sidebar, &QListWidget::currentRowChanged,
+            m_stack, &QStackedWidget::setCurrentIndex);
+
+    body->addWidget(m_sidebar);
+    body->addWidget(m_stack, 1);
+    root->addLayout(body, 1);
+
+    // ── Footer separator + buttons ──
+    auto* sep = new QFrame;
+    sep->setFixedHeight(1);
+    sep->setStyleSheet(QStringLiteral("background-color: %1;").arg(theme::BORDER));
+    root->addWidget(sep);
+
+    auto* footer = new QHBoxLayout;
+    footer->setContentsMargins(16, 10, 16, 10);
+    footer->setSpacing(8);
+
+    auto* btnCancel = makeCancelButton();
+    connect(btnCancel, &QPushButton::clicked, this, &QDialog::reject);
+    footer->addWidget(btnCancel);
+
+    footer->addStretch();
+
+    auto* btnOk = makeOkButton(QStringLiteral("Сохранить"));
+    connect(btnOk, &QPushButton::clicked, this, &QDialog::accept);
+    footer->addWidget(btnOk);
+
+    root->addLayout(footer);
+
+    // Select initial page
+    m_sidebar->setCurrentRow(static_cast<int>(initialPage));
+}
+
+QWidget* SettingsDialog::createMapPage()
+{
+    auto* page = new QWidget;
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(20, 20, 20, 20);
     layout->setSpacing(12);
-    layout->setContentsMargins(16, 16, 16, 16);
+
+    auto* mapGroup = new QGroupBox(QStringLiteral("Карта"));
+    auto* ml = new QFormLayout(mapGroup);
+    ml->setSpacing(8);
+
+    m_spinTrackLength = new QSpinBox;
+    m_spinTrackLength->setRange(100, 200000);
+    m_spinTrackLength->setSingleStep(100);
+    m_spinTrackLength->setValue(m_config.gui.track_length);
+    m_spinTrackLength->setSuffix(QStringLiteral(" точек"));
+    ml->addRow(QStringLiteral("Длина трека:"), m_spinTrackLength);
+
+    layout->addWidget(mapGroup);
+    layout->addStretch();
+    return page;
+}
+
+QWidget* SettingsDialog::createZonesPage()
+{
+    auto* page = new QWidget;
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(20, 20, 20, 20);
+    layout->setSpacing(12);
 
     // ── Settlements ──
     auto* settlementGroup = new QGroupBox(QStringLiteral("Населённые пункты"));
@@ -344,7 +437,8 @@ void ZoneSettingsDialog::setupUi()
     m_comboSettlementMode->addItem(QStringLiteral("Всегда избегать"),        QStringLiteral("always"));
     m_comboSettlementMode->addItem(QStringLiteral("Ниже заданной высоты"),   QStringLiteral("below_altitude"));
     {
-        int idx = m_comboSettlementMode->findData(QString::fromStdString(m_config.settlement_mode));
+        int idx = m_comboSettlementMode->findData(
+            QString::fromStdString(m_config.zone_avoidance.settlement_mode));
         if (idx >= 0) m_comboSettlementMode->setCurrentIndex(idx);
     }
     connect(m_comboSettlementMode, qOverload<int>(&QComboBox::currentIndexChanged),
@@ -354,14 +448,16 @@ void ZoneSettingsDialog::setupUi()
     m_lblSettlementAltitude = new QLabel(QStringLiteral("Мин. высота:"));
     m_spinSettlementAltitude = new QSpinBox;
     m_spinSettlementAltitude->setRange(10, 5000);
-    m_spinSettlementAltitude->setValue(static_cast<int>(m_config.settlement_min_altitude));
+    m_spinSettlementAltitude->setValue(
+        static_cast<int>(m_config.zone_avoidance.settlement_min_altitude));
     m_spinSettlementAltitude->setSuffix(QStringLiteral(" м"));
     sl->addRow(m_lblSettlementAltitude, m_spinSettlementAltitude);
 
     m_spinSettlementBuffer = new QSpinBox;
     m_spinSettlementBuffer->setRange(0, 5000);
     m_spinSettlementBuffer->setSingleStep(50);
-    m_spinSettlementBuffer->setValue(static_cast<int>(m_config.settlement_buffer));
+    m_spinSettlementBuffer->setValue(
+        static_cast<int>(m_config.zone_avoidance.settlement_buffer));
     m_spinSettlementBuffer->setSuffix(QStringLiteral(" м"));
     sl->addRow(QStringLiteral("Буфер:"), m_spinSettlementBuffer);
 
@@ -377,7 +473,8 @@ void ZoneSettingsDialog::setupUi()
     m_comboNoflyMode->addItem(QStringLiteral("Всегда избегать"),        QStringLiteral("always"));
     m_comboNoflyMode->addItem(QStringLiteral("Ниже высоты зоны"),      QStringLiteral("below_altitude"));
     {
-        int idx = m_comboNoflyMode->findData(QString::fromStdString(m_config.nofly_mode));
+        int idx = m_comboNoflyMode->findData(
+            QString::fromStdString(m_config.zone_avoidance.nofly_mode));
         if (idx >= 0) m_comboNoflyMode->setCurrentIndex(idx);
     }
     nl->addRow(QStringLiteral("Режим:"), m_comboNoflyMode);
@@ -385,91 +482,36 @@ void ZoneSettingsDialog::setupUi()
     m_spinNoflyBuffer = new QSpinBox;
     m_spinNoflyBuffer->setRange(0, 5000);
     m_spinNoflyBuffer->setSingleStep(50);
-    m_spinNoflyBuffer->setValue(static_cast<int>(m_config.nofly_buffer));
+    m_spinNoflyBuffer->setValue(
+        static_cast<int>(m_config.zone_avoidance.nofly_buffer));
     m_spinNoflyBuffer->setSuffix(QStringLiteral(" м"));
     nl->addRow(QStringLiteral("Буфер:"), m_spinNoflyBuffer);
 
     layout->addWidget(noflyGroup);
-
-    // ── Buttons ──
-    auto* btnCancel = makeCancelButton();
-    connect(btnCancel, &QPushButton::clicked, this, &QDialog::reject);
-
-    auto* btnOk = makeOkButton(QStringLiteral("Сохранить"));
-    connect(btnOk, &QPushButton::clicked, this, &QDialog::accept);
-
-    layout->addLayout(buttonRow(btnCancel, btnOk));
+    layout->addStretch();
 
     onSettlementModeChanged();
+    return page;
 }
 
-void ZoneSettingsDialog::onSettlementModeChanged()
+void SettingsDialog::onSettlementModeChanged()
 {
     bool isAlt = m_comboSettlementMode->currentData().toString() == "below_altitude";
     m_spinSettlementAltitude->setVisible(isAlt);
     m_lblSettlementAltitude->setVisible(isAlt);
-    adjustSize();
 }
 
-ZoneAvoidanceConfig ZoneSettingsDialog::getConfig() const
+AppConfig SettingsDialog::getConfig() const
 {
-    ZoneAvoidanceConfig cfg;
-    cfg.settlement_mode = m_comboSettlementMode->currentData().toString().toStdString();
-    cfg.settlement_min_altitude = m_spinSettlementAltitude->value();
-    cfg.settlement_buffer = m_spinSettlementBuffer->value();
-    cfg.nofly_mode = m_comboNoflyMode->currentData().toString().toStdString();
-    cfg.nofly_buffer = m_spinNoflyBuffer->value();
-    return cfg;
-}
-
-// ═════════════════════════════════════════════════════════════════════════
-//  SettingsDialog
-// ═════════════════════════════════════════════════════════════════════════
-
-SettingsDialog::SettingsDialog(const GuiConfig& config, QWidget* parent)
-    : QDialog(parent), m_config(config)
-{
-    setupUi();
-    theme::applyDarkTitlebar(static_cast<quintptr>(winId()));
-}
-
-void SettingsDialog::setupUi()
-{
-    setWindowTitle(QStringLiteral("Настройки"));
-    setMinimumWidth(360);
-
-    auto* layout = new QVBoxLayout(this);
-    layout->setSpacing(12);
-    layout->setContentsMargins(16, 16, 16, 16);
-
-    // ── Map ──
-    auto* mapGroup = new QGroupBox(QStringLiteral("Карта"));
-    auto* ml = new QFormLayout(mapGroup);
-    ml->setSpacing(8);
-
-    m_spinTrackLength = new QSpinBox;
-    m_spinTrackLength->setRange(100, 200000);
-    m_spinTrackLength->setSingleStep(100);
-    m_spinTrackLength->setValue(m_config.track_length);
-    m_spinTrackLength->setSuffix(QStringLiteral(" точек"));
-    ml->addRow(QStringLiteral("Длина трека:"), m_spinTrackLength);
-
-    layout->addWidget(mapGroup);
-
-    // ── Buttons ──
-    auto* btnCancel = makeCancelButton();
-    connect(btnCancel, &QPushButton::clicked, this, &QDialog::reject);
-
-    auto* btnOk = makeOkButton(QStringLiteral("Сохранить"));
-    connect(btnOk, &QPushButton::clicked, this, &QDialog::accept);
-
-    layout->addLayout(buttonRow(btnCancel, btnOk));
-}
-
-GuiConfig SettingsDialog::getGuiConfig() const
-{
-    GuiConfig cfg = m_config;
-    cfg.track_length = m_spinTrackLength->value();
+    AppConfig cfg = m_config;
+    cfg.gui.track_length = m_spinTrackLength->value();
+    cfg.zone_avoidance.settlement_mode =
+        m_comboSettlementMode->currentData().toString().toStdString();
+    cfg.zone_avoidance.settlement_min_altitude = m_spinSettlementAltitude->value();
+    cfg.zone_avoidance.settlement_buffer = m_spinSettlementBuffer->value();
+    cfg.zone_avoidance.nofly_mode =
+        m_comboNoflyMode->currentData().toString().toStdString();
+    cfg.zone_avoidance.nofly_buffer = m_spinNoflyBuffer->value();
     return cfg;
 }
 

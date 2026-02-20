@@ -47,6 +47,10 @@ struct GuiConfig {
     std::array<double, 2> map_center = {55.751, 37.618};
     int map_zoom = 10;
     int track_length = 9999;
+    bool show_track = true;
+    bool show_waypoints = true;
+    bool show_zones = true;
+    bool show_settlements = true;
 };
 
 struct AppConfig {
