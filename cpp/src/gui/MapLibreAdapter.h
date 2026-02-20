@@ -4,6 +4,7 @@
 #include <QVariantMap>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QTimer>
 
 namespace QMapLibre { class Map; }
 
@@ -33,6 +34,11 @@ private slots:
     void updateConflictSources();
     void updateEditingSources();
 
+    // --- Viewport culling ---
+    void onViewportChanged(double south, double west, double north, double east);
+    void applyViewportCulling();
+    void updateRenderAreaBoundary();
+
     // --- Visibility ---
     void onShowTrackChanged();
     void onShowWaypointsChanged();
@@ -50,6 +56,7 @@ private:
 
     // --- Helpers ---
     void setSourceGeoJson(const QString& sourceId, const QJsonObject& geojson);
+    bool bboxIntersectsRenderArea(double minLat, double minLon, double maxLat, double maxLon) const;
     static QJsonObject makePointFeature(double lat, double lon, const QJsonObject& props = {});
     static QJsonObject makeLineFeature(const QJsonArray& coords, const QJsonObject& props = {});
     static QJsonObject makePolygonFeature(const QJsonArray& ring, const QJsonObject& props = {});
@@ -61,6 +68,12 @@ private:
 
     // Track: incremental append cache
     QJsonArray m_trackCoords;
+
+    // Viewport culling — render area (shrunk viewport)
+    double m_renderSouth = 0, m_renderWest = 0, m_renderNorth = 0, m_renderEast = 0;
+    bool m_hasRenderArea = false;
+    static constexpr double RENDER_AREA_MARGIN = 0.15;  // 15% inset from each edge
+    QTimer* m_cullDebounce = nullptr;
 };
 
 } // namespace vtol

@@ -20,6 +20,11 @@ namespace vtol {
 MapLibreAdapter::MapLibreAdapter(QMapLibre::Map* map, MapBackend* backend, QObject* parent)
     : QObject(parent), m_map(map), m_backend(backend)
 {
+    m_cullDebounce = new QTimer(this);
+    m_cullDebounce->setSingleShot(true);
+    m_cullDebounce->setInterval(150);
+    connect(m_cullDebounce, &QTimer::timeout, this, &MapLibreAdapter::applyViewportCulling);
+
     addAllSources();
     addAllLayers();
     addAircraftImage();
@@ -158,6 +163,7 @@ void MapLibreAdapter::addAllSources()
     addGeoJsonSource("nav-line");
     addGeoJsonSource("stl-polys");
     addGeoJsonSource("stl-circles");
+    addGeoJsonSource("render-area");
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -215,6 +221,9 @@ void MapLibreAdapter::addAllLayers()
         params["source"] = source;
         m_map->addLayer(id, params);
     };
+
+    // --- Render area boundary (red dashed rectangle showing culling bounds) ---
+    addLine("render-area-border", "render-area", "#FF2222", 2.0, {8.0, 4.0});
 
     // --- Settlement polygons (red) ---
     addFill("stl-poly-fill", "stl-polys", "#CC0000", 0.18);
@@ -518,6 +527,10 @@ void MapLibreAdapter::connectSignals()
     // Zones (direct signal — bypasses model signal chain for reliability)
     connect(m_backend, &MapBackend::zonesChanged, this, &MapLibreAdapter::updateZoneSources);
 
+    // Viewport culling — recompute render area on camera change
+    connect(m_backend, &MapBackend::boundsChanged,
+            this, &MapLibreAdapter::onViewportChanged);
+
     // Visibility toggles
     connect(m_backend, &MapBackend::showTrackChanged, this, &MapLibreAdapter::onShowTrackChanged);
     connect(m_backend, &MapBackend::showWaypointsChanged, this, &MapLibreAdapter::onShowWaypointsChanged);
@@ -541,10 +554,14 @@ void MapLibreAdapter::connectSignals()
                  this, &MapLibreAdapter::updateWaypointSources);
     connectModel(qobject_cast<QAbstractItemModel*>(m_backend->zoneModel()),
                  this, &MapLibreAdapter::updateZoneSources);
-    connectModel(qobject_cast<QAbstractItemModel*>(m_backend->settlementPolyModel()),
-                 this, &MapLibreAdapter::updateSettlementSources);
-    connectModel(qobject_cast<QAbstractItemModel*>(m_backend->settlementCircleModel()),
-                 this, &MapLibreAdapter::updateSettlementSources);
+    // Settlement models → trigger viewport culling (reads from unlimited cache, not model)
+    auto triggerSettlementCull = [this](auto&&...) { m_cullDebounce->start(); };
+    auto* stlPolyModel = qobject_cast<QAbstractItemModel*>(m_backend->settlementPolyModel());
+    auto* stlCircleModel = qobject_cast<QAbstractItemModel*>(m_backend->settlementCircleModel());
+    connect(stlPolyModel, &QAbstractItemModel::rowsInserted, this, triggerSettlementCull);
+    connect(stlPolyModel, &QAbstractItemModel::modelReset, this, triggerSettlementCull);
+    connect(stlCircleModel, &QAbstractItemModel::rowsInserted, this, triggerSettlementCull);
+    connect(stlCircleModel, &QAbstractItemModel::modelReset, this, triggerSettlementCull);
     connectModel(qobject_cast<QAbstractItemModel*>(m_backend->conflictModel()),
                  this, &MapLibreAdapter::updateConflictSources);
     connectModel(qobject_cast<QAbstractItemModel*>(m_backend->conflictPointModel()),
@@ -755,25 +772,40 @@ void MapLibreAdapter::updateWaypointSources()
 
 void MapLibreAdapter::updateZoneSources()
 {
+    // Skip GeoJSON rebuild when zoom is outside visibility range (opacity=0)
+    int zoom = m_backend->currentZoom();
+    if (zoom < 11 || zoom > 16) {
+        setSourceGeoJson("zones", emptyFeatureCollection());
+        return;
+    }
+
     auto* model = qobject_cast<ZoneListModel*>(m_backend->zoneModel());
     QJsonObject fc = emptyFeatureCollection();
     QJsonArray features;
 
+    int totalZones = 0, visibleZones = 0;
     if (model) {
         const auto& items = model->items();
-        SPDLOG_INFO("[MapLibreAdapter] updateZoneSources: {} zones in model", items.size());
+        totalZones = static_cast<int>(items.size());
         for (const auto& zone : items) {
             QJsonArray ring;
+            double minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
             for (const auto& pt : zone.points) {
                 auto list = pt.toList();
                 if (list.size() >= 2) {
                     double lat = list[0].toDouble();
                     double lon = list[1].toDouble();
                     ring.append(coord(lat, lon));
+                    minLat = std::min(minLat, lat); maxLat = std::max(maxLat, lat);
+                    minLon = std::min(minLon, lon); maxLon = std::max(maxLon, lon);
                 }
             }
             // Close the ring
             if (ring.size() >= 3) {
+                // Viewport culling: skip zones outside render area
+                if (!bboxIntersectsRenderArea(minLat, minLon, maxLat, maxLon))
+                    continue;
+
                 ring.append(ring[0]);
                 QJsonObject props;
                 props["id"] = zone.id;
@@ -803,68 +835,56 @@ void MapLibreAdapter::updateZoneSources()
                 }
 
                 features.append(makePolygonFeature(ring, props));
-                SPDLOG_INFO("[MapLibreAdapter] Zone '{}' ({}): {} vertices",
-                             zone.name.toStdString(), zone.id.toStdString(), ring.size());
-            } else {
-                SPDLOG_WARN("[MapLibreAdapter] Zone '{}' skipped: only {} points (raw pts={})",
-                             zone.name.toStdString(), ring.size(), zone.points.size());
+                ++visibleZones;
             }
         }
-    } else {
-        SPDLOG_WARN("[MapLibreAdapter] zoneModel cast failed!");
     }
 
     fc["features"] = features;
-
-    // Log the actual GeoJSON being sent
-    QByteArray jsonBytes = QJsonDocument(fc).toJson(QJsonDocument::Compact);
-    SPDLOG_INFO("[MapLibreAdapter] zones GeoJSON: {} features, {} bytes, sourceExists={}",
-                 features.size(), jsonBytes.size(), m_map->sourceExists("zones"));
-    if (jsonBytes.size() < 2000)
-        SPDLOG_INFO("[MapLibreAdapter] zones JSON: {}", jsonBytes.toStdString());
+    SPDLOG_INFO("[MapLibreAdapter] viewport culling: {}/{} zones visible", visibleZones, totalZones);
 
     setSourceGeoJson("zones", fc);
 }
 
 void MapLibreAdapter::updateSettlementSources()
 {
-    auto* polyModel = qobject_cast<SettlementPolyModel*>(m_backend->settlementPolyModel());
-    auto* circleModel = qobject_cast<SettlementCircleModel*>(m_backend->settlementCircleModel());
-
-    // Polygons
-    QJsonObject polyFc = emptyFeatureCollection();
-    if (polyModel) {
-        const auto& items = polyModel->items();
-        QJsonArray features;
-        for (const auto& poly : items) {
-            QJsonArray ring;
-            for (const auto& pt : poly) {
-                auto list = pt.toList();
-                if (list.size() >= 2)
-                    ring.append(coord(list[0].toDouble(), list[1].toDouble()));
-            }
-            if (ring.size() >= 3) {
-                ring.append(ring[0]);
-                features.append(makePolygonFeature(ring));
-            }
-        }
-        polyFc["features"] = features;
+    // Skip GeoJSON rebuild when zoom is outside visibility range (opacity=0)
+    int zoom = m_backend->currentZoom();
+    if (zoom < 11 || zoom > 16) {
+        setSourceGeoJson("stl-polys", emptyFeatureCollection());
+        setSourceGeoJson("stl-circles", emptyFeatureCollection());
+        return;
     }
+
+    // Read from unlimited cache (survives LRU eviction in SettlementPolyModel)
+    const auto& cache = m_backend->settlementPolyCache();
+    int totalPolys = cache.size(), visiblePolys = 0;
+
+    QJsonObject polyFc = emptyFeatureCollection();
+    QJsonArray features;
+    for (const auto& item : cache) {
+        if (!bboxIntersectsRenderArea(item.minLat, item.minLon, item.maxLat, item.maxLon))
+            continue;
+        QJsonArray ring;
+        for (const auto& pt : item.coords) {
+            auto list = pt.toList();
+            if (list.size() >= 2)
+                ring.append(coord(list[0].toDouble(), list[1].toDouble()));
+        }
+        if (ring.size() >= 3) {
+            ring.append(ring[0]);
+            features.append(makePolygonFeature(ring));
+            ++visiblePolys;
+        }
+    }
+    polyFc["features"] = features;
     setSourceGeoJson("stl-polys", polyFc);
 
-    // Circles (as points — MapLibre renders them with circle layer)
-    QJsonObject circleFc = emptyFeatureCollection();
-    if (circleModel) {
-        const auto& items = circleModel->items();
-        QJsonArray features;
-        for (const auto& item : items) {
-            QJsonObject props;
-            props["radius"] = item.radius;
-            features.append(makePointFeature(item.lat, item.lon, props));
-        }
-        circleFc["features"] = features;
-    }
-    setSourceGeoJson("stl-circles", circleFc);
+    // stl-circles: empty (nodes are converted to polygons in addSettlementFeatures)
+    setSourceGeoJson("stl-circles", emptyFeatureCollection());
+
+    SPDLOG_INFO("[MapLibreAdapter] viewport culling: {}/{} stl-polys visible",
+                 visiblePolys, totalPolys);
 }
 
 void MapLibreAdapter::updateConflictSources()
@@ -934,6 +954,55 @@ void MapLibreAdapter::updateEditingSources()
         midFc["features"] = features;
     }
     setSourceGeoJson("edit-midpoints", midFc);
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Viewport culling
+// ═══════════════════════════════════════════════════════════
+
+bool MapLibreAdapter::bboxIntersectsRenderArea(double minLat, double minLon,
+                                                double maxLat, double maxLon) const
+{
+    if (!m_hasRenderArea) return true;  // before first bounds — show everything
+    return !(maxLat < m_renderSouth || minLat > m_renderNorth ||
+             maxLon < m_renderWest  || minLon > m_renderEast);
+}
+
+void MapLibreAdapter::onViewportChanged(double south, double west, double north, double east)
+{
+    double dLat = (north - south) * RENDER_AREA_MARGIN;
+    double dLon = (east - west) * RENDER_AREA_MARGIN;
+    m_renderSouth = south + dLat;
+    m_renderWest  = west + dLon;
+    m_renderNorth = north - dLat;
+    m_renderEast  = east - dLon;
+    m_hasRenderArea = true;
+    m_cullDebounce->start();
+}
+
+void MapLibreAdapter::applyViewportCulling()
+{
+    updateZoneSources();
+    updateSettlementSources();
+    updateRenderAreaBoundary();
+    m_backend->setRenderArea(m_renderSouth, m_renderWest, m_renderNorth, m_renderEast);
+}
+
+void MapLibreAdapter::updateRenderAreaBoundary()
+{
+    QJsonObject fc = emptyFeatureCollection();
+    if (m_hasRenderArea) {
+        QJsonArray ring;
+        ring.append(coord(m_renderSouth, m_renderWest));  // SW
+        ring.append(coord(m_renderNorth, m_renderWest));  // NW
+        ring.append(coord(m_renderNorth, m_renderEast));  // NE
+        ring.append(coord(m_renderSouth, m_renderEast));  // SE
+        ring.append(coord(m_renderSouth, m_renderWest));  // close
+        QJsonArray features;
+        features.append(makePolygonFeature(ring));
+        fc["features"] = features;
+    }
+    setSourceGeoJson("render-area", fc);
 }
 
 // ═══════════════════════════════════════════════════════════

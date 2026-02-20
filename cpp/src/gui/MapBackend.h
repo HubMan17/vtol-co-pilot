@@ -12,6 +12,12 @@
 
 namespace vtol {
 
+/// Pre-computed settlement polygon for unlimited cache (render from render area)
+struct SettlementCacheItem {
+    QVariantList coords;   // [[lat,lon], ...]
+    double minLat, minLon, maxLat, maxLon;  // pre-computed AABB
+};
+
 class MapBackend : public QObject {
     Q_OBJECT
 
@@ -76,6 +82,7 @@ public:
     bool homeVisible() const { return m_homeVisible; }
     QVariantList trackPath() const { return m_trackPath; }
     QGeoCoordinate activeWpPosition() const { return m_activeWpPos; }
+    int currentZoom() const { return m_currentZoom; }
     bool followAircraft() const { return m_followAircraft; }
     QString tileServerUrl() const { return m_tileServerUrl; }
     bool showTrack() const { return m_showTrack; }
@@ -126,6 +133,12 @@ public:
     // Settlements
     void addSettlementFeatures(const QVariantList& features);
     void clearSettlements();
+
+    // Settlement unlimited cache (for MapLibreAdapter rendering)
+    const QVector<SettlementCacheItem>& settlementPolyCache() const { return m_stlPolyCache; }
+
+    // Render area relay (called by MapLibreAdapter after viewport culling)
+    void setRenderArea(double south, double west, double north, double east);
 
     // Conflicts / avoidance
     void setRouteConflicts(const QVariantList& conflicts);
@@ -196,6 +209,7 @@ signals:
     void avoidancePathChanged();
     void plannedDirectPathChanged();
     void zonesChanged();
+    void renderAreaChanged(double south, double west, double north, double east);
 
     // QML → C++ communication
     void mapClicked(double lat, double lon);
@@ -275,6 +289,10 @@ private:
 
     // Settlement unload timer
     QTimer* m_settlementUnloadTimer = nullptr;
+
+    // Settlement unlimited cache (survives LRU eviction in model)
+    QVector<SettlementCacheItem> m_stlPolyCache;
+    QSet<QString> m_stlPolyCacheSigs;  // dedup: "p_{lat}_{lon}_{count}"
 
     // Editing
     QString m_editingZoneId;

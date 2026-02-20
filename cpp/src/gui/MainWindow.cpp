@@ -423,11 +423,23 @@ void MainWindow::setupConnections()
     connect(&m_settlementLoader, &SettlementLoader::tileLoaded,
             this, &MainWindow::onSettlementTileLoaded);
 
-    // Map bounds → settlement loader (skip if settlements hidden)
-    connect(be, &MapBackend::boundsChanged, this, [this](double s, double w, double n, double e) {
-        if (m_mapWidget->backend()->showSettlements())
+    // Map bounds → settlement loader (skip if settlements hidden or zoom outside visibility)
+    auto shouldLoadSettlements = [this]() {
+        auto* be = m_mapWidget->backend();
+        int z = be->currentZoom();
+        return be->showSettlements() && z >= 11 && z <= 16;
+    };
+    connect(be, &MapBackend::boundsChanged, this, [this, shouldLoadSettlements](double s, double w, double n, double e) {
+        if (shouldLoadSettlements())
             m_settlementLoader.request(s, w, n, e);
     });
+
+    // Render area → settlement loader (fetch tiles for render area, not just viewport)
+    connect(be, &MapBackend::renderAreaChanged, this,
+        [this, shouldLoadSettlements](double s, double w, double n, double e) {
+            if (shouldLoadSettlements())
+                m_settlementLoader.request(s, w, n, e);
+        });
 
     // Status panel
     connect(m_statusPanel, &StatusPanel::orbitRadiusChanged, this, &MainWindow::onOrbitRadiusChanged);

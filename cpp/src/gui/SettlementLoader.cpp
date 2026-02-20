@@ -33,8 +33,17 @@ void SettlementFetchWorker::run()
         {
             QMutexLocker lk(&m_loader->m_mutex);
             if (m_loader->m_queue.empty()) return;
-            tiles = std::move(m_loader->m_queue);
-            m_loader->m_queue.clear();
+            // Limit batch size to avoid Overpass timeout on large bbox
+            constexpr size_t MAX_BATCH = 6;
+            if (m_loader->m_queue.size() <= MAX_BATCH) {
+                tiles = std::move(m_loader->m_queue);
+                m_loader->m_queue.clear();
+            } else {
+                tiles.assign(m_loader->m_queue.begin(),
+                             m_loader->m_queue.begin() + MAX_BATCH);
+                m_loader->m_queue.erase(m_loader->m_queue.begin(),
+                                         m_loader->m_queue.begin() + MAX_BATCH);
+            }
         }
 
         // Compute merged bbox
@@ -53,8 +62,8 @@ void SettlementFetchWorker::run()
             .arg(s, 0, 'f', 6).arg(w, 0, 'f', 6)
             .arg(n, 0, 'f', 6).arg(e, 0, 'f', 6);
 
-        SPDLOG_DEBUG("[SettlementLoader] Fetching {} tiles, bbox [{},{},{},{}]",
-                     tiles.size(), s, w, n, e);
+        SPDLOG_INFO("[SettlementLoader] Fetching {} tiles, bbox [{:.4f},{:.4f},{:.4f},{:.4f}]",
+                    tiles.size(), s, w, n, e);
 
         // Try each endpoint
         bool success = false;
@@ -199,13 +208,17 @@ void SettlementLoader::preloadCachedTiles(double south, double west,
                                            double north, double east)
 {
     auto tiles = gridTiles(south, west, north, east);
+    QMutexLocker lk(&m_mutex);
     for (auto& t : tiles) {
         auto key = tileKey(t);
         if (m_cache.contains(key) && !m_cache[key].empty()
             && !m_emittedKeys.contains(key))
         {
             m_emittedKeys.insert(key);
-            emit tileLoaded(key, m_cache[key]);
+            auto features = m_cache[key];  // copy under lock
+            lk.unlock();
+            emit tileLoaded(key, features);
+            lk.relock();
         }
     }
 }
