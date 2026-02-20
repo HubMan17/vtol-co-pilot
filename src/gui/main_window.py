@@ -514,6 +514,8 @@ class MainWindow(QMainWindow):
         self.btn_set_pos.setChecked(False)
         self._update_left_click_mode()
         self.map_widget.set_aircraft_position(lat, lon)
+        # Force autopilot to recompute avoidance from new position
+        self.autopilot.reset_zone_avoidance()
         self.statusbar.showMessage(f"Коррекция позиции: {lat:.6f}, {lon:.6f}")
 
     def _on_context_add_waypoint(self, lat: float, lon: float):

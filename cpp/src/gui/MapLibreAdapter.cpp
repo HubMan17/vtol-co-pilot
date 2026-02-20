@@ -296,7 +296,7 @@ void MapLibreAdapter::addAllLayers()
     addLine("direct-line", "direct-path", "#888888", 1.0, {4.0, 4.0});
 
     // --- Avoidance ---
-    addLine("avoidance-line", "avoidance", "#00FF88", 2.0);
+    addLine("avoidance-line", "avoidance", "#FDE047", 2.5);
 
     // --- Conflict points (warning icon) ---
     addSymbol("conflict-pt", "conflict-pts");

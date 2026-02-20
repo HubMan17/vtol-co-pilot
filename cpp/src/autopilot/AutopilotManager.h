@@ -159,6 +159,8 @@ private:
     int m_avoidanceWpIdx = 0;
     int m_avoidanceForWpId = -1;
     std::atomic<bool> m_avoidanceComputing{false};
+    double m_avoidanceLastCheckTime = 0.0;
+    static constexpr double AVOIDANCE_RECHECK_INTERVAL = 10.0; // seconds
 
     // GaveUp with distance-based retry
     static constexpr double AVOIDANCE_RETRY_DISTANCE = 1000.0; // retry after 1km

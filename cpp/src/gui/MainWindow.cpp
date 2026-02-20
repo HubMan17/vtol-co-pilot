@@ -593,6 +593,8 @@ void MainWindow::setCorrectionPosition(double lat, double lon)
     m_btnSetPos->setChecked(false);
     updateLeftClickMode();
     m_mapWidget->backend()->setAircraftPosition(lat, lon);
+    // Force autopilot to recompute avoidance from new position
+    m_autopilot.resetZoneAvoidance();
     statusBar()->showMessage(QStringLiteral("Коррекция позиции: %1, %2")
                               .arg(lat, 0, 'f', 6).arg(lon, 0, 'f', 6));
 }

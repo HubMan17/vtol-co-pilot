@@ -61,6 +61,8 @@ void AutopilotManager::resetZoneAvoidance()
     m_avoidanceGaveUp = {};
     m_avoidanceComputing = false;
     m_avoidancePending.hasResult = false;
+    m_avoidanceLastCheckTime = 0.0;
+    SPDLOG_INFO("AVOIDANCE: state reset — will recompute on next update");
 }
 
 // ─────────────────────── engage / disengage ───────────────────────
@@ -555,12 +557,15 @@ void AutopilotManager::update()
                 }
             }
         } else {
-            // Flying to waypoint — tangent approach (avoidance disabled for profiling)
-            // auto avoidTarget = getAvoidanceTarget(position, *wp, tel->altitudeAgl());
+            // Flying to waypoint — zone avoidance + tangent approach
+            double avoidAlt = std::min(tel->altitudeAgl(), wp->altitude);
+            auto avoidTarget = getAvoidanceTarget(position, *wp, avoidAlt);
 
-            if (false) { // avoidance disabled
-                // auto [avLat, avLon] = *avoidTarget;
-                // targetBearing = nav::bearingTo(position.lat, position.lon, avLat, avLon);
+            if (avoidTarget) {
+                auto [avLat, avLon] = *avoidTarget;
+                targetBearing = nav::bearingTo(position.lat, position.lon, avLat, avLon);
+                SPDLOG_INFO("AVOIDANCE ACTIVE: bearing={:.0f} to ({:.5f},{:.5f}) instead of WP{}",
+                            targetBearing, avLat, avLon, wp->id);
             } else if (hasOrbit && distToWp <= orbitRadius * 2) {
                 // Tangent approach
                 if (m_tangentApproachWpId != wp->id) {
@@ -874,8 +879,12 @@ std::optional<std::tuple<double, double>> AutopilotManager::getAvoidanceTarget(
         }
     }
 
-    // Already tried and no path found — retry after moving far enough
-    if (m_avoidanceGaveUp.wpId == wp.id) {
+    // Already tried and no path found — retry after moving far enough or periodic recheck
+    double now = nowSec();
+    bool needsRecheck = (now - m_avoidanceLastCheckTime >= AVOIDANCE_RECHECK_INTERVAL)
+                        && !m_avoidanceComputing.load();
+
+    if (m_avoidanceGaveUp.wpId == wp.id && !needsRecheck) {
         double movedDist = nav::haversineDistance(position.lat, position.lon,
                                                    m_avoidanceGaveUp.lat, m_avoidanceGaveUp.lon);
         if (movedDist < AVOIDANCE_RETRY_DISTANCE) return std::nullopt;
@@ -884,17 +893,33 @@ std::optional<std::tuple<double, double>> AutopilotManager::getAvoidanceTarget(
         m_avoidanceForWpId = -1;  // force re-computation
     }
 
-    // Compute avoidance if not yet done for this wp
-    if (m_avoidanceForWpId != wp.id) {
+    // Compute avoidance if not yet done for this wp, or periodic recheck
+    if (m_avoidanceForWpId != wp.id || needsRecheck) {
+        const char* reason = (m_avoidanceForWpId != wp.id) ? "new WP" : "periodic recheck";
         m_avoidanceForWpId = wp.id;
-        m_avoidanceWaypoints.clear();
-        m_avoidanceWpIdx = 0;
         m_avoidanceComputing = false;
+        m_avoidanceGaveUp = {};
+        m_avoidanceLastCheckTime = now;
 
-        if (m_zoneChecker->segmentIntersectsObstacles(position.lat, position.lon, wp.lat, wp.lon, altitude)) {
+        bool intersects = m_zoneChecker->segmentIntersectsObstacles(
+            position.lat, position.lon, wp.lat, wp.lon, altitude);
+        SPDLOG_WARN("AVOIDANCE: {} WP{}, alt={:.0f}, pos=({:.5f},{:.5f})->({:.5f},{:.5f}), intersects={}",
+                    reason, wp.id, altitude, position.lat, position.lon, wp.lat, wp.lon, intersects);
+
+        if (intersects) {
+            // Start background computation — clear old waypoints
+            m_avoidanceWaypoints.clear();
+            m_avoidanceWpIdx = 0;
             m_avoidanceComputing = true;
             startAvoidanceComputation(position.lat, position.lon, wp.lat, wp.lon, altitude, wp.id);
             return std::nullopt;
+        } else {
+            // Path is now clear — remove stale avoidance waypoints
+            if (!m_avoidanceWaypoints.empty()) {
+                SPDLOG_WARN("AVOIDANCE: path now CLEAR to WP{} — dropping old avoidance", wp.id);
+            }
+            m_avoidanceWaypoints.clear();
+            m_avoidanceWpIdx = 0;
         }
     }
 
