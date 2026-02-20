@@ -114,23 +114,51 @@ std::vector<Polygon> ZoneChecker::getBufferedObstacles(double altitude,
                                                          double minLat, double maxLat,
                                                          double minLon, double maxLon) const
 {
+    // Lock: this method runs in background threads (via PathPlanner),
+    // while updateConfig/addSettlementFeatures modify m_config/m_settlements on main thread
+    std::lock_guard lock(m_mutex);
+
     std::vector<Polygon> obstacles;
+    int zoneCount = 0;
 
     for (const auto& zone : m_zoneManager.getAllZones()) {
-        if (!isNoFlyActive(zone, altitude)) continue;
+        if (!isNoFlyActive(zone, altitude)) {
+            SPDLOG_DEBUG("[ZoneChecker] Zone '{}' skipped (not active at alt={:.0f})", zone.name, altitude);
+            continue;
+        }
         double buffer = zone.buffer.value_or(m_config.nofly_buffer);
-        obstacles.push_back(buffer > 0 ? nav::polygonBuffer(zone.points, buffer) : zone.points);
+        auto buffered = buffer > 0 ? nav::polygonBuffer(zone.points, buffer) : zone.points;
+        SPDLOG_DEBUG("[ZoneChecker] Zone '{}' included: {} pts, buffer={:.0f}m → {} buffered pts",
+                     zone.name, zone.points.size(), buffer, buffered.size());
+        obstacles.push_back(std::move(buffered));
+        ++zoneCount;
     }
 
+    int settlementCount = 0;
     if (isSettlementActive(altitude)) {
         for (const auto& s : settlementsInBbox(minLat, maxLat, minLon, maxLon)) {
             obstacles.push_back(m_config.settlement_buffer > 0
                 ? nav::polygonBuffer(s.polygon, m_config.settlement_buffer)
                 : s.polygon);
+            ++settlementCount;
         }
     }
 
+    SPDLOG_INFO("[ZoneChecker] getBufferedObstacles(alt={:.0f}): {} zones + {} settlements = {} obstacles",
+                altitude, zoneCount, settlementCount, obstacles.size());
     return obstacles;
+}
+
+std::vector<Polygon> ZoneChecker::getBufferedZones(double altitude) const
+{
+    std::lock_guard lock(m_mutex);
+    std::vector<Polygon> zones;
+    for (const auto& zone : m_zoneManager.getAllZones()) {
+        if (!isNoFlyActive(zone, altitude)) continue;
+        double buffer = zone.buffer.value_or(m_config.nofly_buffer);
+        zones.push_back(buffer > 0 ? nav::polygonBuffer(zone.points, buffer) : zone.points);
+    }
+    return zones;
 }
 
 std::vector<ZoneChecker::IntersectionPoint> ZoneChecker::findIntersectionPoints(
@@ -202,6 +230,7 @@ std::vector<ZoneChecker::IntersectionPoint> ZoneChecker::findIntersectionPoints(
 
 void ZoneChecker::addSettlementFeatures(const std::vector<CachedSettlement>& features)
 {
+    std::lock_guard lock(m_mutex);
     for (const auto& f : features) {
         m_settlements.push_back(f);
     }

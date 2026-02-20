@@ -26,12 +26,14 @@ std::optional<std::vector<LatLon>> PathPlanner::planPath(
     double minLon = std::min(startLon, endLon) - nav::metersToLonOffset(margin, midLat);
     double maxLon = std::max(startLon, endLon) + nav::metersToLonOffset(margin, midLat);
 
-    auto buffered = m_zoneChecker.getBufferedObstacles(altitude, minLat, maxLat, minLon, maxLon);
-    if (buffered.empty()) return std::vector<LatLon>{};  // no obstacles
+    // Get zones (always included, never pruned) and settlements (prunable)
+    auto zones = m_zoneChecker.getBufferedZones(altitude);
+    auto allObstacles = m_zoneChecker.getBufferedObstacles(altitude, minLat, maxLat, minLon, maxLon);
+    if (allObstacles.empty()) return std::vector<LatLon>{};  // no obstacles
 
     // Direct path clear?
     bool directClear = true;
-    for (const auto& poly : buffered) {
+    for (const auto& poly : allObstacles) {
         if (nav::segmentIntersectsPolygon(startLat, startLon, endLat, endLon, poly)) {
             directClear = false;
             break;
@@ -39,11 +41,34 @@ std::optional<std::vector<LatLon>> PathPlanner::planPath(
     }
     if (directClear) return std::vector<LatLon>{};
 
-    // Cap vertices
+    // Build final obstacle list: zones always included + pruned settlements
+    int zoneVerts = 0;
+    for (const auto& z : zones) zoneVerts += static_cast<int>(z.size());
+
+    // Separate settlements (obstacles that are not zones)
+    PolyList settlements;
+    for (size_t i = zones.size(); i < allObstacles.size(); ++i)
+        settlements.push_back(allObstacles[i]);
+
+    int settlementVerts = 0;
+    for (const auto& s : settlements) settlementVerts += static_cast<int>(s.size());
+
+    PolyList buffered;
+    // Always add all zones first
+    for (auto& z : zones) buffered.push_back(std::move(z));
+
+    // Prune settlements only if they exceed the budget
+    if (settlementVerts > MAX_SETTLEMENT_VERTICES) {
+        auto pruned = pruneObstacles(settlements, startLat, startLon, endLat, endLon);
+        for (auto& s : pruned) buffered.push_back(std::move(s));
+    } else {
+        for (auto& s : settlements) buffered.push_back(std::move(s));
+    }
+
     int totalVerts = 0;
     for (const auto& p : buffered) totalVerts += static_cast<int>(p.size());
-    if (totalVerts > MAX_OBSTACLE_VERTICES)
-        buffered = pruneObstacles(buffered, startLat, startLon, endLat, endLon);
+    SPDLOG_INFO("[PATHFIND] obstacles: {} zones ({} verts) + {} settlements → {} total ({} verts)",
+                zones.size(), zoneVerts, buffered.size() - zones.size(), buffered.size(), totalVerts);
 
     auto t0 = std::chrono::steady_clock::now();
     auto path = buildAndSolve(startLat, startLon, endLat, endLon, buffered);
@@ -99,12 +124,12 @@ PathPlanner::PolyList PathPlanner::pruneObstacles(
     PolyList result;
     int vertCount = 0;
     for (const auto& poly : blocking) {
-        if (vertCount + static_cast<int>(poly.size()) > MAX_OBSTACLE_VERTICES && !result.empty()) break;
+        if (vertCount + static_cast<int>(poly.size()) > MAX_SETTLEMENT_VERTICES && !result.empty()) break;
         result.push_back(poly);
         vertCount += static_cast<int>(poly.size());
     }
     for (const auto& [d, poly] : scored) {
-        if (vertCount + static_cast<int>(poly->size()) > MAX_OBSTACLE_VERTICES) break;
+        if (vertCount + static_cast<int>(poly->size()) > MAX_SETTLEMENT_VERTICES) break;
         result.push_back(*poly);
         vertCount += static_cast<int>(poly->size());
     }

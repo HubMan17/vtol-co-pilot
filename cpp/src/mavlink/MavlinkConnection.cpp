@@ -393,6 +393,18 @@ void MavlinkConnection::setParam(const std::string& name, float value)
     SPDLOG_INFO("SET PARAM: {} = {}", name, value);
 }
 
+void MavlinkConnection::setParamInt(const std::string& name, int value)
+{
+    if (!m_param) return;
+
+    auto result = m_param->set_param_int(name, value);
+    if (result != mavsdk::Param::Result::Success) {
+        SPDLOG_ERROR("SET PARAM INT FAILED: {} = {} (result={})", name, value, static_cast<int>(result));
+        return;
+    }
+    SPDLOG_INFO("SET PARAM INT: {} = {}", name, value);
+}
+
 void MavlinkConnection::sendRcOverride(const std::map<int, int>& channels)
 {
     if (!m_passthrough) return;
@@ -462,8 +474,10 @@ void MavlinkConnection::sendWindOverride(int directionDeg, int speedMs, double a
 
 void MavlinkConnection::setCruiseAirspeed(double speedMs)
 {
-    setParam("TRIM_ARSPD_CM", static_cast<float>(speedMs * 100.0));
-    setParam("AIRSPEED_CRUISE", static_cast<float>(speedMs));
+    // TRIM_ARSPD_CM is the only ArduPilot parameter for cruise airspeed.
+    // AIRSPEED_CRUISE does NOT exist — MAVSDK blocks ~3s on timeout retries,
+    // which starves the autopilot update loop and triggers false disengage.
+    setParamInt("TRIM_ARSPD_CM", static_cast<int>(speedMs * 100.0));
 }
 
 void MavlinkConnection::requestDataStreams(int rate)

@@ -518,6 +518,8 @@ void MapLibreAdapter::connectSignals()
 
     // Home
     connect(m_backend, &MapBackend::homePositionChanged, this, &MapLibreAdapter::updateHomeSource);
+    connect(m_backend, &MapBackend::homePositionChanged, this, &MapLibreAdapter::updateWaypointSources);
+    connect(m_backend, &MapBackend::returningHomeChanged, this, &MapLibreAdapter::updateAircraftSource);
 
     // Avoidance / direct path
     connect(m_backend, &MapBackend::avoidancePathChanged, this, &MapLibreAdapter::updateAvoidanceSource);
@@ -595,23 +597,39 @@ void MapLibreAdapter::updateAircraftSource()
     }
     setSourceGeoJson("aircraft", fc);
 
-    // Nav-line: aircraft → first active (or first) waypoint
+    // Nav-line: aircraft → target (active WP or home when returning)
     QJsonObject navFc = emptyFeatureCollection();
     if (acVis) {
-        auto* wpModel = qobject_cast<WaypointListModel*>(m_backend->waypointModel());
-        if (wpModel && !wpModel->items().isEmpty()) {
-            const auto& items = wpModel->items();
-            // Find active WP, fallback to first
-            int idx = 0;
-            for (int i = 0; i < items.size(); ++i) {
-                if (items[i].state == "active") { idx = i; break; }
-            }
+        bool navLineSet = false;
+
+        // Priority: if returning home → nav-line to home
+        if (m_backend->returningHome() && m_backend->homeVisible()) {
+            auto home = m_backend->homePosition();
             QJsonArray coords;
             coords.append(coord(acLat, acLon));
-            coords.append(coord(items[idx].lat, items[idx].lon));
+            coords.append(coord(home.latitude(), home.longitude()));
             QJsonArray features;
             features.append(makeLineFeature(coords));
             navFc["features"] = features;
+            navLineSet = true;
+        }
+
+        // Otherwise: nav-line to active waypoint
+        if (!navLineSet) {
+            auto* wpModel = qobject_cast<WaypointListModel*>(m_backend->waypointModel());
+            if (wpModel && !wpModel->items().isEmpty()) {
+                const auto& items = wpModel->items();
+                int idx = 0;
+                for (int i = 0; i < items.size(); ++i) {
+                    if (items[i].state == "active") { idx = i; break; }
+                }
+                QJsonArray coords;
+                coords.append(coord(acLat, acLon));
+                coords.append(coord(items[idx].lat, items[idx].lon));
+                QJsonArray features;
+                features.append(makeLineFeature(coords));
+                navFc["features"] = features;
+            }
         }
     }
     setSourceGeoJson("nav-line", navFc);
@@ -756,17 +774,32 @@ void MapLibreAdapter::updateWaypointSources()
 
     // Route segments as lines
     QJsonObject routeFc = emptyFeatureCollection();
-    if (routeModel) {
-        const auto& items = routeModel->items();
+    {
         QJsonArray features;
-        for (const auto& seg : items) {
+        if (routeModel) {
+            const auto& items = routeModel->items();
+            for (const auto& seg : items) {
+                QJsonArray coords;
+                coords.append(coord(seg.fromLat, seg.fromLon));
+                coords.append(coord(seg.toLat, seg.toLon));
+                QJsonObject props;
+                props["state"] = seg.state;
+                features.append(makeLineFeature(coords, props));
+            }
+        }
+
+        // Last WP → home segment
+        if (m_backend->homeVisible() && wpModel && !wpModel->items().isEmpty()) {
+            const auto& lastWp = wpModel->items().back();
+            auto home = m_backend->homePosition();
             QJsonArray coords;
-            coords.append(coord(seg.fromLat, seg.fromLon));
-            coords.append(coord(seg.toLat, seg.toLon));
+            coords.append(coord(lastWp.lat, lastWp.lon));
+            coords.append(coord(home.latitude(), home.longitude()));
             QJsonObject props;
-            props["state"] = seg.state;
+            props["state"] = QStringLiteral("home");
             features.append(makeLineFeature(coords, props));
         }
+
         routeFc["features"] = features;
     }
     setSourceGeoJson("route", routeFc);

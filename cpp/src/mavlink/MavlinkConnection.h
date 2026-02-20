@@ -35,6 +35,7 @@ public:
     void sendLoiterUnlim(double lat, double lon, double alt, double radius, bool ccw = false);
     void setMode(const std::string& modeName);
     void setParam(const std::string& name, float value);
+    void setParamInt(const std::string& name, int value);
     void sendRcOverride(const std::map<int, int>& channels);
     void releaseRcOverride();
     void sendPositionReset(double lat, double lon, double accuracy = 5.0);

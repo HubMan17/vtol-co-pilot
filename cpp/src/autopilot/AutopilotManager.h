@@ -78,6 +78,7 @@ signals:
     void engaged(const QString& mode);
     void disengaged(const QString& previousMode, const QString& reason);
     void waypointReached(int reachedId, int nextId);
+    void avoidanceFailed(const QString& reason);
 
 public slots:
     void update();
@@ -103,6 +104,7 @@ private:
     void handleRouteCompletion();
 
     // Zone avoidance
+    static constexpr int HOME_WP_ID = -999;
     std::optional<std::tuple<double, double>> getAvoidanceTarget(
         const LatLon& position, const Waypoint& wp, double altitude);
     void startAvoidanceComputation(double startLat, double startLon,
@@ -156,8 +158,15 @@ private:
     std::vector<std::tuple<double, double>> m_avoidanceWaypoints;
     int m_avoidanceWpIdx = 0;
     int m_avoidanceForWpId = -1;
-    int m_avoidanceGaveUp = -1;
     std::atomic<bool> m_avoidanceComputing{false};
+
+    // GaveUp with distance-based retry
+    static constexpr double AVOIDANCE_RETRY_DISTANCE = 1000.0; // retry after 1km
+    struct AvoidanceGaveUp {
+        int wpId = -1;
+        double lat = 0, lon = 0;  // position where we gave up
+    };
+    AvoidanceGaveUp m_avoidanceGaveUp;
 
     struct AvoidancePendingResult {
         std::vector<std::tuple<double, double>> path;

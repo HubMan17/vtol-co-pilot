@@ -447,6 +447,11 @@ void MainWindow::setupConnections()
             this, &MainWindow::onAutopilotDisengaged);
     connect(&m_autopilot, &AutopilotManager::waypointReached,
             this, &MainWindow::onWaypointReached);
+    connect(&m_autopilot, &AutopilotManager::avoidanceFailed,
+            this, [this](const QString& reason) {
+        statusBar()->showMessage(reason, 10000);
+        SPDLOG_WARN("[MainWindow] Avoidance failed: {}", reason.toStdString());
+    });
 
     // Layer visibility → save config
     connect(be, &MapBackend::showTrackChanged, this, [this] {
@@ -1223,6 +1228,7 @@ void MainWindow::updateDisplay()
     { PerfScope s(m_perf, "ap_status_ui");
         auto apMode = m_autopilot.mode();
         auto apStatus = m_autopilot.status();
+        m_mapWidget->backend()->setReturningHome(apStatus.returningHome);
         m_statusPanel->updateAutopilot(
             apMode == AutopilotMode::MANUAL ? QStringLiteral("MANUAL") : QStringLiteral("NAV"),
             apStatus);
@@ -1241,7 +1247,35 @@ void MainWindow::checkRouteConflicts()
 {
     m_guiAvoidanceActive = false;
     auto* route = m_routePlanner.getRoute();
+
+    // If no route: still check aircraft→home when returning home
     if (!route || route->waypoints.empty()) {
+        if (m_autopilot.status().returningHome && m_homePosition) {
+            auto acPos = getAircraftPosition();
+            if (acPos) {
+                auto* tel = m_connection.telemetry();
+                double alt = tel ? tel->altitudeAgl() : 100.0;
+                if (m_zoneChecker.segmentIntersectsObstacles(
+                        acPos->first, acPos->second, m_homePosition->lat, m_homePosition->lon, alt)) {
+                    SPDLOG_INFO("[MainWindow] Aircraft→home conflict (no route)");
+                    QVariantList intersectionPts;
+                    auto pts = m_zoneChecker.findIntersectionPoints(
+                        acPos->first, acPos->second, m_homePosition->lat, m_homePosition->lon, alt);
+                    for (const auto& pt : pts) {
+                        QVariantMap pm;
+                        pm["lat"] = pt.lat;
+                        pm["lon"] = pt.lon;
+                        pm["reason"] = QString::fromStdString(pt.reason);
+                        intersectionPts.append(pm);
+                    }
+                    if (!intersectionPts.isEmpty())
+                        m_mapWidget->backend()->setConflictPoints(intersectionPts);
+                    computeAircraftAvoidance(acPos->first, acPos->second,
+                                              m_homePosition->lat, m_homePosition->lon, alt);
+                    return;
+                }
+            }
+        }
         m_mapWidget->backend()->clearRouteConflicts();
         return;
     }
@@ -1309,6 +1343,63 @@ void MainWindow::checkRouteConflicts()
         }
     }
 
+    // Check lastWP → home segment
+    bool homeConflict = false;
+    if (m_homePosition && !route->waypoints.empty()) {
+        auto& lastWp = route->waypoints.back();
+        double homeAlt = lastWp.altitude;  // use last WP altitude for home segment
+        if (m_zoneChecker.segmentIntersectsObstacles(
+                lastWp.lat, lastWp.lon, m_homePosition->lat, m_homePosition->lon, homeAlt)) {
+            homeConflict = true;
+            SPDLOG_INFO("[MainWindow] Home segment conflict: lastWP({:.5f},{:.5f}) → home({:.5f},{:.5f})",
+                         lastWp.lat, lastWp.lon, m_homePosition->lat, m_homePosition->lon);
+            auto pts = m_zoneChecker.findIntersectionPoints(
+                lastWp.lat, lastWp.lon, m_homePosition->lat, m_homePosition->lon, homeAlt);
+            QString reason;
+            if (!pts.empty()) {
+                reason = QString::fromStdString(pts[0].reason);
+                for (const auto& pt : pts) {
+                    QVariantMap pm;
+                    pm["lat"] = pt.lat;
+                    pm["lon"] = pt.lon;
+                    pm["reason"] = QString::fromStdString(pt.reason);
+                    intersectionPts.append(pm);
+                }
+            } else {
+                reason = QStringLiteral("Маршрут до дома пересекает запретную область");
+            }
+            QVariantMap c;
+            c["from_idx"] = static_cast<int>(route->waypoints.size() - 1);
+            c["to_idx"] = -1;  // special marker: destination is home
+            c["reason"] = reason;
+            conflicts.append(c);
+        }
+    }
+
+    // Check aircraft → home (when returning home without active WP)
+    bool aircraftHomeConflict = false;
+    if (!aircraftConflict && m_autopilot.status().returningHome && m_homePosition) {
+        auto acPos = getAircraftPosition();
+        if (acPos) {
+            auto* tel = m_connection.telemetry();
+            double alt = tel ? tel->altitudeAgl() : 100.0;
+            if (m_zoneChecker.segmentIntersectsObstacles(
+                    acPos->first, acPos->second, m_homePosition->lat, m_homePosition->lon, alt)) {
+                aircraftHomeConflict = true;
+                SPDLOG_INFO("[MainWindow] Aircraft→home conflict detected");
+                auto pts = m_zoneChecker.findIntersectionPoints(
+                    acPos->first, acPos->second, m_homePosition->lat, m_homePosition->lon, alt);
+                for (const auto& pt : pts) {
+                    QVariantMap pm;
+                    pm["lat"] = pt.lat;
+                    pm["lon"] = pt.lon;
+                    pm["reason"] = QString::fromStdString(pt.reason);
+                    intersectionPts.append(pm);
+                }
+            }
+        }
+    }
+
     // Push ALL conflict markers to map
     if (!conflicts.isEmpty() || !intersectionPts.isEmpty()) {
         m_mapWidget->backend()->setRouteConflicts(conflicts);
@@ -1316,17 +1407,32 @@ void MainWindow::checkRouteConflicts()
             m_mapWidget->backend()->setConflictPoints(intersectionPts);
 
         // Compute avoidance for the most urgent segment:
-        // aircraft→WP first, otherwise first WP→WP conflict
+        // aircraft→WP first, aircraft→home second, then WP→WP/home conflicts
         if (aircraftConflict) {
             auto acPos = getAircraftPosition();
             auto& wp = route->waypoints[static_cast<size_t>(activeIdx)];
             computeAircraftAvoidance(acPos->first, acPos->second,
                                       wp.lat, wp.lon, wp.altitude);
+        } else if (aircraftHomeConflict) {
+            auto acPos = getAircraftPosition();
+            auto* tel = m_connection.telemetry();
+            double alt = tel ? tel->altitudeAgl() : 100.0;
+            computeAircraftAvoidance(acPos->first, acPos->second,
+                                      m_homePosition->lat, m_homePosition->lon, alt);
         } else if (!conflicts.isEmpty()) {
             auto first = conflicts[0].toMap();
-            computeWpAvoidance(first["from_idx"].toInt(), first["to_idx"].toInt(),
-                                route->waypoints[static_cast<size_t>(first["to_idx"].toInt())].altitude,
-                                first["reason"].toString());
+            int toIdx = first["to_idx"].toInt();
+            if (toIdx == -1) {
+                // Home segment conflict — compute avoidance lastWP→home
+                int fromIdx = first["from_idx"].toInt();
+                auto& fromWp = route->waypoints[static_cast<size_t>(fromIdx)];
+                computeAircraftAvoidance(fromWp.lat, fromWp.lon,
+                                          m_homePosition->lat, m_homePosition->lon, fromWp.altitude);
+            } else {
+                computeWpAvoidance(first["from_idx"].toInt(), toIdx,
+                                    route->waypoints[static_cast<size_t>(toIdx)].altitude,
+                                    first["reason"].toString());
+            }
         }
     } else {
         m_mapWidget->backend()->clearRouteConflicts();
@@ -1469,6 +1575,32 @@ void MainWindow::syncLiveAvoidanceOverlay()
     auto pos = tel->position();
     if (pos.lat == 0.0 && pos.lon == 0.0) return;
 
+    // Returning home: show avoidance path to home
+    if (m_autopilot.status().returningHome && m_homePosition) {
+        auto remaining = m_autopilot.remainingAvoidanceWaypoints();
+        if (remaining.empty()) {
+            if (!m_guiAvoidanceActive)
+                m_mapWidget->backend()->setAvoidancePath({});
+            return;
+        }
+        m_guiAvoidanceActive = false;
+        QVariantList pathPts;
+        QVariantMap sp;
+        sp["lat"] = pos.lat; sp["lon"] = pos.lon;
+        pathPts.append(sp);
+        for (auto& [lat, lon] : remaining) {
+            QVariantMap m;
+            m["lat"] = lat; m["lon"] = lon;
+            pathPts.append(m);
+        }
+        QVariantMap ep;
+        ep["lat"] = m_homePosition->lat; ep["lon"] = m_homePosition->lon;
+        pathPts.append(ep);
+        m_mapWidget->backend()->setAvoidancePath(pathPts);
+        return;
+    }
+
+    // Normal route: show avoidance path to active WP
     auto* wp = m_routePlanner.activeWaypoint();
     if (!wp) {
         if (!m_guiAvoidanceActive)
@@ -1507,13 +1639,6 @@ void MainWindow::checkAircraftAvoidanceThrottled()
         return;
     if (m_guiAvoidanceResult) return;
 
-    auto* route = m_routePlanner.getRoute();
-    if (!route || route->waypoints.empty()) return;
-
-    int activeIdx = m_routePlanner.activeWaypointIndex();
-    if (activeIdx < 0 || activeIdx >= static_cast<int>(route->waypoints.size()))
-        return;
-
     // Throttle: recheck only if moved > 500m
     if (m_lastAvoidanceCheckPos) {
         double d = nav::haversineDistance(pos.lat, pos.lon,
@@ -1521,6 +1646,31 @@ void MainWindow::checkAircraftAvoidanceThrottled()
                                           m_lastAvoidanceCheckPos->second);
         if (d < 500) return;
     }
+
+    // Aircraft → home (when returning home)
+    if (m_autopilot.status().returningHome && m_homePosition) {
+        m_lastAvoidanceCheckPos = std::make_pair(pos.lat, pos.lon);
+        double alt = tel ? tel->altitudeAgl() : 100.0;
+        if (m_zoneChecker.segmentIntersectsObstacles(
+                pos.lat, pos.lon, m_homePosition->lat, m_homePosition->lon, alt)) {
+            SPDLOG_DEBUG("[MainWindow] Aircraft→home avoidance check: conflict detected");
+            computeAircraftAvoidance(pos.lat, pos.lon, m_homePosition->lat, m_homePosition->lon, alt);
+        } else if (m_guiAvoidanceActive) {
+            m_guiAvoidanceActive = false;
+            m_mapWidget->backend()->setAvoidancePath({});
+            m_mapWidget->backend()->setPlannedDirectPath({});
+            m_mapWidget->backend()->setConflictPoints({});
+        }
+        return;
+    }
+
+    // Aircraft → active WP (normal route mode)
+    auto* route = m_routePlanner.getRoute();
+    if (!route || route->waypoints.empty()) return;
+
+    int activeIdx = m_routePlanner.activeWaypointIndex();
+    if (activeIdx < 0 || activeIdx >= static_cast<int>(route->waypoints.size()))
+        return;
 
     m_lastAvoidanceCheckPos = std::make_pair(pos.lat, pos.lon);
 

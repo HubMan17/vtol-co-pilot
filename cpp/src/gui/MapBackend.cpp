@@ -92,6 +92,15 @@ void MapBackend::setHome(double lat, double lon)
     emit homeVisibleChanged();
 }
 
+void MapBackend::setReturningHome(bool v)
+{
+    if (m_returningHome != v) {
+        m_returningHome = v;
+        SPDLOG_INFO("[MapBackend] returningHome = {}", v);
+        emit returningHomeChanged();
+    }
+}
+
 // ═══════════════════════ Waypoints ═══════════════════════
 
 void MapBackend::setWaypoints(const QVector<QVariantMap>& waypoints, int activeIdx)

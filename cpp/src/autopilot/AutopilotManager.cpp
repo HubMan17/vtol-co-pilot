@@ -36,10 +36,21 @@ AutopilotManager::AutopilotManager(MavlinkConnection& connection,
 void AutopilotManager::setHomePosition(const std::optional<LatLon>& pos)
 {
     m_homePosition = pos;
-    if (pos)
+    if (pos) {
         SPDLOG_INFO("HOME POSITION SET: lat={:.6f}, lon={:.6f}", pos->lat, pos->lon);
-    else
+        // Reset avoidance so it re-computes for new home position
+        if (m_returningHome) {
+            SPDLOG_INFO("HOME CHANGED DURING RTH — resetting avoidance");
+            m_avoidanceWaypoints.clear();
+            m_avoidanceWpIdx = 0;
+            m_avoidanceForWpId = -1;
+            m_avoidanceGaveUp = {};
+            m_avoidanceComputing = false;
+            m_avoidancePending.hasResult = false;
+        }
+    } else {
         SPDLOG_INFO("HOME POSITION CLEARED");
+    }
 }
 
 void AutopilotManager::resetZoneAvoidance()
@@ -47,7 +58,7 @@ void AutopilotManager::resetZoneAvoidance()
     m_avoidanceWaypoints.clear();
     m_avoidanceWpIdx = 0;
     m_avoidanceForWpId = -1;
-    m_avoidanceGaveUp = -1;
+    m_avoidanceGaveUp = {};
     m_avoidanceComputing = false;
     m_avoidancePending.hasResult = false;
 }
@@ -89,7 +100,7 @@ bool AutopilotManager::engageNav()
         m_connection.setCruiseAirspeed(m_savedAirspeedCruise.value());
         m_savedAirspeedCruise.reset();
     }
-    m_connection.setParam("THROTTLE_NUDGE", 1);
+    m_connection.setParamInt("THROTTLE_NUDGE", 1);
 
     m_isOrbiting = false;
     m_orbitTurnsCompleted = 0;
@@ -103,7 +114,7 @@ bool AutopilotManager::engageNav()
     m_avoidanceWaypoints.clear();
     m_avoidanceWpIdx = 0;
     m_avoidanceForWpId = -1;
-    m_avoidanceGaveUp = -1;
+    m_avoidanceGaveUp = {};
     m_avoidanceComputing = false;
     m_avoidancePending.hasResult = false;
 
@@ -158,7 +169,7 @@ bool AutopilotManager::engageHome()
         m_connection.setCruiseAirspeed(m_savedAirspeedCruise.value());
         m_savedAirspeedCruise.reset();
     }
-    m_connection.setParam("THROTTLE_NUDGE", 1);
+    m_connection.setParamInt("THROTTLE_NUDGE", 1);
 
     m_isOrbiting = false;
     m_orbitTurnsCompleted = 0;
@@ -220,7 +231,7 @@ void AutopilotManager::disengage(const QString& reason)
         SPDLOG_INFO("RESTORED AIRSPEED_CRUISE={:.1f}", m_savedAirspeedCruise.value());
         m_savedAirspeedCruise.reset();
     }
-    m_connection.setParam("THROTTLE_NUDGE", 1);
+    m_connection.setParamInt("THROTTLE_NUDGE", 1);
 
     emit disengaged(prevMode, reason);
 }
@@ -297,7 +308,7 @@ void AutopilotManager::update()
         m_avoidanceWaypoints.clear();
         m_avoidanceWpIdx = 0;
         m_avoidanceForWpId = -1;
-        m_avoidanceGaveUp = -1;
+        m_avoidanceGaveUp = {};
         m_avoidanceComputing = false;
         m_avoidancePending.hasResult = false;
     }
@@ -321,8 +332,8 @@ void AutopilotManager::update()
                 }
                 m_connection.setCruiseAirspeed(m_speedCtrl.target());
                 m_connection.sendSpeed(m_speedCtrl.target());
-                m_connection.setParam("THROTTLE_NUDGE", 0);
-                m_connection.setParam("WP_LOITER_RAD", 150.0);
+                m_connection.setParamInt("THROTTLE_NUDGE", 0);
+                m_connection.setParamInt("WP_LOITER_RAD", 150);
                 m_connection.sendLoiterUnlim(m_homePosition->lat, m_homePosition->lon, 50.0, 150.0, m_orbitCcw);
                 m_orbitRepositionSent = true;
                 m_altitudeCtrl.setTargetAltitude(50.0);
@@ -340,24 +351,44 @@ void AutopilotManager::update()
                 m_orbitRepositionSent = true;
             }
         } else {
-            // Navigate to home
-            if (distHome <= 300.0) {
-                // Tangent approach
-                double bearingFromHome = nav::bearingTo(m_homePosition->lat, m_homePosition->lon,
-                                                        position.lat, position.lon);
-                double angleDeg = std::acos(std::min(150.0 / distHome, 1.0)) * 180.0 / M_PI;
-                double tangentBearing;
-                if (m_orbitCcw) {
-                    tangentBearing = std::fmod(bearingFromHome - angleDeg + 360.0, 360.0);
-                } else {
-                    tangentBearing = std::fmod(bearingFromHome + angleDeg, 360.0);
+            // Navigate to home — check avoidance first
+            bool avoidanceUsed = false;
+            if (m_zoneChecker && m_pathPlanner) {
+                Waypoint homeWp;
+                homeWp.id = HOME_WP_ID;
+                homeWp.lat = m_homePosition->lat;
+                homeWp.lon = m_homePosition->lon;
+                homeWp.altitude = tel->altitudeAgl();
+                auto avoidTarget = getAvoidanceTarget(position, homeWp, tel->altitudeAgl());
+                if (avoidTarget) {
+                    auto [avLat, avLon] = *avoidTarget;
+                    targetBearing = nav::bearingTo(position.lat, position.lon, avLat, avLon);
+                    avoidanceUsed = true;
+                    SPDLOG_DEBUG("HOME avoidance: bearing={:.0f} to ({:.5f},{:.5f}), {} remaining",
+                                 targetBearing, avLat, avLon,
+                                 m_avoidanceWaypoints.size() - m_avoidanceWpIdx);
                 }
-                auto [tgtLat, tgtLon] = nav::projectPoint(m_homePosition->lat, m_homePosition->lon,
-                                                            tangentBearing, 150.0);
-                targetBearing = nav::bearingTo(position.lat, position.lon, tgtLat, tgtLon);
-            } else {
-                targetBearing = nav::bearingTo(position.lat, position.lon,
-                                                m_homePosition->lat, m_homePosition->lon);
+            }
+
+            if (!avoidanceUsed) {
+                // Direct navigation to home (tangent approach near home)
+                if (distHome <= 300.0) {
+                    double bearingFromHome = nav::bearingTo(m_homePosition->lat, m_homePosition->lon,
+                                                            position.lat, position.lon);
+                    double angleDeg = std::acos(std::min(150.0 / distHome, 1.0)) * 180.0 / M_PI;
+                    double tangentBearing;
+                    if (m_orbitCcw) {
+                        tangentBearing = std::fmod(bearingFromHome - angleDeg + 360.0, 360.0);
+                    } else {
+                        tangentBearing = std::fmod(bearingFromHome + angleDeg, 360.0);
+                    }
+                    auto [tgtLat, tgtLon] = nav::projectPoint(m_homePosition->lat, m_homePosition->lon,
+                                                                tangentBearing, 150.0);
+                    targetBearing = nav::bearingTo(position.lat, position.lon, tgtLat, tgtLon);
+                } else {
+                    targetBearing = nav::bearingTo(position.lat, position.lon,
+                                                    m_homePosition->lat, m_homePosition->lon);
+                }
             }
             m_headingCtrl.setTargetHeading(targetBearing);
             m_headingCtrl.update(tel->heading());
@@ -366,7 +397,7 @@ void AutopilotManager::update()
             sendGuidedCommands(targetBearing, position);
         }
 
-        m_lastUpdateTime = currentTime;
+        m_lastUpdateTime = nowSec();
         // Diagnostic logging
         m_logCounter++;
         if (m_logCounter >= 20) {
@@ -487,7 +518,7 @@ void AutopilotManager::update()
                         m_avoidanceWaypoints.clear();
                         m_avoidanceWpIdx = 0;
                         m_avoidanceForWpId = -1;
-                        m_avoidanceGaveUp = -1;
+                        m_avoidanceGaveUp = {};
                         m_avoidanceComputing = false;
                         m_avoidancePending.hasResult = false;
                         if (newWp->climb_enroute) {
@@ -505,7 +536,7 @@ void AutopilotManager::update()
                         // Last waypoint reached (FLYTHROUGH)
                         SPDLOG_INFO("LAST WAYPOINT REACHED: WP{} (FLYTHROUGH)", oldWp.id);
                         handleRouteCompletion();
-                        m_lastUpdateTime = currentTime;
+                        m_lastUpdateTime = nowSec();
                         return;
                     }
 
@@ -570,7 +601,10 @@ void AutopilotManager::update()
                     tel->mode().toStdString(), tel->gpsFix(), tel->armed());
     }
 
-    m_lastUpdateTime = currentTime;
+    // Use fresh wall time — not the stale currentTime captured at the start.
+    // Blocking MAVSDK calls (setParam) can stall update() for seconds;
+    // using the stale value would cause false timeout on the next tick.
+    m_lastUpdateTime = nowSec();
 }
 
 // ─────────────────────── GUIDED commands ───────────────────────
@@ -661,7 +695,7 @@ void AutopilotManager::exitOrbit()
         SPDLOG_INFO("RESTORED AIRSPEED_CRUISE={:.1f}", m_savedAirspeedCruise.value());
         m_savedAirspeedCruise.reset();
     }
-    m_connection.setParam("THROTTLE_NUDGE", 1);
+    m_connection.setParamInt("THROTTLE_NUDGE", 1);
 
     // Force re-enter GUIDED to clear DO_REPOSITION orbit radius
     m_connection.setMode("FBWA");
@@ -701,8 +735,8 @@ void AutopilotManager::startOrbit(Waypoint& wp, double currentHeading)
     }
     m_connection.setCruiseAirspeed(targetSpeed);
     m_connection.sendSpeed(targetSpeed);
-    m_connection.setParam("THROTTLE_NUDGE", 0);
-    m_connection.setParam("WP_LOITER_RAD", static_cast<float>(radius));
+    m_connection.setParamInt("THROTTLE_NUDGE", 0);
+    m_connection.setParamInt("WP_LOITER_RAD", static_cast<int>(radius));
     m_connection.sendLoiterUnlim(wp.lat, wp.lon, wp.altitude, radius, m_orbitCcw);
     m_orbitRepositionSent = true;
     SPDLOG_INFO("START ORBIT (DO_REPOSITION) at WP{}: radius={}, speed={}, {}",
@@ -832,14 +866,23 @@ std::optional<std::tuple<double, double>> AutopilotManager::getAvoidanceTarget(
                 SPDLOG_WARN("AVOIDANCE: {} intermediate points to WP{}",
                             m_avoidanceWaypoints.size(), forWpId);
             } else if (isNull) {
-                m_avoidanceGaveUp = forWpId;
-                SPDLOG_WARN("AVOIDANCE: no path found to WP{}, flying direct", forWpId);
+                m_avoidanceGaveUp = {forWpId, position.lat, position.lon};
+                SPDLOG_WARN("AVOIDANCE: no path found to WP{}, flying direct (will retry after {:.0f}m)",
+                            forWpId, AVOIDANCE_RETRY_DISTANCE);
+                emit avoidanceFailed(QString("Обход не найден — полёт напрямую"));
             }
         }
     }
 
-    // Already tried and no path found
-    if (m_avoidanceGaveUp == wp.id) return std::nullopt;
+    // Already tried and no path found — retry after moving far enough
+    if (m_avoidanceGaveUp.wpId == wp.id) {
+        double movedDist = nav::haversineDistance(position.lat, position.lon,
+                                                   m_avoidanceGaveUp.lat, m_avoidanceGaveUp.lon);
+        if (movedDist < AVOIDANCE_RETRY_DISTANCE) return std::nullopt;
+        SPDLOG_INFO("AVOIDANCE: retrying for WP{} — moved {:.0f}m from gaveUp position", wp.id, movedDist);
+        m_avoidanceGaveUp = {};
+        m_avoidanceForWpId = -1;  // force re-computation
+    }
 
     // Compute avoidance if not yet done for this wp
     if (m_avoidanceForWpId != wp.id) {
@@ -933,7 +976,7 @@ void AutopilotManager::setOrbitRadius(double radius)
         if (wp) {
             wp->orbit_radius = radius;
             if (m_isOrbiting) {
-                m_connection.setParam("WP_LOITER_RAD", static_cast<float>(radius));
+                m_connection.setParamInt("WP_LOITER_RAD", static_cast<int>(radius));
                 m_orbitRepositionSent = false;
             }
             SPDLOG_INFO("ORBIT RADIUS SET: {}m for WP{}", radius, wp->id);

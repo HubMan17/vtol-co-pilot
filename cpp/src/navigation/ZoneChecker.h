@@ -8,6 +8,7 @@
 #include <vector>
 #include <map>
 #include <optional>
+#include <mutex>
 
 namespace vtol {
 
@@ -27,7 +28,10 @@ class ZoneChecker {
 public:
     ZoneChecker(const ZoneManager& zoneManager, const ZoneAvoidanceConfig& config);
 
-    void updateConfig(const ZoneAvoidanceConfig& config) { m_config = config; }
+    void updateConfig(const ZoneAvoidanceConfig& config) {
+        std::lock_guard lock(m_mutex);
+        m_config = config;
+    }
 
     // Primary check: is this point restricted?
     RestrictionResult isPointRestricted(double lat, double lon, double altitude) const;
@@ -45,6 +49,9 @@ public:
     std::vector<Polygon> getBufferedObstacles(double altitude,
                                                double minLat, double maxLat,
                                                double minLon, double maxLon) const;
+
+    // Get buffered no-fly zones only (never pruned by PathPlanner)
+    std::vector<Polygon> getBufferedZones(double altitude) const;
 
     // Find intersection points of a segment with obstacles
     struct IntersectionPoint {
@@ -70,6 +77,7 @@ private:
     const ZoneManager& m_zoneManager;
     ZoneAvoidanceConfig m_config;
     std::vector<CachedSettlement> m_settlements;
+    mutable std::mutex m_mutex;  // guards m_config + m_settlements for thread safety
 };
 
 } // namespace vtol

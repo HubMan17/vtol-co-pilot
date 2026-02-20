@@ -20,7 +20,7 @@ public:
         double endLat, double endLon,
         double altitude);
 
-    static constexpr int MAX_OBSTACLE_VERTICES = 100;
+    static constexpr int MAX_SETTLEMENT_VERTICES = 150;
 
 private:
     using PolyList = std::vector<Polygon>;

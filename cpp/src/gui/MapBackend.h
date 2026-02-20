@@ -29,6 +29,7 @@ class MapBackend : public QObject {
     // ── Home ──
     Q_PROPERTY(QGeoCoordinate homePosition READ homePosition NOTIFY homePositionChanged)
     Q_PROPERTY(bool homeVisible READ homeVisible NOTIFY homeVisibleChanged)
+    Q_PROPERTY(bool returningHome READ returningHome NOTIFY returningHomeChanged)
 
     // ── Track ──
     Q_PROPERTY(QVariantList trackPath READ trackPath NOTIFY trackPathChanged)
@@ -80,6 +81,7 @@ public:
     bool aircraftVisible() const { return m_aircraftVisible; }
     QGeoCoordinate homePosition() const { return m_homePos; }
     bool homeVisible() const { return m_homeVisible; }
+    bool returningHome() const { return m_returningHome; }
     QVariantList trackPath() const { return m_trackPath; }
     QGeoCoordinate activeWpPosition() const { return m_activeWpPos; }
     int currentZoom() const { return m_currentZoom; }
@@ -117,6 +119,7 @@ public:
     void setTrackMaxLength(int length);
     void clearTrack();
     void setHome(double lat, double lon);
+    void setReturningHome(bool v);
     void setWaypoints(const QVector<QVariantMap>& waypoints, int activeIdx = 0);
     void updateActiveWaypoint(int index);
     void setFollowMode(bool enabled);
@@ -192,6 +195,7 @@ signals:
     void aircraftVisibleChanged();
     void homePositionChanged();
     void homeVisibleChanged();
+    void returningHomeChanged();
     void trackPathChanged();
     void trackCoordinateAdded(double lat, double lon);
     void activeWpPositionChanged();
@@ -245,6 +249,7 @@ private:
     // Home
     QGeoCoordinate m_homePos;
     bool m_homeVisible = false;
+    bool m_returningHome = false;
 
     // Track
     QVariantList m_trackPath;
