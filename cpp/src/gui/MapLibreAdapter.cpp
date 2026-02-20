@@ -169,7 +169,6 @@ void MapLibreAdapter::addAllSources()
     addGeoJsonSource("nav-line");
     addGeoJsonSource("stl-polys");
     addGeoJsonSource("stl-circles");
-    addGeoJsonSource("render-area");
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -227,9 +226,6 @@ void MapLibreAdapter::addAllLayers()
         params["source"] = source;
         m_map->addLayer(id, params);
     };
-
-    // --- Render area boundary (red dashed rectangle showing culling bounds) ---
-    addLine("render-area-border", "render-area", "#FF2222", 2.0, {8.0, 4.0});
 
     // --- Settlement polygons (red) ---
     addFill("stl-poly-fill", "stl-polys", "#CC0000", 0.18);
@@ -990,25 +986,7 @@ void MapLibreAdapter::applyViewportCulling()
 {
     updateZoneSources();
     updateSettlementSources();
-    updateRenderAreaBoundary();
     m_backend->setRenderArea(m_renderSouth, m_renderWest, m_renderNorth, m_renderEast);
-}
-
-void MapLibreAdapter::updateRenderAreaBoundary()
-{
-    QJsonObject fc = emptyFeatureCollection();
-    if (m_hasRenderArea) {
-        QJsonArray ring;
-        ring.append(coord(m_renderSouth, m_renderWest));  // SW
-        ring.append(coord(m_renderNorth, m_renderWest));  // NW
-        ring.append(coord(m_renderNorth, m_renderEast));  // NE
-        ring.append(coord(m_renderSouth, m_renderEast));  // SE
-        ring.append(coord(m_renderSouth, m_renderWest));  // close
-        QJsonArray features;
-        features.append(makePolygonFeature(ring));
-        fc["features"] = features;
-    }
-    setSourceGeoJson("render-area", fc);
 }
 
 // ═══════════════════════════════════════════════════════════

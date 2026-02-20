@@ -37,7 +37,6 @@ private slots:
     // --- Viewport culling ---
     void onViewportChanged(double south, double west, double north, double east);
     void applyViewportCulling();
-    void updateRenderAreaBoundary();
 
     // --- Visibility ---
     void onShowTrackChanged();
@@ -72,7 +71,7 @@ private:
     // Viewport culling — render area (shrunk viewport)
     double m_renderSouth = 0, m_renderWest = 0, m_renderNorth = 0, m_renderEast = 0;
     bool m_hasRenderArea = false;
-    static constexpr double RENDER_AREA_MARGIN = 0.15;  // 15% inset from each edge
+    static constexpr double RENDER_AREA_MARGIN = 0.05;  // 5% inset from each edge
     QTimer* m_cullDebounce = nullptr;
 };
 
