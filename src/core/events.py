@@ -11,6 +11,7 @@ class Event(Enum):
     AUTOPILOT_DISENGAGE = auto()
     CONNECTION_LOST = auto()
     CONNECTION_RESTORED = auto()
+    AVOIDANCE_FAILED = auto()
     RC_OVERRIDE_SENT = auto()
 
 

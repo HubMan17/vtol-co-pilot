@@ -137,3 +137,114 @@ class TestPlanPath:
         assert any(
             segment_intersects_polygon(55.5, 37.0, 55.5, 38.0, poly) for poly in pruned
         ), "Direct-blocking obstacle was dropped by pruning"
+
+
+class TestCorridorFilter:
+    """Tests for _filter_by_corridor — reduce obstacles to those near direct path."""
+
+    def test_corridor_filter_reduces_obstacles(self):
+        """Obstacles far from direct path should be filtered out."""
+        planner = _make_planner()
+
+        # Direct path goes east at lat=55.5
+        # 3 obstacles near the path (within 5km corridor)
+        near = [
+            [[55.50, 37.3], [55.50, 37.35], [55.51, 37.35], [55.51, 37.3]],
+            [[55.49, 37.5], [55.49, 37.55], [55.50, 37.55], [55.50, 37.5]],
+            [[55.50, 37.7], [55.50, 37.75], [55.51, 37.75], [55.51, 37.7]],
+        ]
+        # 7 obstacles far from the path (>10km away)
+        far = []
+        for i in range(7):
+            lat = 55.7 + i * 0.05  # at least 20km north of path
+            far.append([
+                [lat, 37.3], [lat, 37.35], [lat + 0.01, 37.35], [lat + 0.01, 37.3]
+            ])
+
+        all_obstacles = near + far
+        filtered = planner._filter_by_corridor(all_obstacles, 55.5, 37.0, 55.5, 38.0)
+        assert len(filtered) == 3, f"Expected 3 near obstacles, got {len(filtered)}"
+
+    def test_corridor_filter_keeps_blocking(self):
+        """Obstacles that block the direct path must survive corridor filter."""
+        planner = _make_planner()
+        blocker = [[55.49, 37.45], [55.49, 37.55], [55.51, 37.55], [55.51, 37.45]]
+        result = planner._filter_by_corridor([blocker], 55.5, 37.0, 55.5, 38.0)
+        assert len(result) == 1
+
+    def test_corridor_filter_empty_input(self):
+        planner = _make_planner()
+        result = planner._filter_by_corridor([], 55.5, 37.0, 55.5, 38.0)
+        assert result == []
+
+
+class TestAltitudeProfile:
+    """Tests for plan_path with end_altitude (climb_enroute)."""
+
+    def test_altitude_profile_skips_high_zones(self):
+        """Zone at 500m altitude, climb from 100→1000m: zone should be skipped
+        because aircraft is above zone altitude for most of the path."""
+        zone = NoFlyZone(
+            id='alt_zone',
+            points=[[55.49, 37.6], [55.49, 37.7], [55.51, 37.7], [55.51, 37.6]],
+            name='AltZone500',
+            altitude=500.0,
+            avoid_mode='below_altitude',
+        )
+        planner = _make_planner(zones=[zone])
+        # Zone centroid is at lon ~37.65, about 70% along a lon 37.0→38.0 path
+        # At 70%, altitude = 100 + 0.7*900 = 730m > 500m → zone should be inactive
+        result = planner.plan_path(55.5, 37.0, 55.5, 38.0, 100.0, end_altitude=1000.0)
+        assert result == [], "Path should be clear — aircraft is above zone at that point"
+
+    def test_altitude_profile_keeps_low_zones(self):
+        """Zone at 500m altitude, climb from 100→300m: zone remains active
+        because aircraft never reaches zone altitude."""
+        zone = NoFlyZone(
+            id='alt_zone',
+            points=[[55.49, 37.4], [55.49, 37.6], [55.51, 37.6], [55.51, 37.4]],
+            name='AltZone500',
+            altitude=500.0,
+            avoid_mode='below_altitude',
+        )
+        planner = _make_planner(zones=[zone])
+        result = planner.plan_path(55.5, 37.0, 55.5, 38.0, 100.0, end_altitude=300.0)
+        assert result is not None
+        assert len(result) > 0, "Zone should block path — aircraft stays below 500m"
+
+    def test_always_mode_ignores_altitude_profile(self):
+        """Zone with mode='always' blocks path regardless of altitude profile."""
+        zone = NoFlyZone(
+            id='always_zone',
+            points=[[55.49, 37.4], [55.49, 37.6], [55.51, 37.6], [55.51, 37.4]],
+            name='AlwaysZone',
+        )
+        planner = _make_planner(zones=[zone])
+        result = planner.plan_path(55.5, 37.0, 55.5, 38.0, 100.0, end_altitude=5000.0)
+        assert result is not None
+        assert len(result) > 0, "Always-mode zone should block even at high altitude"
+
+    def test_long_distance_path(self):
+        """25 km path through several zones — must complete in <1 second."""
+        zones = []
+        # 5 zones along a 25km path
+        for i in range(5):
+            lon_base = 37.05 + i * 0.06
+            zones.append(NoFlyZone(
+                id=f'long_{i}',
+                points=[
+                    [55.49, lon_base],
+                    [55.49, lon_base + 0.02],
+                    [55.51, lon_base + 0.02],
+                    [55.51, lon_base],
+                ],
+                name=f'LongZone{i}',
+            ))
+
+        planner = _make_planner(zones=zones, nofly_buffer=100.0)
+        t0 = time.perf_counter()
+        result = planner.plan_path(55.5, 37.0, 55.5, 37.35, 100)
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+
+        assert result is not None, "Should find a path"
+        assert elapsed_ms < 1000, f"Took {elapsed_ms:.0f}ms, expected <1000ms"

@@ -53,6 +53,18 @@ def along_track_distance(pos_lat: float, pos_lon: float,
     return atd * EARTH_RADIUS
 
 
+def along_track_fraction(lat: float, lon: float,
+                         start_lat: float, start_lon: float,
+                         end_lat: float, end_lon: float) -> float:
+    """Returns 0.0..1.0 fraction of how far along the segment start→end the point projects.
+    Clamped to [0, 1]. Uses along-track distance relative to total segment length."""
+    total = haversine_distance(start_lat, start_lon, end_lat, end_lon)
+    if total < 1.0:
+        return 0.0
+    atd = along_track_distance(lat, lon, start_lat, start_lon, end_lat, end_lon)
+    return max(0.0, min(1.0, atd / total))
+
+
 def eta_seconds(distance_m: float, groundspeed_ms: float) -> float:
     if groundspeed_ms <= 0:
         return float('inf')

@@ -99,6 +99,7 @@ class AutopilotManager:
         self._avoidance_computing: bool = False  # True while background thread runs
         self._avoidance_pending_result = None  # result from background thread
         self._avoidance_last_check_time: float = 0.0  # time of last avoidance computation start
+        self._avoidance_last_alt: float = 0.0  # altitude at last avoidance computation
         self._AVOIDANCE_RECHECK_INTERVAL: float = 10.0  # seconds between periodic rechecks
 
         self._event_bus.subscribe(Event.CONNECTION_LOST, self._on_connection_lost)
@@ -592,8 +593,9 @@ class AutopilotManager:
                     # Flying to waypoint — send GUIDED target
 
                     # Zone avoidance: compute intermediate waypoints if path crosses obstacles
-                    avoid_alt = min(telemetry.altitude_agl, wp.altitude)
-                    avoidance_target = self._get_avoidance_target(position, wp, avoid_alt)
+                    start_alt = telemetry.altitude_agl
+                    end_alt = wp.altitude if wp.climb_enroute else telemetry.altitude_agl
+                    avoidance_target = self._get_avoidance_target(position, wp, start_alt, end_alt)
 
                     if avoidance_target:
                         # Navigate to avoidance intermediate point
@@ -978,10 +980,12 @@ class AutopilotManager:
                         self._start_orbit(wp, self._proxy.get_telemetry().heading)
                         logger.info(f"INFINITE ORBIT started at WP{wp.id}")
 
-    def _get_avoidance_target(self, position, wp, altitude: float) -> Optional[Tuple[float, float]]:
+    def _get_avoidance_target(self, position, wp, start_alt: float,
+                              end_alt: float) -> Optional[Tuple[float, float]]:
         """Check if path to wp needs avoidance and return current intermediate target.
         Returns (lat, lon) of avoidance waypoint, or None if direct path is OK.
-        Path computation runs in a background thread to avoid blocking update()."""
+        Path computation runs in a background thread to avoid blocking update().
+        start_alt/end_alt define the altitude profile along the segment."""
         if not self._zone_checker or not self._path_planner:
             logger.debug("AVOIDANCE: no zone_checker or path_planner")
             return None
@@ -999,6 +1003,7 @@ class AutopilotManager:
                 elif path is None:
                     self._avoidance_gave_up = for_wp_id
                     logger.warning("AVOIDANCE: no path found to WP%d, flying direct", for_wp_id)
+                    self._event_bus.emit(Event.AVOIDANCE_FAILED, {'waypoint_id': for_wp_id})
                 else:
                     logger.warning("AVOIDANCE: plan_path returned EMPTY list for WP%d — direct path clear?", for_wp_id)
             else:
@@ -1011,29 +1016,45 @@ class AutopilotManager:
         needs_recheck = (now - self._avoidance_last_check_time >= self._AVOIDANCE_RECHECK_INTERVAL
                          and not self._avoidance_computing)
 
+        # Altitude delta recheck: if altitude changed significantly, recompute
+        alt_delta = abs(start_alt - self._avoidance_last_alt)
+        if alt_delta > 50.0 and not self._avoidance_computing:
+            needs_recheck = True
+
         if self._avoidance_gave_up == wp.id and not needs_recheck:
             return None
 
         # Compute avoidance if not yet done for this wp, or periodic recheck
         if self._avoidance_for_wp_id != wp.id or needs_recheck:
             reason = "new WP" if self._avoidance_for_wp_id != wp.id else "periodic recheck"
+            if alt_delta > 50.0:
+                reason += f" (alt delta {alt_delta:.0f}m)"
             self._avoidance_for_wp_id = wp.id
             self._avoidance_computing = False
             self._avoidance_gave_up = -1
 
-            intersects = self._zone_checker.segment_intersects_obstacles(
-                position.lat, position.lon, wp.lat, wp.lon, altitude
-            )
-            logger.warning("AVOIDANCE: %s WP%d, alt=%.1f, pos=(%.6f,%.6f)->(%.6f,%.6f), intersects=%s",
-                           reason, wp.id, altitude, position.lat, position.lon, wp.lat, wp.lon, intersects)
+            # Use altitude profile if climbing
+            if start_alt != end_alt:
+                intersects = self._zone_checker.segment_intersects_obstacles_climb(
+                    position.lat, position.lon, wp.lat, wp.lon, start_alt, end_alt
+                )
+            else:
+                intersects = self._zone_checker.segment_intersects_obstacles(
+                    position.lat, position.lon, wp.lat, wp.lon, start_alt
+                )
+            logger.warning("AVOIDANCE: %s WP%d, alt=%.1f→%.1f, pos=(%.6f,%.6f)->(%.6f,%.6f), intersects=%s",
+                           reason, wp.id, start_alt, end_alt,
+                           position.lat, position.lon, wp.lat, wp.lon, intersects)
             self._avoidance_last_check_time = now
+            self._avoidance_last_alt = start_alt
             if intersects:
                 # Start background computation — clear old waypoints
                 self._avoidance_waypoints = []
                 self._avoidance_wp_idx = 0
                 self._avoidance_computing = True
                 self._start_avoidance_computation(
-                    position.lat, position.lon, wp.lat, wp.lon, altitude, wp.id
+                    position.lat, position.lon, wp.lat, wp.lon,
+                    start_alt, wp.id, end_alt if start_alt != end_alt else None
                 )
                 return None  # no result yet
             else:
@@ -1042,7 +1063,8 @@ class AutopilotManager:
                     logger.warning("AVOIDANCE: path now CLEAR to WP%d — dropping old avoidance", wp.id)
                 self._avoidance_waypoints = []
                 self._avoidance_wp_idx = 0
-                logger.warning("AVOIDANCE: direct path to WP%d is CLEAR at alt=%.1f — no avoidance needed", wp.id, altitude)
+                logger.warning("AVOIDANCE: direct path to WP%d is CLEAR at alt=%.1f→%.1f — no avoidance needed",
+                               wp.id, start_alt, end_alt)
 
         # Still computing — don't have result yet
         if self._avoidance_computing:
@@ -1078,14 +1100,15 @@ class AutopilotManager:
 
     def _start_avoidance_computation(self, start_lat: float, start_lon: float,
                                      end_lat: float, end_lon: float,
-                                     altitude: float, wp_id: int):
+                                     altitude: float, wp_id: int,
+                                     end_altitude: float = None):
         """Run plan_path in a background thread."""
         import threading
 
         def worker():
             try:
                 result = self._path_planner.plan_path(
-                    start_lat, start_lon, end_lat, end_lon, altitude
+                    start_lat, start_lon, end_lat, end_lon, altitude, end_altitude
                 )
             except Exception as e:
                 logger.error("AVOIDANCE computation error: %s", e)

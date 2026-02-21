@@ -9,6 +9,7 @@ from src.navigation.zone_manager import ZoneManager
 from src.navigation.calculations import (
     point_in_polygon, polygon_buffer, segment_intersects_polygon,
     circle_to_polygon, haversine_distance, meters_to_lat_offset, meters_to_lon_offset,
+    along_track_fraction, cross_track_distance,
 )
 
 logger = logging.getLogger(__name__)
@@ -290,4 +291,129 @@ class ZoneChecker:
                 result.append(polygon_buffer(obs.points, obs.buffer))
             else:
                 result.append(obs.points)
+        return result
+
+    def segment_intersects_obstacles_climb(self, lat1: float, lon1: float,
+                                            lat2: float, lon2: float,
+                                            start_alt: float, end_alt: float) -> bool:
+        """Check segment intersection with altitude interpolation for climb_enroute.
+        For below_altitude zones, interpolate altitude along the segment and skip
+        zones where the aircraft is above the zone limit at that point."""
+        # NoFly zones
+        for zone in self._zone_manager.get_all_zones():
+            mode = zone.avoid_mode if zone.avoid_mode else self._config.nofly_mode
+            if mode == "disabled":
+                continue
+
+            buf = zone.buffer if zone.buffer is not None else self._config.nofly_buffer
+            poly = zone.points
+            if buf > 0:
+                poly = polygon_buffer(poly, buf)
+
+            if mode == "below_altitude" and zone.altitude is not None:
+                # Interpolate altitude at zone centroid position along segment
+                cx = sum(v[0] for v in poly) / len(poly)
+                cy = sum(v[1] for v in poly) / len(poly)
+                frac = along_track_fraction(cx, cy, lat1, lon1, lat2, lon2)
+                alt_at_zone = start_alt + (end_alt - start_alt) * frac
+                if alt_at_zone >= zone.altitude:
+                    continue
+
+            if segment_intersects_polygon(lat1, lon1, lat2, lon2, poly):
+                return True
+
+        # Settlements
+        if self._config.settlement_mode != "disabled":
+            # For climb: check with minimum altitude (most conservative for settlements)
+            min_alt = min(start_alt, end_alt)
+            if self._config.settlement_mode == "below_altitude":
+                if min_alt >= self._config.settlement_min_altitude:
+                    return False
+
+            buf = self._config.settlement_buffer
+            min_lat = min(lat1, lat2) - meters_to_lat_offset(buf + 1000)
+            max_lat = max(lat1, lat2) + meters_to_lat_offset(buf + 1000)
+            mid_lat = (lat1 + lat2) / 2
+            min_lon = min(lon1, lon2) - meters_to_lon_offset(buf + 1000, mid_lat)
+            max_lon = max(lon1, lon2) + meters_to_lon_offset(buf + 1000, mid_lat)
+
+            nearby = self._settlements_in_bbox(min_lat, max_lat, min_lon, max_lon)
+            for cached in nearby:
+                poly = self._get_settlement_polygon(cached.feat)
+                if poly is None:
+                    continue
+                if self._config.settlement_buffer > 0:
+                    poly = polygon_buffer(poly, self._config.settlement_buffer)
+
+                if self._config.settlement_mode == "below_altitude":
+                    cx = sum(v[0] for v in poly) / len(poly)
+                    cy = sum(v[1] for v in poly) / len(poly)
+                    frac = along_track_fraction(cx, cy, lat1, lon1, lat2, lon2)
+                    alt_at_settlement = start_alt + (end_alt - start_alt) * frac
+                    if alt_at_settlement >= self._config.settlement_min_altitude:
+                        continue
+
+                if segment_intersects_polygon(lat1, lon1, lat2, lon2, poly):
+                    return True
+
+        return False
+
+    def get_buffered_obstacles_climb(self, start_alt: float, end_alt: float,
+                                      bbox: Optional[Tuple[float, float, float, float]] = None,
+                                      start_lat: float = 0, start_lon: float = 0,
+                                      end_lat: float = 0, end_lon: float = 0
+                                      ) -> List[List[List[float]]]:
+        """Get buffered obstacles with altitude profile — skip zones the aircraft
+        will fly over at that segment position."""
+        result = []
+
+        for zone in self._zone_manager.get_all_zones():
+            mode = zone.avoid_mode if zone.avoid_mode else self._config.nofly_mode
+            if mode == "disabled":
+                continue
+
+            if mode == "below_altitude" and zone.altitude is not None:
+                cx = sum(v[0] for v in zone.points) / len(zone.points)
+                cy = sum(v[1] for v in zone.points) / len(zone.points)
+                frac = along_track_fraction(cx, cy, start_lat, start_lon, end_lat, end_lon)
+                alt_at_zone = start_alt + (end_alt - start_alt) * frac
+                if alt_at_zone >= zone.altitude:
+                    continue
+
+            buf = zone.buffer if zone.buffer is not None else self._config.nofly_buffer
+            if buf > 0:
+                result.append(polygon_buffer(zone.points, buf))
+            else:
+                result.append(zone.points)
+
+        # Settlements
+        if self._config.settlement_mode != "disabled":
+            min_alt = min(start_alt, end_alt)
+            if self._config.settlement_mode == "below_altitude":
+                if min_alt >= self._config.settlement_min_altitude:
+                    return result
+
+            if bbox:
+                nearby = self._settlements_in_bbox(*bbox)
+            else:
+                nearby = self._settlements
+
+            for cached in nearby:
+                poly = self._get_settlement_polygon(cached.feat)
+                if poly is None:
+                    continue
+
+                if self._config.settlement_mode == "below_altitude":
+                    cx = sum(v[0] for v in poly) / len(poly)
+                    cy = sum(v[1] for v in poly) / len(poly)
+                    frac = along_track_fraction(cx, cy, start_lat, start_lon, end_lat, end_lon)
+                    alt_at_settlement = start_alt + (end_alt - start_alt) * frac
+                    if alt_at_settlement >= self._config.settlement_min_altitude:
+                        continue
+
+                if self._config.settlement_buffer > 0:
+                    result.append(polygon_buffer(poly, self._config.settlement_buffer))
+                else:
+                    result.append(poly)
+
         return result

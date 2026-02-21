@@ -8,7 +8,7 @@ import numpy as np
 from src.navigation.zone_checker import ZoneChecker
 from src.navigation.calculations import (
     haversine_distance, polygon_buffer, segment_intersects_polygon,
-    is_visible, is_visible_vg,
+    is_visible, is_visible_vg, cross_track_distance,
     meters_to_lat_offset, meters_to_lon_offset,
     batch_segments_intersect, batch_point_in_polygon, batch_haversine,
 )
@@ -24,8 +24,11 @@ class PathPlanner:
 
     def plan_path(self, start_lat: float, start_lon: float,
                   end_lat: float, end_lon: float,
-                  altitude: float) -> Optional[List[Tuple[float, float]]]:
+                  altitude: float, end_altitude: float = None) -> Optional[List[Tuple[float, float]]]:
         """Compute avoidance path around obstacles.
+        Args:
+            altitude: start altitude (or single altitude if end_altitude is None)
+            end_altitude: end altitude for climb_enroute (None = same as altitude)
         Returns:
             [] — no avoidance needed (direct path is clear)
             [(lat, lon), ...] — intermediate waypoints (excluding start/end)
@@ -40,7 +43,18 @@ class PathPlanner:
         max_lon = max(start_lon, end_lon) + meters_to_lon_offset(margin, mid_lat)
         bbox = (min_lat, max_lat, min_lon, max_lon)
 
-        buffered = self._zone_checker.get_buffered_obstacles(altitude, bbox=bbox)
+        if end_altitude is not None:
+            buffered = self._zone_checker.get_buffered_obstacles_climb(
+                altitude, end_altitude, bbox=bbox,
+                start_lat=start_lat, start_lon=start_lon,
+                end_lat=end_lat, end_lon=end_lon
+            )
+        else:
+            buffered = self._zone_checker.get_buffered_obstacles(altitude, bbox=bbox)
+
+        # Corridor filter: keep only obstacles within corridor_width of direct path
+        buffered = self._filter_by_corridor(buffered, start_lat, start_lon,
+                                             end_lat, end_lon)
         if not buffered:
             return []
 
@@ -115,6 +129,26 @@ class PathPlanner:
         logger.warning("Pruned obstacles: %d→%d polygons, %d→%d vertices",
                         len(obstacles), len(result),
                         sum(len(p) for p in obstacles), vert_count)
+        return result
+
+    def _filter_by_corridor(self, obstacles: List[List[List[float]]],
+                             start_lat: float, start_lon: float,
+                             end_lat: float, end_lon: float,
+                             corridor_width: float = 5000.0) -> List[List[List[float]]]:
+        """Filter obstacles to only those within corridor_width of direct path.
+        Significantly reduces polygon count on long routes where bbox is very large."""
+        if not obstacles:
+            return obstacles
+        result = []
+        for poly in obstacles:
+            cx = sum(v[0] for v in poly) / len(poly)
+            cy = sum(v[1] for v in poly) / len(poly)
+            xtd = abs(cross_track_distance(cx, cy, start_lat, start_lon, end_lat, end_lon))
+            if xtd <= corridor_width:
+                result.append(poly)
+        if len(result) < len(obstacles):
+            logger.info("[PATHFIND] Corridor filter: %d→%d obstacles (width=%.0fm)",
+                        len(obstacles), len(result), corridor_width)
         return result
 
     def _build_and_solve(self, start_lat: float, start_lon: float,

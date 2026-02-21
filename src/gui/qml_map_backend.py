@@ -480,6 +480,69 @@ class SettlementCircleModel(QAbstractListModel):
         self.endInsertRows()
 
 
+class ObstacleWarningModel(QAbstractListModel):
+    """Warning markers for obstacles (zones + settlements) shown as ⚠ icons."""
+    LatRole = Qt.UserRole + 1
+    LonRole = Qt.UserRole + 2
+    TooltipRole = Qt.UserRole + 3
+    SourceRole = Qt.UserRole + 4
+
+    MAX_ITEMS = 150
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._items = []  # list of {lat, lon, tooltip, source}
+
+    def roleNames(self):
+        return {
+            self.LatRole: b'lat',
+            self.LonRole: b'lon',
+            self.TooltipRole: b'tooltip',
+            self.SourceRole: b'source',
+        }
+
+    def rowCount(self, parent=QModelIndex()):
+        return len(self._items)
+
+    def data(self, index, role=Qt.DisplayRole):
+        if not index.isValid() or index.row() >= len(self._items):
+            return QVariant()
+        item = self._items[index.row()]
+        if role == self.LatRole:
+            return item['lat']
+        if role == self.LonRole:
+            return item['lon']
+        if role == self.TooltipRole:
+            return item['tooltip']
+        if role == self.SourceRole:
+            return item['source']
+        return QVariant()
+
+    def set_items(self, items: list):
+        self.beginResetModel()
+        self._items = items[:self.MAX_ITEMS]
+        self.endResetModel()
+
+    def append_items(self, items: list):
+        if not items:
+            return
+        overflow = len(self._items) + len(items) - self.MAX_ITEMS
+        if overflow > 0:
+            self.beginRemoveRows(QModelIndex(), 0, overflow - 1)
+            self._items = self._items[overflow:]
+            self.endRemoveRows()
+        start = len(self._items)
+        self.beginInsertRows(QModelIndex(), start, start + len(items) - 1)
+        self._items.extend(items)
+        self.endInsertRows()
+
+    def clear(self):
+        if self._items:
+            self.beginResetModel()
+            self._items = []
+            self.endResetModel()
+
+
 class ConflictSegmentModel(QAbstractListModel):
     """Conflict segments for route display."""
     FromLatRole = Qt.UserRole + 1
@@ -791,9 +854,13 @@ class QmlMapBackend(QObject):
         self._drawingVertexModel = SimpleVertexModel(self)
         self._editingVertexModel = SimpleVertexModel(self)
         self._editingMidpointModel = SimpleVertexModel(self)
+        self._obstacleWarningModel = ObstacleWarningModel(self)
 
         # Store waypoints for conflict resolution
         self._currentWaypoints = []
+
+        # Store zone details for obstacle warnings
+        self._zone_details = []  # raw zone dicts with altitude/mode/buffer
 
     # ════════════════════ Properties ════════════════════
 
@@ -955,6 +1022,10 @@ class QmlMapBackend(QObject):
     def editingMidpointModel(self):
         return self._editingMidpointModel
 
+    @pyqtProperty(QObject, constant=True)
+    def obstacleWarningModel(self):
+        return self._obstacleWarningModel
+
     @pyqtProperty('QVariantList', notify=avoidancePathChanged)
     def avoidancePath(self):
         return self._avoidancePath
@@ -1095,18 +1166,96 @@ class QmlMapBackend(QObject):
         for z in zones:
             self._zoneModel.add_zone(z['id'], z['points'], z.get('name', ''))
         self._zoneBorderModel.rebuild(self._zoneModel._items)
+        self._zone_details = zones
+        self._rebuild_obstacle_warnings()
 
     # ── Settlements ──
+
+    _PLACE_TYPE_TEXT = {
+        'city': 'город', 'town': 'посёлок',
+        'village': 'село', 'hamlet': 'деревня',
+    }
 
     def add_settlement_features(self, features: list):
         polys = [f for f in features if f.get('F') == 'p']
         nodes = [f for f in features if f.get('F') == 'n']
         if polys:
             self._settlementPolyModel.add_polys(polys)
-            # Rebuild dashed borders from all polygon coords
             self._settlementBorderModel.rebuild(self._settlementPolyModel._items)
+            # Generate warnings directly from new features (not from model, which evicts)
+            warnings = []
+            for f in polys:
+                coords = f.get('c', [])
+                if len(coords) < 3:
+                    continue
+                lat_c, lon_c = self._bbox_center(coords)
+                place_type = f.get('t', 'village')
+                type_text = self._PLACE_TYPE_TEXT.get(place_type, place_type)
+                warnings.append({
+                    'lat': lat_c, 'lon': lon_c,
+                    'tooltip': f"Населённый пункт ({type_text})",
+                    'source': 'settlement',
+                })
+            if warnings:
+                self._obstacleWarningModel.append_items(warnings)
         if nodes:
             self._settlementCircleModel.add_circles(nodes)
+            warnings = []
+            for f in nodes:
+                lat = f.get('lat', 0.0)
+                lon = f.get('lon', 0.0)
+                place_type = f.get('t', 'village')
+                type_text = self._PLACE_TYPE_TEXT.get(place_type, place_type)
+                warnings.append({
+                    'lat': lat, 'lon': lon,
+                    'tooltip': f"Населённый пункт ({type_text})",
+                    'source': 'settlement',
+                })
+            if warnings:
+                self._obstacleWarningModel.append_items(warnings)
+
+    # ── Obstacle warnings ──
+
+    @staticmethod
+    def _bbox_center(coords):
+        """Bounding-box center of a coordinate list — always visually centered."""
+        lats = [c[0] for c in coords]
+        lons = [c[1] for c in coords]
+        return ((min(lats) + max(lats)) / 2.0,
+                (min(lons) + max(lons)) / 2.0)
+
+    def _rebuild_obstacle_warnings(self):
+        """Rebuild zone warnings from stored zone details."""
+        _MODE_TEXT = {
+            'always': 'Всегда',
+            'below_altitude': 'Ниже высоты',
+            'disabled': 'Отключено',
+        }
+        warnings = []
+        for z in self._zone_details:
+            pts = z.get('points', [])
+            if len(pts) < 3:
+                continue
+            lat_c, lon_c = self._bbox_center(pts)
+            name = z.get('name', '') or 'Без названия'
+            mode = z.get('avoid_mode') or 'always'
+            mode_text = _MODE_TEXT.get(mode, mode)
+            alt = z.get('altitude')
+            buf = z.get('buffer')
+            lines = [f"\u26A0 Запретная зона: {name}", f"Режим: {mode_text}"]
+            if alt is not None:
+                lines.append(f"Высота: до {int(alt)} м")
+            if buf is not None:
+                lines.append(f"Буфер: {int(buf)} м")
+            warnings.append({
+                'lat': lat_c, 'lon': lon_c,
+                'tooltip': '\n'.join(lines),
+                'source': 'zone',
+            })
+        # Replace only zone warnings, keep settlement warnings
+        settlement_warnings = [w for w in self._obstacleWarningModel._items
+                               if w.get('source') == 'settlement']
+        self._obstacleWarningModel.set_items(warnings + settlement_warnings)
 
     # ── Conflicts / Avoidance ──
 

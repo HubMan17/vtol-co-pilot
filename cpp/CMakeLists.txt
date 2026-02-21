@@ -61,6 +61,7 @@ set(SOURCES
     src/gui/MapLibreAdapter.cpp
     src/gui/MapLegend.cpp
     src/gui/StatusPanel.cpp
+    src/gui/NotificationWidget.cpp
     src/gui/Dialogs.cpp
     src/gui/SettlementLoader.cpp
     src/gui/MainWindow.cpp

@@ -27,6 +27,9 @@ from src.gui.zone_dialog import ZonePropertiesDialog
 from src.gui.zone_settings_dialog import ZoneSettingsDialog
 from src.gui.settings_dialog import SettingsDialog
 from src.gui.theme import STYLESHEET, Colors, Fonts, apply_dark_titlebar
+from src.gui.notification_widget import (
+    NotificationWidget, NotificationManager, Notification, NotificationLevel,
+)
 from src.navigation.zone_manager import ZoneManager
 from src.navigation.zone_checker import ZoneChecker
 from src.navigation.path_planner import PathPlanner
@@ -124,6 +127,11 @@ class MainWindow(QMainWindow):
         sep2.setFixedHeight(1)
         sep2.setStyleSheet(f"background-color: {Colors.BORDER};")
         right_lay.addWidget(sep2)
+
+        # Notification widget (hidden by default)
+        self.notification_widget = NotificationWidget()
+        self.notification_manager = NotificationManager(self.notification_widget)
+        right_lay.addWidget(self.notification_widget)
 
         # Controls footer
         right_lay.addWidget(self._build_controls())
@@ -422,6 +430,7 @@ class MainWindow(QMainWindow):
         self.event_bus.subscribe(Event.AUTOPILOT_ENGAGE, self._on_autopilot_engage)
         self.event_bus.subscribe(Event.AUTOPILOT_DISENGAGE, self._on_autopilot_disengage)
         self.event_bus.subscribe(Event.WAYPOINT_REACHED, self._on_waypoint_reached)
+        self.event_bus.subscribe(Event.AVOIDANCE_FAILED, self._on_avoidance_failed)
 
     def _setup_timer(self):
         self.update_timer = QTimer()
@@ -462,6 +471,13 @@ class MainWindow(QMainWindow):
         self.btn_follow.setChecked(True)
         self.map_widget.set_follow_mode(True)
 
+        self.notification_manager.push_or_replace(Notification(
+            level=NotificationLevel.INFO,
+            title="Связь восстановлена",
+            message="MAVLink соединение активно",
+            duration=10,
+        ), tag="connection")
+
     def _on_connection_lost(self, data):
         self.btn_connect.setEnabled(True)
         self.btn_disconnect.setEnabled(False)
@@ -474,6 +490,13 @@ class MainWindow(QMainWindow):
             background-color: {Colors.ERROR_BG};
         """)
         self.statusbar.showMessage("Отключено")
+
+        self.notification_manager.push_or_replace(Notification(
+            level=NotificationLevel.CRITICAL,
+            title="Связь потеряна",
+            message="MAVLink соединение прервано",
+            duration=60,
+        ), tag="connection")
 
     # ────────────────────── Position / Home ──────────────────────
 
@@ -771,8 +794,11 @@ class MainWindow(QMainWindow):
 
     def _load_zones(self):
         zones = self.zone_manager.get_all_zones()
-        zone_dicts = [{'id': z.id, 'points': z.points, 'name': z.name}
-                      for z in zones]
+        zone_dicts = [{
+            'id': z.id, 'points': z.points, 'name': z.name,
+            'altitude': z.altitude, 'avoid_mode': z.avoid_mode,
+            'buffer': z.buffer, 'description': z.description,
+        } for z in zones]
         self.map_widget.load_all_zones(zone_dicts)
 
     def _on_zone_settings(self):
@@ -973,11 +999,58 @@ class MainWindow(QMainWindow):
         reason = data.get('reason', '')
         self.statusbar.showMessage(f"АП откл.: {reason}" if reason else "АП отключен")
 
+        if reason and reason != "Отключено пользователем":
+            if "потеряно" in reason.lower() or "потеряна" in reason.lower():
+                level = NotificationLevel.CRITICAL
+                title = "Связь потеряна"
+            elif "пилот" in reason.lower():
+                level = NotificationLevel.WARNING
+                title = "Ручной режим"
+            else:
+                level = NotificationLevel.WARNING
+                title = "Автопилот отключён"
+            self.notification_manager.push(Notification(
+                level=level, title=title, message=reason, duration=30,
+            ))
+
     def _on_waypoint_reached(self, data):
         next_wp = data.get('next', 0)
+        reached = data.get('reached', 0)
         total = self.route_planner.get_waypoint_count()
         self.map_widget.update_active_waypoint(next_wp - 1)
-        self.statusbar.showMessage(f"WPT {data.get('reached', 0)} reached → {next_wp}/{total}")
+        self.statusbar.showMessage(f"WPT {reached} reached → {next_wp}/{total}")
+
+        self.notification_manager.push(Notification(
+            level=NotificationLevel.INFO,
+            title="Точка достигнута",
+            message=f"WP{reached} пройдена, следующая WP{next_wp}",
+            duration=15,
+        ))
+
+    def _on_avoidance_failed(self, data):
+        wp_id = data.get('waypoint_id', 0)
+        self.notification_manager.push_or_replace(Notification(
+            level=NotificationLevel.CRITICAL,
+            title="Обход невозможен",
+            message=f"Не найден безопасный маршрут к точке WP{wp_id}",
+            duration=60,
+            actions=[
+                ("Лететь напрямую", lambda: self._notify_fly_direct(wp_id)),
+                ("Пропустить WP", lambda: self._notify_skip_waypoint(wp_id)),
+            ],
+        ), tag=f"avoidance_{wp_id}")
+
+    def _notify_fly_direct(self, wp_id: int):
+        logger.info("NOTIFICATION ACTION: fly direct to WP%d", wp_id)
+        self.statusbar.showMessage(f"Прямой полёт к WP{wp_id}")
+
+    def _notify_skip_waypoint(self, wp_id: int):
+        logger.info("NOTIFICATION ACTION: skip WP%d", wp_id)
+        next_wp = self.route_planner.next_waypoint()
+        if next_wp:
+            self.statusbar.showMessage(f"WP{wp_id} пропущена → WP{next_wp.id}")
+        else:
+            self.statusbar.showMessage(f"WP{wp_id} пропущена — маршрут завершён")
 
     def _on_map_mouse_move(self, lat, lon):
         self.sb_cur_val.setText(f"{lat:.6f} , {lon:.6f}")

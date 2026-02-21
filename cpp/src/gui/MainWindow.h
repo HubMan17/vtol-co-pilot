@@ -23,6 +23,7 @@
 #include "autopilot/AutopilotManager.h"
 #include "gui/MapWidget.h"
 #include "gui/StatusPanel.h"
+#include "gui/NotificationWidget.h"
 #include "gui/TileProxy.h"
 #include "gui/SettlementLoader.h"
 #include "gui/PerfLogger.h"
@@ -131,6 +132,8 @@ private:
     // ── GUI components ──
     MapWidget* m_mapWidget = nullptr;
     StatusPanel* m_statusPanel = nullptr;
+    NotificationWidget* m_notificationWidget = nullptr;
+    NotificationManager* m_notificationManager = nullptr;
     TileProxy m_tileProxy;
     SettlementLoader m_settlementLoader;
     QTimer* m_updateTimer = nullptr;

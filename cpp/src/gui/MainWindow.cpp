@@ -124,6 +124,11 @@ void MainWindow::setupUi()
     sep2->setStyleSheet(QStringLiteral("background-color: %1;").arg(theme::BORDER));
     rightLay->addWidget(sep2);
 
+    // Notification widget (hidden by default)
+    m_notificationWidget = new NotificationWidget(this);
+    m_notificationManager = new NotificationManager(m_notificationWidget, this);
+    rightLay->addWidget(m_notificationWidget);
+
     rightLay->addWidget(buildControls());
     splitter->addWidget(right);
 
@@ -451,6 +456,27 @@ void MainWindow::setupConnections()
             this, [this](const QString& reason) {
         statusBar()->showMessage(reason, 10000);
         SPDLOG_WARN("[MainWindow] Avoidance failed: {}", reason.toStdString());
+
+        m_notificationManager->pushOrReplace(Notification{
+            NotificationLevel::Critical,
+            QStringLiteral("Обход невозможен"),
+            reason,
+            60,
+            {
+                {QStringLiteral("Лететь напрямую"), [this] {
+                    SPDLOG_INFO("[Notification] action: fly direct");
+                    statusBar()->showMessage(QStringLiteral("Прямой полёт"));
+                }},
+                {QStringLiteral("Пропустить WP"), [this] {
+                    SPDLOG_INFO("[Notification] action: skip waypoint");
+                    auto* wp = m_routePlanner.nextWaypoint();
+                    statusBar()->showMessage(wp
+                        ? QStringLiteral("WP пропущена → WP%1").arg(wp->id)
+                        : QStringLiteral("WP пропущена — маршрут завершён"));
+                }},
+            },
+            {}
+        }, QStringLiteral("avoidance"));
     });
 
     // Layer visibility → save config
@@ -535,6 +561,13 @@ void MainWindow::onConnectionRestored()
 
     m_btnFollow->setChecked(true);
     m_mapWidget->backend()->setFollowMode(true);
+
+    m_notificationManager->pushOrReplace(Notification{
+        NotificationLevel::Info,
+        QStringLiteral("Связь восстановлена"),
+        QStringLiteral("MAVLink соединение активно"),
+        10, {}, {}
+    }, QStringLiteral("connection"));
 }
 
 void MainWindow::onConnectionLost()
@@ -549,6 +582,13 @@ void MainWindow::onConnectionLost()
         "border-radius: 10px; background-color: %2;")
         .arg(theme::ERROR_CLR, theme::ERROR_BG));
     statusBar()->showMessage(QStringLiteral("Отключено"));
+
+    m_notificationManager->pushOrReplace(Notification{
+        NotificationLevel::Critical,
+        QStringLiteral("Связь потеряна"),
+        QStringLiteral("MAVLink соединение прервано"),
+        60, {}, {}
+    }, QStringLiteral("connection"));
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -1123,9 +1163,21 @@ void MainWindow::onAutopilotDisengaged(const QString& /*prevMode*/, const QStrin
     statusBar()->showMessage(reason.isEmpty()
         ? QStringLiteral("АП отключен")
         : QStringLiteral("АП откл.: %1").arg(reason));
+
+    if (!reason.isEmpty() && reason != QStringLiteral("Отключено пользователем")) {
+        auto level = NotificationLevel::Warning;
+        auto title = QStringLiteral("Автопилот отключён");
+        if (reason.contains(QStringLiteral("потерян"), Qt::CaseInsensitive)) {
+            level = NotificationLevel::Critical;
+            title = QStringLiteral("Связь потеряна");
+        } else if (reason.contains(QStringLiteral("пилот"), Qt::CaseInsensitive)) {
+            title = QStringLiteral("Ручной режим");
+        }
+        m_notificationManager->push(Notification{level, title, reason, 30, {}, {}});
+    }
 }
 
-void MainWindow::onWaypointReached(int /*reachedId*/, int nextId)
+void MainWindow::onWaypointReached(int reachedId, int nextId)
 {
     int total = m_routePlanner.waypointCount();
     m_mapWidget->backend()->updateActiveWaypoint(nextId - 1);
@@ -1133,6 +1185,13 @@ void MainWindow::onWaypointReached(int /*reachedId*/, int nextId)
     m_guiAvoidanceActive = false;
     checkRouteConflicts();
     statusBar()->showMessage(QStringLiteral("WPT reached → %1/%2").arg(nextId).arg(total));
+
+    m_notificationManager->push(Notification{
+        NotificationLevel::Info,
+        QStringLiteral("Точка достигнута"),
+        QStringLiteral("WP%1 пройдена, следующая WP%2").arg(reachedId).arg(nextId),
+        15, {}, {}
+    });
 }
 
 void MainWindow::onOrbitRadiusChanged(int r)

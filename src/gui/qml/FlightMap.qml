@@ -642,6 +642,93 @@ Item {
             }
         }
 
+        // ── Obstacle warning icons (⚠) ──
+        // Placed AFTER full-screen MouseAreas so delegates sit on top in z-order
+        // and can receive hover events.
+        MapItemView {
+            model: (backend && map.zoomLevel >= 10 && map.zoomLevel <= 16)
+                   ? backend.obstacleWarningModel : null
+            delegate: MapQuickItem {
+                coordinate: QtPositioning.coordinate(model.lat, model.lon)
+                anchorPoint.x: 16; anchorPoint.y: 16
+                zoomLevel: 0
+
+                visible: {
+                    if (!backend) return false;
+                    if (model.source === "zone") return backend.showZones;
+                    return backend.showSettlements;
+                }
+
+                sourceItem: Item {
+                    width: 32; height: 32
+
+                    opacity: {
+                        if (!backend || !backend.aircraftVisible || !backend.aircraftPosition.isValid)
+                            return 1.0;
+                        var dist = backend.aircraftPosition.distanceTo(
+                            QtPositioning.coordinate(model.lat, model.lon));
+                        return Math.max(0.0, Math.min(1.0, (dist - 1000) / 4000));
+                    }
+
+                    Rectangle {
+                        anchors.centerIn: parent
+                        width: 24; height: 24
+                        radius: 4
+                        color: model.source === "zone" ? "#FEF3C7" : "#FEE2E2"
+                        border.width: 2
+                        border.color: model.source === "zone" ? "#F59E0B" : "#EF4444"
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: "\u26A0"
+                            color: model.source === "zone" ? "#92400E" : "#B91C1C"
+                            font.pixelSize: 14
+                            font.bold: true
+                        }
+                    }
+
+                    MouseArea {
+                        id: obstWarnMouse
+                        anchors.fill: parent
+                        anchors.margins: -6
+                        hoverEnabled: true
+                        acceptedButtons: Qt.LeftButton
+                        preventStealing: true
+                        onClicked: {
+                            obstTipRect.visible = !obstTipRect.visible;
+                            mouse.accepted = true;
+                        }
+                    }
+
+                    Rectangle {
+                        id: obstTipRect
+                        visible: obstWarnMouse.containsMouse
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.bottom: parent.top
+                        anchors.bottomMargin: 4
+                        radius: 6
+                        color: "#DD111827"
+                        border.width: 1
+                        border.color: "#334155"
+                        z: 2000
+                        width: Math.min(320, obstTipText.implicitWidth + 14)
+                        height: obstTipText.implicitHeight + 10
+
+                        Text {
+                            id: obstTipText
+                            anchors.centerIn: parent
+                            width: parent.width - 10
+                            text: model.tooltip
+                            color: "#F8FAFC"
+                            font.pixelSize: 11
+                            wrapMode: Text.Wrap
+                            horizontalAlignment: Text.AlignHCenter
+                        }
+                    }
+                }
+            }
+        }
+
         // ════════════════════ UI Panels ════════════════════
 
         // ── Layer panel ──
