@@ -366,15 +366,21 @@ void StatusPanel::setupUi()
 
     auto checkIcon = paintedCheckIcon(20, Qt::white);
 
+    auto* controlsRow = new QHBoxLayout;
+    controlsRow->setSpacing(6);
+
     auto addControl = [&](const QString& labelText, QSpinBox*& spin, QPushButton*& btn,
                            const QString& suffix, int lo, int hi, int defaultVal) {
+        auto* col = new QVBoxLayout;
+        col->setSpacing(4);
+
         auto* lbl = new QLabel(labelText);
         lbl->setStyleSheet(QString("color: %1; font-size: 11px; font-weight: 600; border: none;")
                                .arg(theme::TEXT_TERTIARY));
-        ctrlLay->addWidget(lbl);
+        col->addWidget(lbl);
 
         auto* inputRow = new QHBoxLayout;
-        inputRow->setSpacing(6);
+        inputRow->setSpacing(4);
         spin = new QSpinBox;
         spin->setButtonSymbols(QAbstractSpinBox::NoButtons);
         spin->setRange(lo, hi);
@@ -393,12 +399,15 @@ void StatusPanel::setupUi()
         btn->setStyleSheet(btnStyle);
         inputRow->addWidget(btn);
 
-        ctrlLay->addLayout(inputRow);
+        col->addLayout(inputRow);
+        controlsRow->addLayout(col);
     };
 
     addControl("Высота", m_spinTargetAlt, m_btnSetAlt, " м", 10, 5000, 100);
     addControl("Радиус", m_spinOrbitRadius, m_btnSetRadius, " м", 30, 500, 150);
     addControl("Скорость", m_spinTargetSpeed, m_btnSetSpeed, " м/с", 15, 35, 20);
+
+    ctrlLay->addLayout(controlsRow);
 
     connect(m_btnSetAlt, &QPushButton::clicked, this, [this]() {
         m_manualAltOverride = true;
