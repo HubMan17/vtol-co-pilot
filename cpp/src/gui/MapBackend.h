@@ -71,6 +71,7 @@ class MapBackend : public QObject {
     Q_PROPERTY(QObject* drawingVertexModel READ drawingVertexModel CONSTANT)
     Q_PROPERTY(QObject* editingVertexModel READ editingVertexModel CONSTANT)
     Q_PROPERTY(QObject* editingMidpointModel READ editingMidpointModel CONSTANT)
+    Q_PROPERTY(QObject* obstacleWarningModel READ obstacleWarningModel CONSTANT)
 
 public:
     explicit MapBackend(QObject* parent = nullptr);
@@ -112,6 +113,7 @@ public:
     QObject* drawingVertexModel() { return &m_drawingVertexModel; }
     QObject* editingVertexModel() { return &m_editingVertexModel; }
     QObject* editingMidpointModel() { return &m_editingMidpointModel; }
+    QObject* obstacleWarningModel() { return &m_obstacleWarningModel; }
 
     // ── Python API equivalents (called by MainWindow / other C++ code) ──
     void updateAircraft(double lat, double lon, double heading);
@@ -318,6 +320,12 @@ private:
     SimpleVertexModel m_drawingVertexModel{this};
     SimpleVertexModel m_editingVertexModel{this};
     SimpleVertexModel m_editingMidpointModel{this};
+    ObstacleWarningModel m_obstacleWarningModel{this};
+
+    // Zone details for obstacle warning tooltip generation
+    QVariantList m_zoneDetails;  // raw zone maps with altitude/mode/buffer
+    void rebuildObstacleWarnings();
+    static std::pair<double, double> bboxCenter(const QVariantList& coords);
 };
 
 } // namespace vtol

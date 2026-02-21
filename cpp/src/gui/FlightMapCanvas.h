@@ -44,6 +44,7 @@ protected:
     void mouseDoubleClickEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void hoverMoveEvent(QHoverEvent* event) override;
+    void hoverLeaveEvent(QHoverEvent* event) override;
 
 private:
     // ── Mercator projection ──
@@ -121,6 +122,10 @@ private:
 
     int m_editDragVertex = -1;
 
+    // Obstacle warning hover
+    int m_hoveredWarning = -1;
+    QPointF m_mouseScreenPos;
+
     // ── Timers ──
     QTimer m_repaintTimer;  // 16ms throttle (~60 FPS)
     QTimer m_followTimer;   // 200ms follow mode
@@ -143,6 +148,7 @@ private:
     void paintConflictSegments(QPainter* p);
     void paintPlannedDirectPath(QPainter* p);
     void paintAvoidancePath(QPainter* p);
+    void paintObstacleWarnings(QPainter* p);
     void paintConflictPoints(QPainter* p);
     void paintWaypoints(QPainter* p);
     void paintDrawingOverlay(QPainter* p);

@@ -166,6 +166,7 @@ void FlightMapCanvas::connectBackendSignals()
     connectModel(m_backend->drawingVertexModel());
     connectModel(m_backend->editingVertexModel());
     connectModel(m_backend->editingMidpointModel());
+    connectModel(m_backend->obstacleWarningModel());
 
     // Initial bounds
     QTimer::singleShot(0, this, [this] { notifyBounds(); });
@@ -491,10 +492,45 @@ void FlightMapCanvas::wheelEvent(QWheelEvent* event)
 
 void FlightMapCanvas::hoverMoveEvent(QHoverEvent* event)
 {
+    m_mouseScreenPos = event->position();
+
     if (!m_backend) return;
     double lat, lon;
     screenToGeo(event->position().x(), event->position().y(), lat, lon);
     m_backend->onMouseMove(lat, lon);
+
+    // Hit-test obstacle warnings for hover tooltip
+    int prevHovered = m_hoveredWarning;
+    m_hoveredWarning = -1;
+    if (m_zoom >= 10 && m_zoom <= 16) {
+        auto* model = static_cast<ObstacleWarningModel*>(m_backend->obstacleWarningModel());
+        const auto& items = model->items();
+        double bestDist2 = 18.0 * 18.0;  // 18px hit radius
+        for (int i = 0; i < items.size(); ++i) {
+            const auto& item = items[i];
+            // Visibility check: zones need showZones, settlements need showSettlements
+            if (item.source == "zone" && !m_backend->showZones()) continue;
+            if (item.source == "settlement" && !m_backend->showSettlements()) continue;
+            QPointF sp = geoToScreen(item.lat, item.lon);
+            double dx = sp.x() - m_mouseScreenPos.x();
+            double dy = sp.y() - m_mouseScreenPos.y();
+            double d2 = dx * dx + dy * dy;
+            if (d2 < bestDist2) {
+                bestDist2 = d2;
+                m_hoveredWarning = i;
+            }
+        }
+    }
+    if (m_hoveredWarning != prevHovered)
+        scheduleRepaint();
+}
+
+void FlightMapCanvas::hoverLeaveEvent(QHoverEvent* /*event*/)
+{
+    if (m_hoveredWarning >= 0) {
+        m_hoveredWarning = -1;
+        scheduleRepaint();
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -572,21 +608,24 @@ void FlightMapCanvas::paint(QPainter* p)
     paintPlannedDirectPath(p);
     paintAvoidancePath(p);
 
-    // 11. Conflict points
+    // 11. Obstacle warnings (⚠)
+    paintObstacleWarnings(p);
+
+    // 12. Conflict points
     paintConflictPoints(p);
 
-    // 12. Waypoints
+    // 13. Waypoints
     if (m_backend->showWaypoints())
         paintWaypoints(p);
 
-    // 13. Drawing + editing
+    // 14. Drawing + editing
     paintDrawingOverlay(p);
     paintEditingVertices(p);
 
-    // 14. Home
+    // 15. Home
     paintHome(p);
 
-    // 15. Aircraft
+    // 16. Aircraft
     paintAircraft(p);
 }
 
@@ -823,6 +862,109 @@ void FlightMapCanvas::paintAvoidancePath(QPainter* p)
     }
     if (poly.size() >= 2)
         p->drawPolyline(poly);
+}
+
+void FlightMapCanvas::paintObstacleWarnings(QPainter* p)
+{
+    if (m_zoom < 10 || m_zoom > 16) return;
+
+    auto* model = static_cast<ObstacleWarningModel*>(m_backend->obstacleWarningModel());
+    const auto& items = model->items();
+    if (items.isEmpty()) return;
+
+    auto aircraftPos = m_backend->aircraftPosition();
+    bool hasAircraft = m_backend->aircraftVisible() && aircraftPos.isValid();
+
+    QFont iconFont;
+    iconFont.setPixelSize(14);
+    iconFont.setBold(true);
+
+    constexpr double BADGE_SIZE = 24.0;
+    constexpr double HALF = BADGE_SIZE / 2.0;
+
+    for (int i = 0; i < items.size(); ++i) {
+        const auto& item = items[i];
+
+        // Per-source visibility
+        if (item.source == "zone" && !m_backend->showZones()) continue;
+        if (item.source == "settlement" && !m_backend->showSettlements()) continue;
+
+        // Proximity fade: 1.0 at >5km, 0.0 at <1km
+        double opacity = 1.0;
+        if (hasAircraft) {
+            QGeoCoordinate itemPos(item.lat, item.lon);
+            double dist = aircraftPos.distanceTo(itemPos);
+            opacity = std::clamp((dist - 1000.0) / 4000.0, 0.0, 1.0);
+        }
+        if (opacity < 0.02) continue;
+
+        QPointF sp = geoToScreen(item.lat, item.lon);
+
+        // Cull off-screen (with margin)
+        if (sp.x() < -HALF || sp.x() > width() + HALF ||
+            sp.y() < -HALF || sp.y() > height() + HALF)
+            continue;
+
+        p->setOpacity(opacity);
+
+        // Badge background
+        QRectF badgeRect(sp.x() - HALF, sp.y() - HALF, BADGE_SIZE, BADGE_SIZE);
+        bool isZone = (item.source == "zone");
+
+        QColor fill = isZone ? QColor(0xFE, 0xF3, 0xC7) : QColor(0xFE, 0xE2, 0xE2);
+        QColor border = isZone ? QColor(0xF5, 0x9E, 0x0B) : QColor(0xEF, 0x44, 0x44);
+        QColor textCol = isZone ? QColor(0x92, 0x40, 0x0E) : QColor(0xB9, 0x1C, 0x1C);
+
+        p->setPen(QPen(border, 2));
+        p->setBrush(fill);
+        p->drawRoundedRect(badgeRect, 4, 4);
+
+        // ⚠ icon text
+        p->setFont(iconFont);
+        p->setPen(textCol);
+        p->drawText(badgeRect, Qt::AlignCenter, QString::fromUtf8("\u26A0"));
+    }
+
+    p->setOpacity(1.0);
+
+    // Draw hover tooltip
+    if (m_hoveredWarning >= 0 && m_hoveredWarning < items.size()) {
+        const auto& item = items[m_hoveredWarning];
+        QPointF sp = geoToScreen(item.lat, item.lon);
+
+        QFont tipFont;
+        tipFont.setPixelSize(11);
+        QFontMetrics fm(tipFont);
+
+        QStringList lines = item.tooltip.split('\n');
+        int maxWidth = 0;
+        int totalHeight = 0;
+        for (const auto& line : lines) {
+            int w = fm.horizontalAdvance(line);
+            maxWidth = std::max(maxWidth, w);
+            totalHeight += fm.height();
+        }
+
+        int padX = 8, padY = 6;
+        int tipW = std::min(maxWidth + padX * 2, 320);
+        int tipH = totalHeight + padY * 2;
+
+        QRectF tipRect(sp.x() - tipW / 2.0, sp.y() - HALF - 8 - tipH, tipW, tipH);
+
+        // Clamp to viewport
+        if (tipRect.left() < 4) tipRect.moveLeft(4);
+        if (tipRect.right() > width() - 4) tipRect.moveRight(width() - 4);
+        if (tipRect.top() < 4) tipRect.moveTop(sp.y() + HALF + 8);  // flip below
+
+        p->setPen(QPen(QColor(0x33, 0x41, 0x55), 1));
+        p->setBrush(QColor(0x11, 0x18, 0x27, 0xDD));
+        p->drawRoundedRect(tipRect, 6, 6);
+
+        p->setFont(tipFont);
+        p->setPen(QColor(0xF8, 0xFA, 0xFC));
+        QRectF textRect = tipRect.adjusted(padX, padY, -padX, -padY);
+        p->drawText(textRect, Qt::AlignHCenter | Qt::TextWordWrap, item.tooltip);
+    }
 }
 
 void FlightMapCanvas::paintConflictPoints(QPainter* p)

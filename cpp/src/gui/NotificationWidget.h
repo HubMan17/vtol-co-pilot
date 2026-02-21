@@ -26,7 +26,7 @@ struct Notification {
     NotificationLevel level = NotificationLevel::Info;
     QString           title;
     QString           message;
-    int               durationSec = 60;
+    int               durationSec = 30;
     // (label, callback) pairs
     std::vector<std::pair<QString, std::function<void()>>> actions;
     QString           tag;       // for deduplication

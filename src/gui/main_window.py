@@ -495,7 +495,7 @@ class MainWindow(QMainWindow):
             level=NotificationLevel.CRITICAL,
             title="Связь потеряна",
             message="MAVLink соединение прервано",
-            duration=60,
+            duration=30,
         ), tag="connection")
 
     # ────────────────────── Position / Home ──────────────────────
@@ -1033,7 +1033,7 @@ class MainWindow(QMainWindow):
             level=NotificationLevel.CRITICAL,
             title="Обход невозможен",
             message=f"Не найден безопасный маршрут к точке WP{wp_id}",
-            duration=60,
+            duration=30,
             actions=[
                 ("Лететь напрямую", lambda: self._notify_fly_direct(wp_id)),
                 ("Пропустить WP", lambda: self._notify_skip_waypoint(wp_id)),

@@ -238,6 +238,34 @@ private:
 };
 
 // ═══════════════════════════════════════════════════════════
+//  ObstacleWarningModel
+// ═══════════════════════════════════════════════════════════
+
+class ObstacleWarningModel : public QAbstractListModel {
+    Q_OBJECT
+public:
+    enum Roles { LatRole = Qt::UserRole + 1, LonRole, TooltipRole, SourceRole };
+
+    struct Item { double lat, lon; QString tooltip; QString source; /* "zone" | "settlement" */ };
+
+    explicit ObstacleWarningModel(QObject* parent = nullptr) : QAbstractListModel(parent) {}
+
+    int rowCount(const QModelIndex& parent = {}) const override { return static_cast<int>(m_items.size()); }
+    QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
+    QHash<int, QByteArray> roleNames() const override;
+
+    void setItems(QVector<Item> items);
+    void appendItems(const QVector<Item>& items);
+    void clear();
+
+    static constexpr int MAX_ITEMS = 150;
+    const auto& items() const { return m_items; }
+
+private:
+    QVector<Item> m_items;
+};
+
+// ═══════════════════════════════════════════════════════════
 //  SimpleVertexModel
 // ═══════════════════════════════════════════════════════════
 

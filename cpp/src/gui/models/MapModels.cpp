@@ -521,6 +521,57 @@ void ConflictPointModel::clear() {
 }
 
 // ═══════════════════════════════════════════════════════════
+//  ObstacleWarningModel
+// ═══════════════════════════════════════════════════════════
+
+QHash<int, QByteArray> ObstacleWarningModel::roleNames() const {
+    return {{LatRole, "lat"}, {LonRole, "lon"}, {TooltipRole, "tooltip"}, {SourceRole, "source"}};
+}
+
+QVariant ObstacleWarningModel::data(const QModelIndex& index, int role) const {
+    if (!index.isValid() || index.row() >= m_items.size()) return {};
+    const auto& it = m_items[index.row()];
+    switch (role) {
+    case LatRole:     return it.lat;
+    case LonRole:     return it.lon;
+    case TooltipRole: return it.tooltip;
+    case SourceRole:  return it.source;
+    }
+    return {};
+}
+
+void ObstacleWarningModel::setItems(QVector<Item> items) {
+    beginResetModel();
+    if (items.size() > MAX_ITEMS) items.resize(MAX_ITEMS);
+    m_items = std::move(items);
+    endResetModel();
+}
+
+void ObstacleWarningModel::appendItems(const QVector<Item>& items) {
+    if (items.isEmpty()) return;
+    int overflow = m_items.size() + items.size() - MAX_ITEMS;
+    if (overflow > 0) {
+        beginRemoveRows({}, 0, overflow - 1);
+        m_items.remove(0, overflow);
+        endRemoveRows();
+    }
+    int start = m_items.size();
+    int count = std::min(static_cast<int>(items.size()), MAX_ITEMS);
+    beginInsertRows({}, start, start + count - 1);
+    for (int i = 0; i < count; ++i)
+        m_items.append(items[i]);
+    endInsertRows();
+}
+
+void ObstacleWarningModel::clear() {
+    if (!m_items.isEmpty()) {
+        beginResetModel();
+        m_items.clear();
+        endResetModel();
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
 //  SimpleVertexModel
 // ═══════════════════════════════════════════════════════════
 

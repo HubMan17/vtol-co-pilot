@@ -461,7 +461,7 @@ void MainWindow::setupConnections()
             NotificationLevel::Critical,
             QStringLiteral("Обход невозможен"),
             reason,
-            60,
+            30,
             {
                 {QStringLiteral("Лететь напрямую"), [this] {
                     SPDLOG_INFO("[Notification] action: fly direct");
@@ -587,7 +587,7 @@ void MainWindow::onConnectionLost()
         NotificationLevel::Critical,
         QStringLiteral("Связь потеряна"),
         QStringLiteral("MAVLink соединение прервано"),
-        60, {}, {}
+        30, {}, {}
     }, QStringLiteral("connection"));
 }
 
@@ -899,6 +899,13 @@ void MainWindow::loadZones()
         for (auto& p : z.points)
             pts.append(QVariant::fromValue(QVariantList{p.lat, p.lon}));
         zm["points"] = pts;
+        if (z.altitude.has_value())
+            zm["altitude"] = z.altitude.value();
+        if (z.avoid_mode.has_value())
+            zm["avoid_mode"] = QString::fromStdString(z.avoid_mode.value());
+        if (z.buffer.has_value())
+            zm["buffer"] = z.buffer.value();
+        zm["description"] = QString::fromStdString(z.description);
         zoneList.append(zm);
     }
     m_mapWidget->backend()->loadAllZones(zoneList);

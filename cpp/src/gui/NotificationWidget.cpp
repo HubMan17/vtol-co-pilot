@@ -69,7 +69,7 @@ void NotificationWidget::setupUi()
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(0, 0, 0, 0);
+    root->setContentsMargins(10, 6, 10, 6);
     root->setSpacing(0);
 
     // Inner frame with left-border accent

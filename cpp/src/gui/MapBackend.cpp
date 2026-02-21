@@ -234,6 +234,8 @@ void MapBackend::loadAllZones(const QVariantList& zones)
         auto map = z.toMap();
         m_zoneModel.addZone(map["id"].toString(), map["points"].toList(), map.value("name", "").toString());
     }
+    m_zoneDetails = zones;
+    rebuildObstacleWarnings();
     SPDLOG_INFO("[MapBackend] loadAllZones: {} zones loaded", zones.size());
     emit zonesChanged();
 }
@@ -278,6 +280,33 @@ void MapBackend::addSettlementFeatures(const QVariantList& features)
     }
     if (!polys.isEmpty()) {
         m_settlementPolyModel.addPolys(polys);
+    }
+
+    // Generate obstacle warnings for settlements
+    {
+        static const QHash<QString, QString> typeText = {
+            {"city", QString::fromUtf8("город")},
+            {"town", QString::fromUtf8("посёлок")},
+            {"village", QString::fromUtf8("село")},
+            {"hamlet", QString::fromUtf8("деревня")},
+        };
+        QVector<ObstacleWarningModel::Item> warnings;
+        for (const auto& f : polys) {
+            auto map = f.toMap();
+            auto coords = map["c"].toList();
+            if (coords.size() < 3) continue;
+            auto [lat, lon] = bboxCenter(coords);
+            QString placeType = map.value("t", "village").toString();
+            QString tt = typeText.value(placeType, placeType);
+            warnings.append({lat, lon,
+                QString::fromUtf8("Населённый пункт (%1)").arg(tt),
+                QStringLiteral("settlement")});
+        }
+        if (!warnings.isEmpty()) {
+            SPDLOG_INFO("[MapBackend] Adding {} settlement warnings (total model: {})",
+                        warnings.size(), m_obstacleWarningModel.items().size() + warnings.size());
+            m_obstacleWarningModel.appendItems(warnings);
+        }
     }
 
     // Add to unlimited cache (for MapLibreAdapter rendering — survives LRU eviction)
@@ -635,6 +664,64 @@ QVariantList MapBackend::zoneBorderPolygons() const {
     for (const auto& item : m_zoneModel.items())
         result.append(QVariant(item.points));
     return result;
+}
+
+// ═══════════════════════ Obstacle warnings ═══════════════════════
+
+std::pair<double, double> MapBackend::bboxCenter(const QVariantList& coords)
+{
+    double minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
+    for (const auto& pt : coords) {
+        auto pair = pt.toList();
+        if (pair.size() >= 2) {
+            double lat = pair[0].toDouble(), lon = pair[1].toDouble();
+            minLat = std::min(minLat, lat); maxLat = std::max(maxLat, lat);
+            minLon = std::min(minLon, lon); maxLon = std::max(maxLon, lon);
+        }
+    }
+    return {(minLat + maxLat) / 2.0, (minLon + maxLon) / 2.0};
+}
+
+void MapBackend::rebuildObstacleWarnings()
+{
+    static const QHash<QString, QString> modeText = {
+        {"always", QString::fromUtf8("Всегда")},
+        {"below_altitude", QString::fromUtf8("Ниже высоты")},
+        {"disabled", QString::fromUtf8("Отключено")},
+    };
+
+    QVector<ObstacleWarningModel::Item> zoneWarnings;
+    for (const auto& z : m_zoneDetails) {
+        auto map = z.toMap();
+        auto pts = map["points"].toList();
+        if (pts.size() < 3) continue;
+        auto [lat, lon] = bboxCenter(pts);
+        QString name = map.value("name", "").toString();
+        if (name.isEmpty()) name = QString::fromUtf8("Без названия");
+        QString mode = map.value("avoid_mode", "always").toString();
+        QString mt = modeText.value(mode, mode);
+
+        QStringList lines;
+        lines << QString::fromUtf8("\u26A0 Запретная зона: %1").arg(name);
+        lines << QString::fromUtf8("Режим: %1").arg(mt);
+        if (map.contains("altitude") && map["altitude"].isValid()) {
+            lines << QString::fromUtf8("Высота: до %1 м").arg(static_cast<int>(map["altitude"].toDouble()));
+        }
+        if (map.contains("buffer") && map["buffer"].isValid()) {
+            lines << QString::fromUtf8("Буфер: %1 м").arg(static_cast<int>(map["buffer"].toDouble()));
+        }
+        zoneWarnings.append({lat, lon, lines.join('\n'), QStringLiteral("zone")});
+        SPDLOG_INFO("[MapBackend] Zone warning '{}' at ({:.6f}, {:.6f}), pts={}",
+                    name.toStdString(), lat, lon, pts.size());
+    }
+
+    // Preserve existing settlement warnings
+    QVector<ObstacleWarningModel::Item> all = std::move(zoneWarnings);
+    for (const auto& item : m_obstacleWarningModel.items()) {
+        if (item.source == "settlement")
+            all.append(item);
+    }
+    m_obstacleWarningModel.setItems(std::move(all));
 }
 
 // ═══════════════════════ Zone hit-testing ═══════════════════════

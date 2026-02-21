@@ -45,7 +45,7 @@ class Notification:
     level: NotificationLevel
     title: str
     message: str
-    duration: int = 60          # seconds
+    duration: int = 30          # seconds
     actions: List[Tuple[str, Callable]] = field(default_factory=list)
     tag: str = ""               # for deduplication
 
@@ -81,7 +81,7 @@ class NotificationWidget(QFrame):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        root.setContentsMargins(10, 6, 10, 6)
         root.setSpacing(0)
 
         # Inner frame with left-border accent
