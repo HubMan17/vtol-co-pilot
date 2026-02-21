@@ -60,6 +60,7 @@ public:
     bool engageNav();
     bool engageHome();
     void disengage(const QString& reason = "");
+    void activateRtl();
 
     // --- Query ---
     [[nodiscard]] AutopilotMode mode() const { return m_mode; }
@@ -74,11 +75,15 @@ public:
     void setOrbitRadius(double radius);
     void setTargetAirspeed(double speed);
 
+    // Suppress periodic avoidance rechecks for current WP (user chose "fly direct")
+    void suppressAvoidanceRecheck();
+
 signals:
     void engaged(const QString& mode);
     void disengaged(const QString& previousMode, const QString& reason);
     void waypointReached(int reachedId, int nextId);
     void avoidanceFailed(const QString& reason);
+    void homeOrbitEstablished();
 
 public slots:
     void update();
@@ -147,6 +152,7 @@ private:
     bool m_orbitRepositionSent = false;
     bool m_orbitCcw = false;
     int m_tangentApproachWpId = -1;
+    bool m_homeOrbitNotified = false;
 
     // GUIDED target throttling
     double m_guidedSendTime = 0.0;
@@ -169,6 +175,8 @@ private:
         double lat = 0, lon = 0;  // position where we gave up
     };
     AvoidanceGaveUp m_avoidanceGaveUp;
+    int m_avoidanceSuppressedWpId = -1; // user chose "fly direct" — skip rechecks
+    int m_avoidanceNotifiedWpId = -1;  // already showed "no path" notification for this WP
 
     struct AvoidancePendingResult {
         std::vector<std::tuple<double, double>> path;

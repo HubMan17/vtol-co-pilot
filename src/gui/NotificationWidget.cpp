@@ -188,10 +188,19 @@ void NotificationWidget::showNotification(const Notification& n)
     }
 
     show();
-    m_timer.start();
 
-    SPDLOG_INFO("[Notification] [{}] {} — {}",
-                levelName(n.level), n.title.toStdString(), n.message.toStdString());
+    if (m_durationMs > 0) {
+        m_progress->show();
+        m_timer.start();
+    } else {
+        // Infinite notification — no auto-close, hide progress bar
+        m_progress->hide();
+        SPDLOG_DEBUG("[Notification] infinite duration, timer disabled");
+    }
+
+    SPDLOG_INFO("[Notification] [{}] {} — {} ({}s)",
+                levelName(n.level), n.title.toStdString(), n.message.toStdString(),
+                n.durationSec);
 }
 
 void NotificationWidget::dismiss()

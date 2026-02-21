@@ -132,6 +132,7 @@ void MapBackend::updateActiveWaypoint(int index)
 // ═══════════════════════ Settings ═══════════════════════
 
 void MapBackend::setFollowMode(bool enabled) { setFollowAircraft(enabled); }
+void MapBackend::setZoom(int level) { emit zoomRequested(level); }
 void MapBackend::centerOn(double lat, double lon) { emit mapCenterRequested(lat, lon); }
 void MapBackend::setTileServer(const QString& url) {
     if (m_tileServerUrl != url) { m_tileServerUrl = url; emit tileServerUrlChanged(); }

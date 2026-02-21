@@ -330,8 +330,8 @@ SettingsDialog::SettingsDialog(const AppConfig& config, Page initialPage,
 void SettingsDialog::setupUi(Page initialPage)
 {
     setWindowTitle(QStringLiteral("Настройки"));
-    setMinimumSize(520, 500);
-    resize(520, 500);
+    setMinimumWidth(520);
+    setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
@@ -399,6 +399,8 @@ void SettingsDialog::setupUi(Page initialPage)
 
     // Select initial page
     m_sidebar->setCurrentRow(static_cast<int>(initialPage));
+
+    adjustSize();
 }
 
 QWidget* SettingsDialog::createMapPage()

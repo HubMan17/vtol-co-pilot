@@ -100,6 +100,7 @@ private:
     void onAutopilotEngaged(const QString& mode);
     void onAutopilotDisengaged(const QString& prevMode, const QString& reason);
     void onWaypointReached(int reachedId, int nextId);
+    void onHomeOrbitEstablished();
     void onOrbitRadiusChanged(int r);
     void onTargetAltitudeChanged(int a);
     void onTargetAirspeedChanged(int s);

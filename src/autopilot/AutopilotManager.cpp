@@ -47,6 +47,8 @@ void AutopilotManager::setHomePosition(const std::optional<LatLon>& pos)
             m_avoidanceGaveUp = {};
             m_avoidanceComputing = false;
             m_avoidancePending.hasResult = false;
+            m_avoidanceSuppressedWpId = -1;
+            m_avoidanceNotifiedWpId = -1;
         }
     } else {
         SPDLOG_INFO("HOME POSITION CLEARED");
@@ -62,7 +64,15 @@ void AutopilotManager::resetZoneAvoidance()
     m_avoidanceComputing = false;
     m_avoidancePending.hasResult = false;
     m_avoidanceLastCheckTime = 0.0;
+    m_avoidanceSuppressedWpId = -1;
+    m_avoidanceNotifiedWpId = -1;
     SPDLOG_INFO("AVOIDANCE: state reset — will recompute on next update");
+}
+
+void AutopilotManager::suppressAvoidanceRecheck()
+{
+    m_avoidanceSuppressedWpId = m_avoidanceForWpId;
+    SPDLOG_INFO("AVOIDANCE: user suppressed rechecks for WP{}", m_avoidanceSuppressedWpId);
 }
 
 // ─────────────────────── engage / disengage ───────────────────────
@@ -119,6 +129,8 @@ bool AutopilotManager::engageNav()
     m_avoidanceGaveUp = {};
     m_avoidanceComputing = false;
     m_avoidancePending.hasResult = false;
+    m_avoidanceSuppressedWpId = -1;
+    m_avoidanceNotifiedWpId = -1;
 
     double now = nowSec();
     m_mode = AutopilotMode::NAV;
@@ -180,6 +192,7 @@ bool AutopilotManager::engageHome()
     m_waitingForAltitude = false;
     m_returningHome = true;
     m_loiterAltTransition = false;
+    m_homeOrbitNotified = false;
     m_disengageReason.clear();
     m_guidedSendTime = 0.0;
 
@@ -206,6 +219,35 @@ bool AutopilotManager::engageHome()
     return true;
 }
 
+void AutopilotManager::activateRtl()
+{
+    SPDLOG_INFO("ACTIVATING RTL: switching to ArduPilot RTL mode");
+
+    m_mode = AutopilotMode::MANUAL;
+    m_isOrbiting = false;
+    m_waitingForAltitude = false;
+    m_returningHome = false;
+    m_loiterAltTransition = false;
+    m_homeOrbitNotified = false;
+    m_tangentApproachWpId = -1;
+
+    if (m_savedAirspeedCruise.has_value()) {
+        m_connection.setCruiseAirspeed(m_savedAirspeedCruise.value());
+        SPDLOG_INFO("RESTORED AIRSPEED_CRUISE={:.1f}", m_savedAirspeedCruise.value());
+        m_savedAirspeedCruise.reset();
+    }
+    m_connection.setParamInt("THROTTLE_NUDGE", 1);
+
+    m_connection.setMode("RTL");
+
+    m_headingCtrl.reset();
+    m_altitudeCtrl.reset();
+    m_speedCtrl.reset();
+
+    SPDLOG_INFO("RTL ACTIVATED");
+    emit disengaged("NAV", QStringLiteral("RTL активирован"));
+}
+
 void AutopilotManager::disengage(const QString& reason)
 {
     if (m_mode == AutopilotMode::MANUAL) return;
@@ -226,6 +268,7 @@ void AutopilotManager::disengage(const QString& reason)
     m_waitingForAltitude = false;
     m_returningHome = false;
     m_loiterAltTransition = false;
+    m_homeOrbitNotified = false;
     m_tangentApproachWpId = -1;
 
     if (m_savedAirspeedCruise.has_value()) {
@@ -313,6 +356,8 @@ void AutopilotManager::update()
         m_avoidanceGaveUp = {};
         m_avoidanceComputing = false;
         m_avoidancePending.hasResult = false;
+        m_avoidanceSuppressedWpId = -1;
+        m_avoidanceNotifiedWpId = -1;
     }
 
     double targetBearing = tel->heading();  // fallback
@@ -351,6 +396,20 @@ void AutopilotManager::update()
             if (!m_orbitRepositionSent) {
                 m_connection.sendLoiterUnlim(m_homePosition->lat, m_homePosition->lon, 50.0, 150.0, m_orbitCcw);
                 m_orbitRepositionSent = true;
+            }
+
+            // Check if home orbit is established: altitude reached + at least 1 full turn
+            if (!m_homeOrbitNotified) {
+                bool altOk = std::abs(tel->altitudeAgl() - 50.0) <= 5.0;
+                bool turnsOk = m_orbitTurnsCompleted >= 1;
+                SPDLOG_DEBUG("HOME ORBIT CHECK: alt={:.1f} alt_ok={}, turns={} turns_ok={}, notified={}",
+                             tel->altitudeAgl(), altOk, m_orbitTurnsCompleted, turnsOk, m_homeOrbitNotified);
+                if (altOk && turnsOk) {
+                    m_homeOrbitNotified = true;
+                    SPDLOG_INFO("HOME ORBIT ESTABLISHED: alt={:.1f}m, turns={}",
+                                tel->altitudeAgl(), m_orbitTurnsCompleted);
+                    emit homeOrbitEstablished();
+                }
             }
         } else {
             // Navigate to home — check avoidance first
@@ -523,6 +582,8 @@ void AutopilotManager::update()
                         m_avoidanceGaveUp = {};
                         m_avoidanceComputing = false;
                         m_avoidancePending.hasResult = false;
+                        m_avoidanceSuppressedWpId = -1;
+                        m_avoidanceNotifiedWpId = -1;
                         if (newWp->climb_enroute) {
                             m_altitudeCtrl.setTargetAltitude(newWp->altitude);
                             m_waitingForAltitude = false;
@@ -874,15 +935,26 @@ std::optional<std::tuple<double, double>> AutopilotManager::getAvoidanceTarget(
                 m_avoidanceGaveUp = {forWpId, position.lat, position.lon};
                 SPDLOG_WARN("AVOIDANCE: no path found to WP{}, flying direct (will retry after {:.0f}m)",
                             forWpId, AVOIDANCE_RETRY_DISTANCE);
-                emit avoidanceFailed(QString("Обход не найден — полёт напрямую"));
+                if (m_avoidanceNotifiedWpId != forWpId) {
+                    m_avoidanceNotifiedWpId = forWpId;
+                    emit avoidanceFailed(QString("Обход не найден — полёт напрямую"));
+                }
             }
         }
+    }
+
+    // Clear suppression if WP changed
+    if (m_avoidanceSuppressedWpId != -1 && m_avoidanceSuppressedWpId != wp.id) {
+        SPDLOG_INFO("AVOIDANCE: suppression cleared (WP changed from {} to {})",
+                     m_avoidanceSuppressedWpId, wp.id);
+        m_avoidanceSuppressedWpId = -1;
     }
 
     // Already tried and no path found — retry after moving far enough or periodic recheck
     double now = nowSec();
     bool needsRecheck = (now - m_avoidanceLastCheckTime >= AVOIDANCE_RECHECK_INTERVAL)
-                        && !m_avoidanceComputing.load();
+                        && !m_avoidanceComputing.load()
+                        && m_avoidanceSuppressedWpId != wp.id;
 
     if (m_avoidanceGaveUp.wpId == wp.id && !needsRecheck) {
         double movedDist = nav::haversineDistance(position.lat, position.lon,

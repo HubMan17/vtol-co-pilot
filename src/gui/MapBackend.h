@@ -125,6 +125,7 @@ public:
     void setWaypoints(const QVector<QVariantMap>& waypoints, int activeIdx = 0);
     void updateActiveWaypoint(int index);
     void setFollowMode(bool enabled);
+    void setZoom(int level);
     void centerOn(double lat, double lon);
     void setTileServer(const QString& url);
     void setFpsText(const QString& text);

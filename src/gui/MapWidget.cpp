@@ -33,6 +33,11 @@ MapWidget::MapWidget(QWidget* parent)
     connect(&m_backend, &MapBackend::mapCenterRequested, this, [this](double lat, double lon) {
         if (m_map) m_map->setCoordinate({lat, lon});
     });
+
+    // Zoom request from backend
+    connect(&m_backend, &MapBackend::zoomRequested, this, [this](int level) {
+        if (m_map) m_map->setZoom(level);
+    });
 }
 
 void MapWidget::setTileServerUrl(const QString& url)

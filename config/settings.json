@@ -1,53 +1,58 @@
 {
-  "mavlink": {
-    "sitl_host": "127.0.0.1",
-    "sitl_port": 5762,
-    "proxy_port": 14550,
-    "system_id": 255,
-    "component_id": 0
-  },
   "autopilot": {
-    "heading_pid": {
-      "p": 1.5,
-      "i": 0.08,
-      "d": 0.15
-    },
     "altitude_pid": {
-      "p": 0.8,
+      "d": 1.0,
       "i": 0.05,
-      "d": 1.0
+      "p": 0.8
     },
-    "speed_pid": {
-      "p": 50.0,
-      "i": 10.0,
-      "d": 5.0
-    },
+    "altitude_tolerance": 3.0,
     "bank_limit": 27.0,
-    "roll_limit_deg": 30.0,
-    "rc_roll_max": 1886,
-    "pitch_limit_up": 12.0,
-    "pitch_limit_down": 15.0,
-    "target_airspeed": 20.0,
     "guided_yaw_rate": 25.0,
+    "heading_pid": {
+      "d": 0.15,
+      "i": 0.08,
+      "p": 1.5
+    },
+    "pitch_limit_down": 15.0,
+    "pitch_limit_up": 12.0,
+    "rc_roll_max": 1886,
+    "roll_limit_deg": 30.0,
+    "speed_pid": {
+      "d": 5.0,
+      "i": 10.0,
+      "p": 50.0
+    },
     "stick_threshold": 50,
-    "timeout_ms": 3000,
-    "altitude_tolerance": 3.0
-  },
-  "navigation": {
-    "waypoint_radius": 150.0
+    "target_airspeed": 20.0,
+    "timeout_ms": 3000
   },
   "gui": {
     "map_center": [
       55.751,
       37.618
     ],
-    "map_zoom": 10
+    "map_zoom": 10,
+    "show_settlements": true,
+    "show_track": true,
+    "show_waypoints": true,
+    "show_zones": true,
+    "track_length": 9999
+  },
+  "mavlink": {
+    "component_id": 0,
+    "proxy_port": 14550,
+    "sitl_host": "127.0.0.1",
+    "sitl_port": 5762,
+    "system_id": 255
+  },
+  "navigation": {
+    "waypoint_radius": 150.0
   },
   "zone_avoidance": {
-    "settlement_mode": "always",
-    "settlement_min_altitude": 974.0,
-    "settlement_buffer": 100.0,
+    "nofly_buffer": 200.0,
     "nofly_mode": "always",
-    "nofly_buffer": 200.0
+    "settlement_buffer": 100.0,
+    "settlement_min_altitude": 974.0,
+    "settlement_mode": "always"
   }
 }

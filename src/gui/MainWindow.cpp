@@ -464,8 +464,9 @@ void MainWindow::setupConnections()
             30,
             {
                 {QStringLiteral("Лететь напрямую"), [this] {
-                    SPDLOG_INFO("[Notification] action: fly direct");
-                    statusBar()->showMessage(QStringLiteral("Прямой полёт"));
+                    SPDLOG_INFO("[Notification] action: fly direct — suppressing avoidance rechecks");
+                    m_autopilot.suppressAvoidanceRecheck();
+                    statusBar()->showMessage(QStringLiteral("Прямой полёт — обход подавлен"));
                 }},
                 {QStringLiteral("Пропустить WP"), [this] {
                     SPDLOG_INFO("[Notification] action: skip waypoint");
@@ -478,6 +479,9 @@ void MainWindow::setupConnections()
             {}
         }, QStringLiteral("avoidance"));
     });
+
+    connect(&m_autopilot, &AutopilotManager::homeOrbitEstablished,
+            this, &MainWindow::onHomeOrbitEstablished);
 
     // Layer visibility → save config
     connect(be, &MapBackend::showTrackChanged, this, [this] {
@@ -561,6 +565,7 @@ void MainWindow::onConnectionRestored()
 
     m_btnFollow->setChecked(true);
     m_mapWidget->backend()->setFollowMode(true);
+    m_mapWidget->backend()->setZoom(13);
 
     m_notificationManager->pushOrReplace(Notification{
         NotificationLevel::Info,
@@ -1232,6 +1237,53 @@ void MainWindow::onWaypointReached(int reachedId, int nextId)
         QStringLiteral("WP%1 пройдена, следующая WP%2").arg(reachedId).arg(nextId),
         15, {}, {}
     });
+}
+
+void MainWindow::onHomeOrbitEstablished()
+{
+    auto* tel = m_connection.telemetry();
+    bool gpsOk = tel->gpsFix() >= 2 && tel->satellites() > 10;
+
+    SPDLOG_INFO("[MainWindow] HOME ORBIT NOTIFICATION: gps_ok={}, fix={}, satellites={}",
+                gpsOk, tel->gpsFix(), tel->satellites());
+
+    Notification n;
+    n.level = NotificationLevel::Warning;
+    n.title = QStringLiteral("Самолёт над домом");
+    n.tag = QStringLiteral("home-orbit");
+    n.durationSec = 0;  // infinite — operator must decide
+
+    if (gpsOk) {
+        n.message = QStringLiteral(
+            "Самолёт встал в круг над точкой дома на высоте %1м.\n"
+            "GPS: %2 спутников. Ожидаем решение оператора.")
+            .arg(static_cast<int>(tel->altitudeAgl()))
+            .arg(tel->satellites());
+        n.actions = {
+            {QStringLiteral("Включить RTL"), [this] {
+                SPDLOG_INFO("[MainWindow] USER ACTIVATED RTL from notification");
+                m_autopilot.activateRtl();
+            }},
+            {QStringLiteral("Продолжить ожидание"), [this] {
+                SPDLOG_INFO("[MainWindow] USER CHOSE TO CONTINUE ORBITING");
+            }},
+        };
+    } else {
+        n.message = QStringLiteral(
+            "Самолёт встал в круг над точкой дома на высоте %1м.\n"
+            "GPS: %2 спутников — недостаточно для RTL.\n"
+            "Ожидаем решение оператора.")
+            .arg(static_cast<int>(tel->altitudeAgl()))
+            .arg(tel->satellites());
+        n.actions = {
+            {QStringLiteral("Принял"), [this] {
+                SPDLOG_INFO("[MainWindow] USER ACKNOWLEDGED home orbit (no RTL)");
+            }},
+        };
+    }
+
+    m_notificationManager->pushOrReplace(std::move(n), QStringLiteral("home-orbit"));
+    statusBar()->showMessage(QStringLiteral("Самолёт в круге над домом — ожидаем решение"));
 }
 
 void MainWindow::onOrbitRadiusChanged(int r)
