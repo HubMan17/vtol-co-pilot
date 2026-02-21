@@ -107,8 +107,12 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         -Dsrc="${CMAKE_SOURCE_DIR}/config/settings.json"
         -Ddst="$<TARGET_FILE_DIR:${PROJECT_NAME}>/config/settings.json"
         -P "${CMAKE_SOURCE_DIR}/cmake/copy_if_missing.cmake"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_SOURCE_DIR}/data" "$<TARGET_FILE_DIR:${PROJECT_NAME}>/data"
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "$<TARGET_FILE_DIR:${PROJECT_NAME}>/data"
+    COMMAND ${CMAKE_COMMAND}
+        -Dsrc="${CMAKE_SOURCE_DIR}/data/zones.json"
+        -Ddst="$<TARGET_FILE_DIR:${PROJECT_NAME}>/data/zones.json"
+        -P "${CMAKE_SOURCE_DIR}/cmake/copy_if_missing.cmake"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_SOURCE_DIR}/routes" "$<TARGET_FILE_DIR:${PROJECT_NAME}>/routes"
     COMMAND ${CMAKE_COMMAND} -E make_directory

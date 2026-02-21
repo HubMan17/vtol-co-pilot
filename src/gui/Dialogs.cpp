@@ -7,6 +7,7 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
+#include <QMessageBox>
 #include <spdlog/spdlog.h>
 
 namespace vtol {
@@ -285,6 +286,7 @@ void ZonePropertiesDialog::setupUi()
             "QPushButton:hover { background-color: %2; color: #fff; }")
             .arg(theme::ERROR_BG, theme::ERROR_CLR));
         connect(btnDelete, &QPushButton::clicked, this, [this]{
+            SPDLOG_INFO("[ZonePropertiesDialog] Delete button clicked, calling done({})", DELETE_REQUESTED);
             m_deleteRequested = true;
             done(DELETE_REQUESTED);
         });
@@ -328,8 +330,8 @@ SettingsDialog::SettingsDialog(const AppConfig& config, Page initialPage,
 void SettingsDialog::setupUi(Page initialPage)
 {
     setWindowTitle(QStringLiteral("Настройки"));
-    setMinimumSize(520, 360);
-    resize(520, 360);
+    setMinimumSize(520, 500);
+    resize(520, 500);
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
@@ -357,12 +359,14 @@ void SettingsDialog::setupUi(Page initialPage)
 
     m_sidebar->addItem(QStringLiteral("Карта"));
     m_sidebar->addItem(QStringLiteral("Зоны"));
+    m_sidebar->addItem(QStringLiteral("Данные"));
 
     m_stack = new QStackedWidget;
     m_stack->setStyleSheet(QStringLiteral(
         "QStackedWidget { background-color: %1; }").arg(theme::BG_CARD));
     m_stack->addWidget(createMapPage());
     m_stack->addWidget(createZonesPage());
+    m_stack->addWidget(createDataPage());
 
     connect(m_sidebar, &QListWidget::currentRowChanged,
             m_stack, &QStackedWidget::setCurrentIndex);
@@ -491,6 +495,108 @@ QWidget* SettingsDialog::createZonesPage()
     layout->addStretch();
 
     onSettlementModeChanged();
+    return page;
+}
+
+QWidget* SettingsDialog::createDataPage()
+{
+    auto* page = new QWidget;
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(20, 20, 20, 20);
+    layout->setSpacing(12);
+
+    const auto dangerStyle = QStringLiteral(
+        "QPushButton { background-color: %1; color: %2; border: 1px solid %2; "
+        "border-radius: 6px; padding: 8px 16px; font-weight: 600; }"
+        "QPushButton:hover { background-color: %2; color: #fff; }")
+        .arg(theme::ERROR_BG, theme::ERROR_CLR);
+
+    // ── Settlements cache ──
+    auto* cacheGroup = new QGroupBox(QStringLiteral("Кэш данных"));
+    auto* cl = new QVBoxLayout(cacheGroup);
+    cl->setSpacing(8);
+
+    auto* lblCache = new QLabel(QStringLiteral(
+        "Загруженные населённые пункты кэшируются на диск для ускорения работы."));
+    lblCache->setWordWrap(true);
+    cl->addWidget(lblCache);
+
+    auto* btnClearSettlements = new QPushButton(QStringLiteral("Очистить кэш нас. пунктов"));
+    btnClearSettlements->setStyleSheet(dangerStyle);
+    connect(btnClearSettlements, &QPushButton::clicked, this, [this]{
+        QMessageBox box(QMessageBox::Question,
+            QStringLiteral("Очистить кэш"),
+            QStringLiteral("Удалить кэш загруженных населённых пунктов?"),
+            QMessageBox::Yes | QMessageBox::No, this);
+        box.button(QMessageBox::Yes)->setText(QStringLiteral("Да"));
+        box.button(QMessageBox::No)->setText(QStringLiteral("Нет"));
+        box.exec();
+        if (box.clickedButton() == box.button(QMessageBox::Yes)) {
+            SPDLOG_INFO("[SettingsDialog] User requested: clear settlements cache");
+            emit clearSettlementsRequested();
+        }
+    });
+    cl->addWidget(btnClearSettlements);
+    layout->addWidget(cacheGroup);
+
+    // ── Zones ──
+    auto* zonesGroup = new QGroupBox(QStringLiteral("Пользовательские данные"));
+    auto* zl = new QVBoxLayout(zonesGroup);
+    zl->setSpacing(8);
+
+    auto* lblZones = new QLabel(QStringLiteral(
+        "Удаление всех нарисованных запретных зон. Это действие необратимо."));
+    lblZones->setWordWrap(true);
+    zl->addWidget(lblZones);
+
+    auto* btnClearZones = new QPushButton(QStringLiteral("Удалить все запретные зоны"));
+    btnClearZones->setStyleSheet(dangerStyle);
+    connect(btnClearZones, &QPushButton::clicked, this, [this]{
+        QMessageBox box(QMessageBox::Question,
+            QStringLiteral("Удалить зоны"),
+            QStringLiteral("Удалить все запретные зоны? Это действие необратимо."),
+            QMessageBox::Yes | QMessageBox::No, this);
+        box.button(QMessageBox::Yes)->setText(QStringLiteral("Да"));
+        box.button(QMessageBox::No)->setText(QStringLiteral("Нет"));
+        box.exec();
+        if (box.clickedButton() == box.button(QMessageBox::Yes)) {
+            SPDLOG_INFO("[SettingsDialog] User requested: clear all zones");
+            emit clearZonesRequested();
+        }
+    });
+    zl->addWidget(btnClearZones);
+    layout->addWidget(zonesGroup);
+
+    // ── Clear all ──
+    auto* allGroup = new QGroupBox(QStringLiteral("Полная очистка"));
+    auto* al = new QVBoxLayout(allGroup);
+    al->setSpacing(8);
+
+    auto* lblAll = new QLabel(QStringLiteral(
+        "Удалить кэш населённых пунктов и все запретные зоны."));
+    lblAll->setWordWrap(true);
+    al->addWidget(lblAll);
+
+    auto* btnClearAll = new QPushButton(QStringLiteral("Удалить всё"));
+    btnClearAll->setStyleSheet(dangerStyle);
+    connect(btnClearAll, &QPushButton::clicked, this, [this]{
+        QMessageBox box(QMessageBox::Question,
+            QStringLiteral("Удалить всё"),
+            QStringLiteral("Удалить кэш населённых пунктов и все запретные зоны?\n"
+                           "Это действие необратимо."),
+            QMessageBox::Yes | QMessageBox::No, this);
+        box.button(QMessageBox::Yes)->setText(QStringLiteral("Да"));
+        box.button(QMessageBox::No)->setText(QStringLiteral("Нет"));
+        box.exec();
+        if (box.clickedButton() == box.button(QMessageBox::Yes)) {
+            SPDLOG_INFO("[SettingsDialog] User requested: clear all data");
+            emit clearAllRequested();
+        }
+    });
+    al->addWidget(btnClearAll);
+    layout->addWidget(allGroup);
+
+    layout->addStretch();
     return page;
 }
 

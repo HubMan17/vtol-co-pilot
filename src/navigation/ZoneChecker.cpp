@@ -237,6 +237,14 @@ void ZoneChecker::addSettlementFeatures(const std::vector<CachedSettlement>& fea
     SPDLOG_DEBUG("Added {} settlement features (total: {})", features.size(), m_settlements.size());
 }
 
+void ZoneChecker::clearSettlements()
+{
+    std::lock_guard lock(m_mutex);
+    auto count = m_settlements.size();
+    m_settlements.clear();
+    SPDLOG_INFO("[ZoneChecker] Cleared {} settlements", count);
+}
+
 void ZoneChecker::setSettlementCacheDir(const std::string& dir)
 {
     namespace fs = std::filesystem;

@@ -223,7 +223,19 @@ void MapBackend::addZone(const QString& id, const QVariantList& points, const QS
 
 void MapBackend::removeZone(const QString& id)
 {
+    SPDLOG_INFO("[MapBackend] removeZone id={}, model size before={}", id.toStdString(), m_zoneModel.rowCount());
     m_zoneModel.removeZone(id);
+    SPDLOG_INFO("[MapBackend] removeZone model size after={}", m_zoneModel.rowCount());
+
+    // Remove from zone details cache (used by rebuildObstacleWarnings)
+    for (int i = 0; i < m_zoneDetails.size(); ++i) {
+        if (m_zoneDetails[i].toMap().value("id").toString() == id) {
+            m_zoneDetails.removeAt(i);
+            break;
+        }
+    }
+    rebuildObstacleWarnings();
+
     emit zonesChanged();
 }
 

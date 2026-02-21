@@ -173,12 +173,14 @@ void ZoneListModel::addZone(const QString& id, const QVariantList& points, const
 void ZoneListModel::removeZone(const QString& id) {
     for (int i = 0; i < m_items.size(); ++i) {
         if (m_items[i].id == id) {
+            SPDLOG_INFO("[ZoneListModel] removeZone '{}' at index {}, size {}→{}", id.toStdString(), i, m_items.size(), m_items.size() - 1);
             beginRemoveRows({}, i, i);
             m_items.remove(i);
             endRemoveRows();
             return;
         }
     }
+    SPDLOG_WARN("[ZoneListModel] removeZone '{}' NOT FOUND in {} items", id.toStdString(), m_items.size());
 }
 
 void ZoneListModel::updateZonePoints(const QString& id, const QVariantList& points) {

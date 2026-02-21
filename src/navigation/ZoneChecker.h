@@ -64,6 +64,7 @@ public:
     // Incremental settlement loading (from SettlementLoader)
     void addSettlementFeatures(const std::vector<CachedSettlement>& features);
     void setSettlementCacheDir(const std::string& dir);
+    void clearSettlements();
 
     static const std::map<std::string, double> SETTLEMENT_FALLBACK_RADII;
 

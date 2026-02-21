@@ -136,6 +136,14 @@ bool ZoneManager::removeZone(const std::string& zoneId)
     return true;
 }
 
+void ZoneManager::clearAll()
+{
+    auto count = m_zones.size();
+    m_zones.clear();
+    save();
+    SPDLOG_INFO("[ZoneManager] Cleared all {} zones", count);
+}
+
 bool ZoneManager::updateZone(const std::string& zoneId, const std::map<std::string, nlohmann::json>& fields)
 {
     auto* zone = getZone(zoneId);

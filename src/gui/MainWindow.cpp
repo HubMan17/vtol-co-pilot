@@ -763,7 +763,6 @@ void MainWindow::onContextAddWaypoint(double lat, double lon)
     auto* actClearTrack = menu.addAction(QStringLiteral("Очистить трек"));
     menu.addSeparator();
     auto* actDrawZone = menu.addAction(QStringLiteral("Нарисовать запретную зону"));
-    auto* actClearCache = menu.addAction(QStringLiteral("Очистить кэш нас. пунктов"));
 
     auto* chosen = menu.exec(QCursor::pos());
     if (!chosen) return;
@@ -808,10 +807,6 @@ void MainWindow::onContextAddWaypoint(double lat, double lon)
         onClearTrack();
     } else if (chosen == actDrawZone) {
         onStartZoneDrawing();
-    } else if (chosen == actClearCache) {
-        m_settlementLoader.clearCache();
-        m_mapWidget->backend()->clearSettlements();
-        statusBar()->showMessage(QStringLiteral("Кэш населённых пунктов очищен"));
     }
 }
 
@@ -1021,7 +1016,9 @@ void MainWindow::onZoneContextMenu(const QString& zoneId, int /*sx*/, int /*sy*/
         onZoneDoubleClicked(zoneId);
     } else if (action == actDelete) {
         auto name = QString::fromStdString(zone->name);
-        m_zoneManager.removeZone(zoneId.toStdString());
+        SPDLOG_INFO("[MainWindow] Context menu: deleting zone '{}' ({})", zoneId.toStdString(), name.toStdString());
+        bool removed = m_zoneManager.removeZone(zoneId.toStdString());
+        SPDLOG_INFO("[MainWindow] ZoneManager::removeZone returned {}", removed);
         m_mapWidget->backend()->removeZone(zoneId);
         statusBar()->showMessage(QStringLiteral("Запретная зона удалена: %1")
                                   .arg(name.isEmpty() ? QStringLiteral("Без названия") : name));
@@ -1038,9 +1035,13 @@ void MainWindow::onZoneDoubleClicked(const QString& zoneId)
     ZonePropertiesDialog dialog(zone, this);
     int result = dialog.exec();
 
+    SPDLOG_INFO("[MainWindow] ZonePropertiesDialog result={} (DELETE_REQUESTED={})", result, ZonePropertiesDialog::DELETE_REQUESTED);
+
     if (result == ZonePropertiesDialog::DELETE_REQUESTED) {
         auto name = QString::fromStdString(zone->name);
-        m_zoneManager.removeZone(zoneId.toStdString());
+        SPDLOG_INFO("[MainWindow] Dialog: deleting zone '{}' ({})", zoneId.toStdString(), name.toStdString());
+        bool removed = m_zoneManager.removeZone(zoneId.toStdString());
+        SPDLOG_INFO("[MainWindow] ZoneManager::removeZone returned {}", removed);
         m_mapWidget->backend()->removeZone(zoneId);
         statusBar()->showMessage(QStringLiteral("Запретная зона удалена: %1")
                                   .arg(name.isEmpty() ? QStringLiteral("Без названия") : name));
@@ -1097,6 +1098,38 @@ void MainWindow::onZoneVerticesUpdated(const QString& zoneId, const QVariantList
 void MainWindow::onSettings()
 {
     SettingsDialog dialog(m_config, SettingsDialog::PageMap, this);
+
+    connect(&dialog, &SettingsDialog::clearSettlementsRequested, this, [this]{
+        SPDLOG_INFO("[MainWindow] Clearing settlements cache");
+        m_settlementLoader.clearCache();
+        m_mapWidget->backend()->clearSettlements();
+        m_zoneChecker.clearSettlements();
+        statusBar()->showMessage(QStringLiteral("Кэш населённых пунктов очищен"));
+    });
+
+    connect(&dialog, &SettingsDialog::clearZonesRequested, this, [this]{
+        SPDLOG_INFO("[MainWindow] Clearing all zones");
+        m_zoneManager.clearAll();
+        m_mapWidget->backend()->loadAllZones({});
+        m_zoneChecker.updateConfig(m_config.zone_avoidance);
+        m_autopilot.resetZoneAvoidance();
+        checkRouteConflicts();
+        statusBar()->showMessage(QStringLiteral("Все запретные зоны удалены"));
+    });
+
+    connect(&dialog, &SettingsDialog::clearAllRequested, this, [this]{
+        SPDLOG_INFO("[MainWindow] Clearing all data");
+        m_settlementLoader.clearCache();
+        m_mapWidget->backend()->clearSettlements();
+        m_zoneChecker.clearSettlements();
+        m_zoneManager.clearAll();
+        m_mapWidget->backend()->loadAllZones({});
+        m_zoneChecker.updateConfig(m_config.zone_avoidance);
+        m_autopilot.resetZoneAvoidance();
+        checkRouteConflicts();
+        statusBar()->showMessage(QStringLiteral("Все данные очищены"));
+    });
+
     if (dialog.exec() != QDialog::Accepted) return;
 
     m_config = dialog.getConfig();

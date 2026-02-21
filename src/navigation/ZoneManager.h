@@ -32,6 +32,7 @@ public:
     std::string addZone(const Polygon& points, const std::string& name,
                          const std::string& description = "", std::optional<double> altitude = std::nullopt);
     bool removeZone(const std::string& zoneId);
+    void clearAll();
     bool updateZone(const std::string& zoneId, const std::map<std::string, nlohmann::json>& fields);
     bool updateZonePoints(const std::string& zoneId, const Polygon& points);
 

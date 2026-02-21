@@ -98,7 +98,7 @@ private:
 class SettingsDialog : public QDialog {
     Q_OBJECT
 public:
-    enum Page { PageMap = 0, PageZones = 1 };
+    enum Page { PageMap = 0, PageZones = 1, PageData = 2 };
 
     explicit SettingsDialog(const AppConfig& config,
                             Page initialPage = PageMap,
@@ -106,10 +106,16 @@ public:
 
     AppConfig getConfig() const;
 
+signals:
+    void clearSettlementsRequested();
+    void clearZonesRequested();
+    void clearAllRequested();
+
 private:
     void setupUi(Page initialPage);
     QWidget* createMapPage();
     QWidget* createZonesPage();
+    QWidget* createDataPage();
     void onSettlementModeChanged();
 
     AppConfig m_config;
