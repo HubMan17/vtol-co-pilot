@@ -134,18 +134,19 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMENT "Copying MAVSDK DLL..."
 )
 
-# --- Copy vcpkg runtime DLLs (spdlog, fmt, brotli) ---
-set(_VCPKG_BIN "${_VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin")
-file(GLOB _RUNTIME_DLLS
-    "${_VCPKG_BIN}/spdlog.dll"
-    "${_VCPKG_BIN}/fmt.dll"
-    "${_VCPKG_BIN}/brotlidec.dll"
-    "${_VCPKG_BIN}/brotlicommon.dll"
-)
+# --- Copy vcpkg runtime DLLs ---
+# Derive vcpkg bin from CMAKE_PREFIX_PATH (works without vcpkg toolchain)
+if(NOT _VCPKG_INSTALLED_DIR AND CMAKE_PREFIX_PATH)
+    list(GET CMAKE_PREFIX_PATH 0 _FIRST_PREFIX)
+    set(_VCPKG_BIN "${_FIRST_PREFIX}/bin")
+else()
+    set(_VCPKG_BIN "${_VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin")
+endif()
+file(GLOB _RUNTIME_DLLS "${_VCPKG_BIN}/*.dll")
 if(_RUNTIME_DLLS)
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_RUNTIME_DLLS} "$<TARGET_FILE_DIR:${PROJECT_NAME}>/"
-        COMMENT "Copying vcpkg runtime DLLs (spdlog, fmt, brotli)..."
+        COMMENT "Copying vcpkg runtime DLLs..."
     )
 endif()
 
@@ -157,23 +158,13 @@ if(WIN32)
         COMMENT "Running windeployqt..."
     )
     # Copy vcpkg QML modules (QtLocation, QtPositioning, etc.)
-    if(EXISTS "${_VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/Qt6/qml")
+    get_filename_component(_VCPKG_ROOT "${_VCPKG_BIN}" DIRECTORY)
+    if(EXISTS "${_VCPKG_ROOT}/Qt6/qml")
         add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_directory
-                "${_VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/Qt6/qml"
+                "${_VCPKG_ROOT}/Qt6/qml"
                 "$<TARGET_FILE_DIR:${PROJECT_NAME}>/qml"
             COMMENT "Copying vcpkg QML modules..."
-        )
-    endif()
-    # Copy OpenSSL + libjpeg DLLs (needed for HTTPS tile proxy + JPEG decoding)
-    file(GLOB _EXTRA_DLLS "${_VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/libssl*.dll"
-                          "${_VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/libcrypto*.dll"
-                          "${_VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/jpeg*.dll"
-                          "${_VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/turbojpeg*.dll")
-    if(_EXTRA_DLLS)
-        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_EXTRA_DLLS} "$<TARGET_FILE_DIR:${PROJECT_NAME}>/"
-            COMMENT "Copying OpenSSL + libjpeg DLLs..."
         )
     endif()
 endif()
