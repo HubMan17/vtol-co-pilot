@@ -40,6 +40,12 @@ test_run.bat
 cache/
 logs/
 
+# Legacy Python venv artifacts
+Lib/
+Scripts/
+venv/
+=*
+
 # Temporary files
 *.tmp
 *.temp
