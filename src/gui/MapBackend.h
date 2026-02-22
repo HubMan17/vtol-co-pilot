@@ -54,6 +54,11 @@ class MapBackend : public QObject {
     Q_PROPERTY(QVariantList drawingPath READ drawingPath NOTIFY drawingPathChanged)
     Q_PROPERTY(bool leftClickMode READ leftClickMode WRITE setLeftClickMode NOTIFY leftClickModeChanged)
 
+    // ── Operational waypoint ──
+    Q_PROPERTY(QGeoCoordinate operationalWpPosition READ operationalWpPosition NOTIFY operationalWpChanged)
+    Q_PROPERTY(bool operationalWpVisible READ operationalWpVisible NOTIFY operationalWpChanged)
+    Q_PROPERTY(QString operationalWpMode READ operationalWpMode NOTIFY operationalWpChanged)
+
     // ── Avoidance ──
     Q_PROPERTY(QVariantList avoidancePath READ avoidancePath NOTIFY avoidancePathChanged)
     Q_PROPERTY(QVariantList plannedDirectPath READ plannedDirectPath NOTIFY plannedDirectPathChanged)
@@ -97,6 +102,9 @@ public:
     bool drawingMode() const { return m_drawingMode; }
     QVariantList drawingPath() const { return m_drawingPath; }
     bool leftClickMode() const { return m_leftClickMode; }
+    QGeoCoordinate operationalWpPosition() const { return m_operationalWpPos; }
+    bool operationalWpVisible() const { return m_operationalWpVisible; }
+    QString operationalWpMode() const { return m_operationalWpMode; }
     QVariantList avoidancePath() const { return m_avoidancePath; }
     QVariantList plannedDirectPath() const { return m_plannedDirectPath; }
 
@@ -152,6 +160,10 @@ public:
     void setAvoidancePath(const QVariantList& points);
     void setPlannedDirectPath(const QVariantList& points);
     void setConflictPoints(const QVariantList& points);
+
+    // Operational waypoint
+    void setOperationalWp(double lat, double lon, const QString& mode);
+    void clearOperationalWp();
 
     // Layer visibility
     void setLayerVisibility(const QString& layerName, bool visible);
@@ -213,6 +225,7 @@ signals:
     void drawingModeChanged();
     void drawingPathChanged();
     void leftClickModeChanged();
+    void operationalWpChanged();
     void avoidancePathChanged();
     void plannedDirectPathChanged();
     void zonesChanged();
@@ -286,6 +299,11 @@ private:
     bool m_drawingMode = false;
     QVariantList m_drawingPath;
     bool m_leftClickMode = false;
+
+    // Operational waypoint
+    QGeoCoordinate m_operationalWpPos;
+    bool m_operationalWpVisible = false;
+    QString m_operationalWpMode;
 
     // Avoidance
     QVariantList m_avoidancePath;

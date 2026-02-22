@@ -32,10 +32,14 @@ public:
         bool climbEnroute = false;
         int orbitRadius = 150;
         int orbitTurns = 1;
+        bool isOperational = false;
+        QString operationalMode;  // "GOTO" or "VIA_POINT"
     };
 
     explicit WaypointDialog(double lat, double lon,
                             const ZoneChecker* zoneChecker = nullptr,
+                            bool operational = false,
+                            bool allowVia = true,
                             QWidget* parent = nullptr);
 
     Result result() const;
@@ -48,7 +52,10 @@ private:
     double m_lat;
     double m_lon;
     const ZoneChecker* m_zoneChecker;
+    bool m_operational;
+    bool m_allowVia;
 
+    QComboBox*  m_comboOpMode = nullptr;
     QSpinBox*   m_spinAltitude;
     QCheckBox*  m_chkClimbEnroute;
     QComboBox*  m_comboType;

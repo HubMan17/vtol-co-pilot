@@ -101,6 +101,26 @@ void MapBackend::setReturningHome(bool v)
     }
 }
 
+// ═══════════════════════ Operational Waypoint ═══════════════════════
+
+void MapBackend::setOperationalWp(double lat, double lon, const QString& mode)
+{
+    m_operationalWpPos = QGeoCoordinate(lat, lon);
+    m_operationalWpVisible = true;
+    m_operationalWpMode = mode;
+    SPDLOG_INFO("[MapBackend::setOperationalWp] lat={:.6f}, lon={:.6f}, mode={}", lat, lon, mode.toStdString());
+    emit operationalWpChanged();
+}
+
+void MapBackend::clearOperationalWp()
+{
+    if (!m_operationalWpVisible) return;
+    m_operationalWpVisible = false;
+    m_operationalWpMode.clear();
+    SPDLOG_INFO("[MapBackend::clearOperationalWp]");
+    emit operationalWpChanged();
+}
+
 // ═══════════════════════ Waypoints ═══════════════════════
 
 void MapBackend::setWaypoints(const QVector<QVariantMap>& waypoints, int activeIdx)

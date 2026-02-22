@@ -52,8 +52,10 @@ static QHBoxLayout* buttonRow(QPushButton* cancel, QPushButton* ok,
 
 WaypointDialog::WaypointDialog(double lat, double lon,
                                const ZoneChecker* zoneChecker,
+                               bool operational,
+                               bool allowVia,
                                QWidget* parent)
-    : QDialog(parent), m_lat(lat), m_lon(lon), m_zoneChecker(zoneChecker)
+    : QDialog(parent), m_lat(lat), m_lon(lon), m_zoneChecker(zoneChecker), m_operational(operational), m_allowVia(allowVia)
 {
     setupUi();
     theme::applyDarkTitlebar(static_cast<quintptr>(winId()));
@@ -61,12 +63,28 @@ WaypointDialog::WaypointDialog(double lat, double lon,
 
 void WaypointDialog::setupUi()
 {
-    setWindowTitle(QStringLiteral("Добавить точку маршрута"));
+    setWindowTitle(m_operational ? QStringLiteral("Оперативная точка")
+                                 : QStringLiteral("Добавить точку маршрута"));
     setMinimumWidth(320);
 
     auto* layout = new QVBoxLayout(this);
     layout->setSpacing(12);
     layout->setContentsMargins(16, 16, 16, 16);
+
+    // ── Operational mode (only for operational waypoints) ──
+    if (m_operational) {
+        auto* opGroup = new QGroupBox(QStringLiteral("Режим"));
+        auto* opForm = new QFormLayout(opGroup);
+        opForm->setSpacing(8);
+
+        m_comboOpMode = new QComboBox;
+        m_comboOpMode->addItem(QStringLiteral("Лететь к точке"),           QStringLiteral("GOTO"));
+        if (m_allowVia) {
+            m_comboOpMode->addItem(QStringLiteral("Промежуточная к маршруту"), QStringLiteral("VIA_POINT"));
+        }
+        opForm->addRow(QStringLiteral("Режим:"), m_comboOpMode);
+        layout->addWidget(opGroup);
+    }
 
     // ── Coordinates ──
     auto* coordGroup = new QGroupBox(QStringLiteral("Координаты"));
@@ -170,6 +188,13 @@ void WaypointDialog::checkZoneRestriction()
 {
     if (!m_zoneChecker) return;
 
+    // Operational waypoints bypass zone restrictions
+    if (m_operational) {
+        m_lblZoneWarning->setVisible(false);
+        m_btnOk->setEnabled(true);
+        return;
+    }
+
     auto res = m_zoneChecker->isPointRestricted(m_lat, m_lon, m_spinAltitude->value());
     if (res.restricted) {
         m_lblZoneWarning->setText(QString::fromStdString(res.reason));
@@ -195,6 +220,10 @@ WaypointDialog::Result WaypointDialog::result() const
         r.orbitRadius = m_spinOrbitRadius->value();
         if (r.action == "ORBIT_TURNS")
             r.orbitTurns = m_spinOrbitTurns->value();
+    }
+    r.isOperational = m_operational;
+    if (m_comboOpMode) {
+        r.operationalMode = m_comboOpMode->currentData().toString();
     }
     return r;
 }

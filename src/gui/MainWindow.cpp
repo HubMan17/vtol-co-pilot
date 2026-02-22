@@ -241,6 +241,16 @@ QWidget* MainWindow::buildControls()
              theme::SUCCESS, theme::BG_CARD, theme::TEXT_DIM, theme::BORDER_SUBTLE));
     lay->addWidget(m_btnNav);
 
+    // Resume route button (visible only when operational WP is active)
+    m_btnResumeRoute = new QPushButton(QStringLiteral("Продолжить маршрут"));
+    m_btnResumeRoute->setFixedHeight(32);
+    m_btnResumeRoute->setVisible(false);
+    m_btnResumeRoute->setStyleSheet(QStringLiteral(
+        "QPushButton { background-color: #FF6D00; color: #fff; border: none; "
+        "border-radius: 6px; font-size: 12px; font-weight: 600; padding: 0 14px; }"
+        "QPushButton:hover { background-color: #E65100; }"));
+    lay->addWidget(m_btnResumeRoute);
+
     // Row 1: Position + Home + Route
     auto* r1 = new QHBoxLayout;
     r1->setSpacing(4);
@@ -491,6 +501,72 @@ void MainWindow::setupConnections()
 
     connect(&m_autopilot, &AutopilotManager::homeOrbitEstablished,
             this, &MainWindow::onHomeOrbitEstablished);
+
+    // Operational waypoint signals
+    connect(m_btnResumeRoute, &QPushButton::clicked, this, [this]() {
+        SPDLOG_INFO("[MainWindow] Resume route button clicked");
+        m_autopilot.cancelOperational();
+    });
+
+    connect(&m_autopilot, &AutopilotManager::operationalEngaged, this, [this]() {
+        bool hasRoute = m_routePlanner.getRoute()
+            && !m_routePlanner.getRoute()->waypoints.empty();
+        m_btnResumeRoute->setText(hasRoute
+            ? QStringLiteral("Продолжить маршрут")
+            : QStringLiteral("Завершить"));
+        m_btnResumeRoute->setVisible(true);
+        SPDLOG_INFO("[MainWindow] Operational WP engaged — hasRoute={}", hasRoute);
+        m_notificationManager->pushOrReplace(Notification{
+            NotificationLevel::Info,
+            QStringLiteral("Оперативная точка"),
+            QStringLiteral("Навигация к оперативной точке"),
+            -1, {}, {}
+        }, QStringLiteral("operational"));
+    });
+
+    connect(&m_autopilot, &AutopilotManager::operationalReached, this, [this]() {
+        auto* opWp = m_autopilot.operationalWaypoint();
+        bool isVia = opWp && opWp->mode == OperationalMode::VIA_POINT;
+        SPDLOG_INFO("[MainWindow] Operational WP reached, mode={}",
+                    isVia ? "VIA" : "GOTO");
+        if (isVia) {
+            // VIA_POINT — cancelOperational will follow automatically
+            m_btnResumeRoute->setVisible(false);
+            m_mapWidget->backend()->clearOperationalWp();
+            refreshMapWaypoints();
+            m_notificationManager->pushOrReplace(Notification{
+                NotificationLevel::Info,
+                QStringLiteral("Промежуточная пройдена"),
+                QStringLiteral("Возврат к маршруту"),
+                -1, {}, {}
+            }, QStringLiteral("operational"));
+        } else {
+            // GOTO — waiting for operator
+            m_notificationManager->pushOrReplace(Notification{
+                NotificationLevel::Warning,
+                QStringLiteral("Точка достигнута"),
+                QStringLiteral("Нажмите «Продолжить маршрут» для возврата"),
+                0, {}, {}
+            }, QStringLiteral("operational"));
+        }
+    });
+
+    connect(&m_autopilot, &AutopilotManager::operationalCancelled, this, [this]() {
+        m_btnResumeRoute->setVisible(false);
+        m_mapWidget->backend()->clearOperationalWp();
+        refreshMapWaypoints();
+        bool hasRoute = m_autopilot.isEngaged()
+            && m_routePlanner.getRoute()
+            && !m_routePlanner.getRoute()->waypoints.empty();
+        SPDLOG_INFO("[MainWindow] Operational WP cancelled — hasRoute={}", hasRoute);
+        m_notificationManager->pushOrReplace(Notification{
+            NotificationLevel::Info,
+            hasRoute ? QStringLiteral("Маршрут") : QStringLiteral("Оперативная точка"),
+            hasRoute ? QStringLiteral("Навигация по маршруту возобновлена")
+                     : QStringLiteral("Точка отменена"),
+            -1, {}, {}
+        }, QStringLiteral("operational"));
+    });
 
     // Layer visibility → save config
     connect(be, &MapBackend::showTrackChanged, this, [this] {
@@ -911,6 +987,12 @@ void MainWindow::onContextAddWaypoint(double lat, double lon)
 
     auto* actSetPos = menu.addAction(QStringLiteral("Установить позицию здесь"));
     auto* actAddWp  = menu.addAction(QStringLiteral("Добавить точку маршрута"));
+
+    auto* actAddOp = menu.addAction(QStringLiteral("Оперативная точка"));
+    bool canOperational = m_connection.isConnected()
+        && !(m_autopilot.isEngaged() && m_autopilot.status().returningHome);
+    actAddOp->setEnabled(canOperational);
+
     auto* actSetHome = menu.addAction(QStringLiteral("Установить дом"));
     menu.addSeparator();
     auto* actCenter = menu.addAction(QStringLiteral("Центрировать карту"));
@@ -926,7 +1008,7 @@ void MainWindow::onContextAddWaypoint(double lat, double lon)
         statusBar()->showMessage(QStringLiteral("Позиция: %1, %2")
                                   .arg(lat, 0, 'f', 6).arg(lon, 0, 'f', 6));
     } else if (chosen == actAddWp) {
-        WaypointDialog dialog(lat, lon, &m_zoneChecker, this);
+        WaypointDialog dialog(lat, lon, &m_zoneChecker, false, true, this);
         if (dialog.exec() != QDialog::Accepted) return;
 
         auto r = dialog.result();
@@ -947,6 +1029,34 @@ void MainWindow::onContextAddWaypoint(double lat, double lon)
         refreshMapWaypoints();
         statusBar()->showMessage(QStringLiteral("Добавлена точка: %1, %2")
                                   .arg(lat, 0, 'f', 6).arg(lon, 0, 'f', 6));
+    } else if (chosen == actAddOp) {
+        // VIA only makes sense when autopilot is engaged with an active route
+        bool hasActiveRoute = m_autopilot.isEngaged()
+            && m_routePlanner.getRoute()
+            && !m_routePlanner.getRoute()->waypoints.empty();
+        WaypointDialog dialog(lat, lon, &m_zoneChecker, true, hasActiveRoute, this);
+        if (dialog.exec() != QDialog::Accepted) return;
+
+        auto r = dialog.result();
+        Waypoint wp;
+        wp.lat = r.lat;
+        wp.lon = r.lon;
+        wp.altitude = r.altitude;
+        wp.radius = r.radius;
+        wp.action = r.action.toStdString();
+        wp.orbit_radius = r.orbitRadius;
+        wp.orbit_turns = r.orbitTurns;
+        wp.climb_enroute = r.climbEnroute;
+
+        auto mode = (r.operationalMode == "VIA_POINT")
+            ? OperationalMode::VIA_POINT : OperationalMode::GOTO;
+
+        if (m_autopilot.engageOperational(wp, mode)) {
+            m_mapWidget->backend()->setOperationalWp(r.lat, r.lon,
+                r.operationalMode.isEmpty() ? QStringLiteral("GOTO") : r.operationalMode);
+            SPDLOG_INFO("[MainWindow] Operational WP placed: mode={}, lat={:.6f}, lon={:.6f}",
+                        r.operationalMode.toStdString(), r.lat, r.lon);
+        }
     } else if (chosen == actSetHome) {
         setHomePosition(lat, lon);
         statusBar()->showMessage(QStringLiteral("Home: %1, %2")
@@ -1361,6 +1471,8 @@ void MainWindow::onAutopilotDisengaged(const QString& /*prevMode*/, const QStrin
 {
     m_btnNav->setChecked(false);
     m_btnHome->setChecked(false);
+    m_btnResumeRoute->setVisible(false);
+    m_mapWidget->backend()->clearOperationalWp();
     statusBar()->showMessage(reason.isEmpty()
         ? QStringLiteral("АП отключен")
         : QStringLiteral("АП откл.: %1").arg(reason));

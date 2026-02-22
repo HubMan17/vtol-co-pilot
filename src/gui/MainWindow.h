@@ -161,6 +161,7 @@ private:
     QPushButton* m_btnHome = nullptr;
     QPushButton* m_btnDrawZone = nullptr;
     QPushButton* m_btnSettings = nullptr;
+    QPushButton* m_btnResumeRoute = nullptr;
     QPushButton* m_btnWpPrev = nullptr;
     QPushButton* m_btnWpNext = nullptr;
     QSpinBox* m_spinWaypoint = nullptr;

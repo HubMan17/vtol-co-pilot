@@ -10,6 +10,7 @@
 
 #include "core/Types.h"
 #include "core/Config.h"
+#include "navigation/RoutePlanner.h"
 #include "HeadingController.h"
 #include "AltitudeController.h"
 #include "SpeedController.h"
@@ -17,10 +18,8 @@
 namespace vtol {
 
 class MavlinkConnection;
-class RoutePlanner;
 class ZoneChecker;
 class PathPlanner;
-struct Waypoint;
 
 enum class AutopilotMode { MANUAL, NAV };
 
@@ -39,6 +38,8 @@ struct AutopilotStatus {
     int orbitTurnsCompleted = 0;
     double orbitRadius = 0;
     bool returningHome = false;
+    bool operationalActive = false;
+    QString operationalMode;    // "GOTO" or "VIA_POINT"
 };
 
 class AutopilotManager : public QObject {
@@ -59,6 +60,8 @@ public:
     // --- Engage / disengage ---
     bool engageNav();
     bool engageHome();
+    bool engageOperational(const Waypoint& wp, OperationalMode mode);
+    void cancelOperational();
     void disengage(const QString& reason = "");
     void activateRtl();
 
@@ -69,6 +72,9 @@ public:
     [[nodiscard]] double headingError() const { return m_headingCtrl.error(); }
     [[nodiscard]] AutopilotStatus status() const;
     [[nodiscard]] std::vector<std::tuple<double, double>> remainingAvoidanceWaypoints() const;
+    [[nodiscard]] bool isOperationalActive() const { return m_operationalActive; }
+    [[nodiscard]] bool hasOperationalWaypoint() const { return m_operationalWp.has_value(); }
+    [[nodiscard]] const OperationalWaypoint* operationalWaypoint() const;
 
     // --- Live adjustments ---
     void setTargetAltitude(double altitude);
@@ -84,6 +90,9 @@ signals:
     void waypointReached(int reachedId, int nextId);
     void avoidanceFailed(const QString& reason);
     void homeOrbitEstablished();
+    void operationalEngaged();
+    void operationalReached();
+    void operationalCancelled();
 
 public slots:
     void update();
@@ -103,6 +112,7 @@ private:
     void sendGuidedCommands(double targetBearing, const LatLon& position);
     void exitOrbit();
     void startOrbit(Waypoint& wp, double currentHeading);
+    void onOperationalReached();
     bool chooseOrbitDirectionCcw(const LatLon& position, double centerLat, double centerLon, double heading);
     void updateOrbitProgress(double currentHeading);
     void finishOrbitAndAdvance(Waypoint& oldWp);
@@ -110,6 +120,7 @@ private:
 
     // Zone avoidance
     static constexpr int HOME_WP_ID = -999;
+    static constexpr int OPERATIONAL_WP_ID = -998;
     std::optional<std::tuple<double, double>> getAvoidanceTarget(
         const LatLon& position, const Waypoint& wp, double altitude);
     void startAvoidanceComputation(double startLat, double startLon,
@@ -153,6 +164,11 @@ private:
     bool m_orbitCcw = false;
     int m_tangentApproachWpId = -1;
     bool m_homeOrbitNotified = false;
+
+    // Operational waypoint (ad-hoc, outside the route)
+    std::optional<OperationalWaypoint> m_operationalWp;
+    bool m_operationalActive = false;
+    bool m_operationalStandalone = false; // auto-engaged without route
 
     // GUIDED target throttling
     double m_guidedSendTime = 0.0;

@@ -121,6 +121,9 @@ bool AutopilotManager::engageNav()
     m_waitingForAltitude = false;
     m_returningHome = false;
     m_loiterAltTransition = false;
+    m_operationalWp.reset();
+    m_operationalActive = false;
+    m_operationalStandalone = false;
     m_disengageReason.clear();
     m_guidedSendTime = 0.0;
     m_avoidanceWaypoints.clear();
@@ -219,6 +222,202 @@ bool AutopilotManager::engageHome()
     return true;
 }
 
+// ─────────────────────── operational waypoint ───────────────────────
+
+const OperationalWaypoint* AutopilotManager::operationalWaypoint() const
+{
+    return m_operationalWp.has_value() ? &m_operationalWp.value() : nullptr;
+}
+
+bool AutopilotManager::engageOperational(const Waypoint& wp, OperationalMode mode)
+{
+    if (!m_connection.isConnected()) return false;
+
+    bool wasManual = (m_mode != AutopilotMode::NAV);
+
+    if (wasManual) {
+        // Auto-engage: initialize controllers and enter NAV/GUIDED
+        SPDLOG_INFO("[AutopilotManager::engageOperational] auto-engage from MANUAL (standalone)");
+        m_headingCtrl.reset();
+        m_altitudeCtrl.reset();
+        m_speedCtrl.reset();
+
+        auto* tel = m_connection.telemetry();
+        m_stickOverrideCount = 0;
+        m_throttleBaseline = tel->rcChannels()[CH_THROTTLE];
+        m_activeWaypointId = -1;
+
+        if (m_savedAirspeedCruise.has_value()) {
+            m_connection.setCruiseAirspeed(m_savedAirspeedCruise.value());
+            m_savedAirspeedCruise.reset();
+        }
+        m_connection.setParamInt("THROTTLE_NUDGE", 1);
+
+        m_isOrbiting = false;
+        m_returningHome = false;
+        m_homeOrbitNotified = false;
+        m_loiterAltTransition = false;
+        m_disengageReason.clear();
+
+        double now = nowSec();
+        m_mode = AutopilotMode::NAV;
+        m_lastUpdateTime = now;
+        m_engageTime = now;
+        m_operationalStandalone = true;
+
+        m_connection.setMode("FBWA");
+        m_connection.setMode("GUIDED");
+        m_connection.sendSpeed(m_speedCtrl.target());
+
+        emit engaged("NAV");
+    } else {
+        m_operationalStandalone = false;
+    }
+
+    // Exit current orbit if any
+    if (m_isOrbiting) {
+        exitOrbit();
+    }
+
+    Waypoint opWpCopy = wp;
+    opWpCopy.id = OPERATIONAL_WP_ID;
+    m_operationalWp = OperationalWaypoint{opWpCopy, mode};
+    m_operationalActive = true;
+
+    // Reset avoidance for the new target
+    m_avoidanceWaypoints.clear();
+    m_avoidanceWpIdx = 0;
+    m_avoidanceForWpId = -1;
+    m_avoidanceGaveUp = {};
+    m_avoidanceComputing = false;
+    m_avoidancePending.hasResult = false;
+    m_avoidanceSuppressedWpId = -1;
+    m_avoidanceNotifiedWpId = -1;
+    m_avoidanceLastCheckTime = 0.0;
+
+    // Reset orbit state
+    m_orbitTurnsCompleted = 0;
+    m_orbitHeadingAccumulated = 0.0;
+    m_orbitRepositionSent = false;
+    m_waitingForAltitude = false;
+    m_loiterAltTransition = false;
+    m_tangentApproachWpId = -1;
+    m_guidedSendTime = 0.0;
+
+    // Altitude
+    auto* tel = m_connection.telemetry();
+    if (wp.climb_enroute) {
+        m_altitudeCtrl.setTargetAltitude(wp.altitude);
+    } else {
+        m_altitudeCtrl.setTargetAltitude(tel->altitudeAgl());
+    }
+
+    // If was returning home, stop RTH
+    m_returningHome = false;
+    m_homeOrbitNotified = false;
+
+    if (!wasManual) {
+        // Re-enter GUIDED to clear DO_REPOSITION (already done for auto-engage above)
+        m_connection.setMode("FBWA");
+        m_connection.setMode("GUIDED");
+    }
+
+    // Initial vector towards operational WP
+    LatLon pos = tel->position();
+    if (pos.isValid()) {
+        double initBearing = nav::bearingTo(pos.lat, pos.lon, wp.lat, wp.lon);
+        auto [tgtLat, tgtLon] = nav::projectPoint(pos.lat, pos.lon, initBearing, GUIDED_PROJECTION_DISTANCE);
+        m_connection.sendGuidedTarget(tgtLat, tgtLon, m_altitudeCtrl.target());
+    }
+    if (wp.climb_enroute) {
+        m_connection.sendGuidedChangeAltitude(m_altitudeCtrl.target());
+    }
+
+    SPDLOG_INFO("[AutopilotManager::engageOperational] mode={}, lat={:.6f}, lon={:.6f}, alt={:.0f}, action={}, standalone={}",
+                m_operationalWp->modeName(), wp.lat, wp.lon, wp.altitude, wp.action, m_operationalStandalone);
+    emit operationalEngaged();
+    return true;
+}
+
+void AutopilotManager::cancelOperational()
+{
+    if (!m_operationalActive) return;
+
+    bool standalone = m_operationalStandalone;
+    SPDLOG_INFO("[AutopilotManager::cancelOperational] standalone={}", standalone);
+
+    if (m_isOrbiting) {
+        exitOrbit();
+    }
+
+    m_operationalWp.reset();
+    m_operationalActive = false;
+    m_operationalStandalone = false;
+
+    // Reset orbit/avoidance state
+    m_orbitTurnsCompleted = 0;
+    m_orbitHeadingAccumulated = 0.0;
+    m_orbitRepositionSent = false;
+    m_waitingForAltitude = false;
+    m_loiterAltTransition = false;
+    m_tangentApproachWpId = -1;
+    m_guidedSendTime = 0.0;
+
+    m_avoidanceWaypoints.clear();
+    m_avoidanceWpIdx = 0;
+    m_avoidanceForWpId = -1;
+    m_avoidanceGaveUp = {};
+    m_avoidanceComputing = false;
+    m_avoidancePending.hasResult = false;
+    m_avoidanceSuppressedWpId = -1;
+    m_avoidanceNotifiedWpId = -1;
+    m_avoidanceLastCheckTime = 0.0;
+
+    emit operationalCancelled();
+
+    // Standalone: no route to resume → disengage completely
+    if (standalone || !m_routePlanner || !m_routePlanner->getRoute()
+        || m_routePlanner->getRoute()->waypoints.empty()) {
+        SPDLOG_INFO("[AutopilotManager::cancelOperational] No route — disengage");
+        disengage("");
+        return;
+    }
+
+    // Re-enter GUIDED and redirect to current route waypoint
+    m_connection.setMode("FBWA");
+    m_connection.setMode("GUIDED");
+
+    Waypoint* wp = m_routePlanner->activeWaypoint();
+    if (wp) {
+        m_activeWaypointId = wp->id;
+        if (wp->climb_enroute) {
+            m_altitudeCtrl.setTargetAltitude(wp->altitude);
+        }
+        auto* tel = m_connection.telemetry();
+        LatLon pos = tel->position();
+        if (pos.isValid()) {
+            double bearing = nav::bearingTo(pos.lat, pos.lon, wp->lat, wp->lon);
+            auto [tgtLat, tgtLon] = nav::projectPoint(pos.lat, pos.lon, bearing, GUIDED_PROJECTION_DISTANCE);
+            m_connection.sendGuidedTarget(tgtLat, tgtLon, m_altitudeCtrl.target());
+        }
+        SPDLOG_INFO("[AutopilotManager::cancelOperational] Redirected to WP{}", wp->id);
+    }
+}
+
+void AutopilotManager::onOperationalReached()
+{
+    if (!m_operationalWp) return;
+
+    SPDLOG_INFO("[AutopilotManager::onOperationalReached] mode={}", m_operationalWp->modeName());
+    emit operationalReached();
+
+    if (m_operationalWp->mode == OperationalMode::VIA_POINT) {
+        // Auto-resume route
+        cancelOperational();
+    }
+    // GOTO: stay active, operator must press "Resume route"
+}
+
 void AutopilotManager::activateRtl()
 {
     SPDLOG_INFO("ACTIVATING RTL: switching to ArduPilot RTL mode");
@@ -270,6 +469,9 @@ void AutopilotManager::disengage(const QString& reason)
     m_loiterAltTransition = false;
     m_homeOrbitNotified = false;
     m_tangentApproachWpId = -1;
+    m_operationalWp.reset();
+    m_operationalActive = false;
+    m_operationalStandalone = false;
 
     if (m_savedAirspeedCruise.has_value()) {
         m_connection.setCruiseAirspeed(m_savedAirspeedCruise.value());
@@ -337,6 +539,14 @@ void AutopilotManager::update()
     // Detect active waypoint change (user changed via GUI)
     Waypoint* wpCheck = m_routePlanner->activeWaypoint();
     if (wpCheck && wpCheck->id != m_activeWaypointId) {
+        // Cancel operational waypoint if user picks a different route WP
+        if (m_operationalActive) {
+            SPDLOG_INFO("REDIRECT: WP{} -> WP{} (was operational, cancelling)",
+                        m_activeWaypointId, wpCheck->id);
+            m_operationalWp.reset();
+            m_operationalActive = false;
+            emit operationalCancelled();
+        }
         if (m_isOrbiting || m_returningHome) {
             SPDLOG_INFO("REDIRECT: WP{} -> WP{} (was {})", m_activeWaypointId, wpCheck->id,
                         m_returningHome ? "returning home" : "orbiting");
@@ -470,6 +680,111 @@ void AutopilotManager::update()
                         tel->airspeed(), m_speedCtrl.target(),
                         tel->mode().toStdString(), tel->gpsFix(), tel->armed());
         }
+        return;
+    }
+
+    // ─── Operational waypoint navigation ───
+    if (m_operationalActive && m_operationalWp) {
+        auto& opWp = m_operationalWp->waypoint;
+        double distToOp = nav::haversineDistance(position.lat, position.lon, opWp.lat, opWp.lon);
+
+        if (m_isOrbiting) {
+            // Orbiting over operational WP
+            updateOrbitProgress(tel->heading());
+            m_altitudeCtrl.update(tel->altitudeAgl());
+            m_speedCtrl.update(tel->airspeed());
+            targetBearing = tel->heading();
+
+            if (!m_orbitRepositionSent) {
+                double radius = opWp.orbit_radius > 0 ? opWp.orbit_radius : 150.0;
+                m_connection.sendLoiterUnlim(opWp.lat, opWp.lon, opWp.altitude, radius, m_orbitCcw);
+                m_orbitRepositionSent = true;
+            }
+
+            // ALTITUDE: auto-advance when target altitude reached
+            if (opWp.action == "ALTITUDE" && !m_orbitAdvanceHandled) {
+                if (m_altitudeCtrl.isOnAltitude(5.0)) {
+                    m_orbitAdvanceHandled = true;
+                    SPDLOG_INFO("[Operational] ALTITUDE REACHED: alt={:.1f}m", tel->altitudeAgl());
+                    onOperationalReached();
+                }
+            }
+
+            // ORBIT_TURNS: auto-advance when turns complete
+            if (opWp.action == "ORBIT_TURNS" && m_orbitTurnsCompleted >= opWp.orbit_turns && !m_orbitAdvanceHandled) {
+                m_orbitAdvanceHandled = true;
+                SPDLOG_INFO("[Operational] ORBIT_TURNS complete: {}/{}", m_orbitTurnsCompleted, opWp.orbit_turns);
+                onOperationalReached();
+            }
+
+            // ORBIT_INFINITE and GOTO with FLYTHROUGH — stay orbiting, operator decides
+        } else {
+            // Flying to operational WP
+            bool hasOrbit = (opWp.action == "ORBIT_TURNS" || opWp.action == "ORBIT_INFINITE" || opWp.action == "ALTITUDE");
+            double orbitRadius = opWp.orbit_radius > 0 ? opWp.orbit_radius : 150.0;
+            bool tangentOrbitEntry = hasOrbit && distToOp <= orbitRadius;
+
+            bool reached = distToOp <= opWp.radius;
+            if (reached || tangentOrbitEntry) {
+                // Operational WP reached
+                if (!opWp.climb_enroute) {
+                    m_altitudeCtrl.setTargetAltitude(opWp.altitude);
+                    m_altitudeCtrl.update(tel->altitudeAgl());
+                }
+
+                if (hasOrbit) {
+                    startOrbit(opWp, tel->heading());
+                    if (!m_altitudeCtrl.isOnAltitude(5.0)) {
+                        m_connection.sendGuidedChangeAltitude(opWp.altitude);
+                    }
+                    SPDLOG_INFO("[Operational] START ORBIT: action={}", opWp.action);
+                    targetBearing = tel->heading();
+                } else {
+                    // FLYTHROUGH — operational reached immediately
+                    SPDLOG_INFO("[Operational] FLYTHROUGH reached: dist={:.0f}m", distToOp);
+                    onOperationalReached();
+                }
+            } else {
+                // Flying towards operational WP — direct, no zone avoidance
+                if (hasOrbit && distToOp <= orbitRadius * 2) {
+                    // Tangent approach for orbit entry
+                    if (m_tangentApproachWpId != opWp.id) {
+                        m_orbitCcw = chooseOrbitDirectionCcw(position, opWp.lat, opWp.lon, tel->heading());
+                        m_tangentApproachWpId = opWp.id;
+                    }
+                    double bearingFromOp = nav::bearingTo(opWp.lat, opWp.lon, position.lat, position.lon);
+                    double angleDeg = std::acos(std::min(orbitRadius / distToOp, 1.0)) * 180.0 / M_PI;
+                    double tangentBearing;
+                    if (m_orbitCcw) {
+                        tangentBearing = std::fmod(bearingFromOp - angleDeg + 360.0, 360.0);
+                    } else {
+                        tangentBearing = std::fmod(bearingFromOp + angleDeg, 360.0);
+                    }
+                    auto [tgtLat, tgtLon] = nav::projectPoint(opWp.lat, opWp.lon, tangentBearing, orbitRadius);
+                    targetBearing = nav::bearingTo(position.lat, position.lon, tgtLat, tgtLon);
+                } else {
+                    targetBearing = nav::bearingTo(position.lat, position.lon, opWp.lat, opWp.lon);
+                }
+
+                m_headingCtrl.setTargetHeading(targetBearing);
+                m_headingCtrl.update(tel->heading());
+                m_altitudeCtrl.update(tel->altitudeAgl());
+                m_speedCtrl.update(tel->airspeed());
+                sendGuidedCommands(targetBearing, position);
+            }
+        }
+
+        // Diagnostic logging
+        m_logCounter++;
+        if (m_logCounter >= 20) {
+            m_logCounter = 0;
+            SPDLOG_INFO("[Operational] dist={:.0f}m mode={} orbiting={} | hdg={:.0f} alt={:.1f} spd={:.1f}",
+                        nav::haversineDistance(position.lat, position.lon, opWp.lat, opWp.lon),
+                        m_operationalWp->modeName(), m_isOrbiting,
+                        tel->heading(), tel->altitudeAgl(), tel->airspeed());
+        }
+
+        m_lastUpdateTime = nowSec();
         return;
     }
 
@@ -1110,6 +1425,10 @@ AutopilotStatus AutopilotManager::status() const
     s.isOrbiting = m_isOrbiting;
     s.orbitTurnsCompleted = m_orbitTurnsCompleted;
     s.returningHome = m_returningHome;
+    s.operationalActive = m_operationalActive;
+    if (m_operationalWp) {
+        s.operationalMode = QString::fromLatin1(m_operationalWp->modeName());
+    }
 
     auto altError = m_altitudeCtrl.error();
     QString vertAction;
@@ -1117,7 +1436,26 @@ AutopilotStatus AutopilotManager::status() const
         vertAction = altError > 0 ? " (набор)" : " (снижение)";
     }
 
-    if (m_returningHome && m_homePosition) {
+    if (m_operationalActive && m_operationalWp) {
+        const auto& opWp = m_operationalWp->waypoint;
+        if (m_isOrbiting) {
+            s.orbitRadius = opWp.orbit_radius;
+            if (opWp.action == "ORBIT_TURNS") {
+                s.action = QString("OP_ORBIT_%1/%2%3").arg(m_orbitTurnsCompleted).arg(opWp.orbit_turns).arg(vertAction);
+            } else if (opWp.action == "ORBIT_INFINITE") {
+                s.action = QString("OP_ORBIT_INF%1").arg(vertAction);
+            } else if (opWp.action == "ALTITUDE") {
+                s.action = QString("OP_ALTITUDE_ORBIT%1").arg(vertAction);
+            } else {
+                s.action = "OP_ORBITING";
+            }
+        } else {
+            s.action = QString("OP_%1%2").arg(
+                m_operationalWp->mode == OperationalMode::GOTO ? "GOTO" : "VIA",
+                vertAction);
+            s.orbitRadius = opWp.orbit_radius;
+        }
+    } else if (m_returningHome && m_homePosition) {
         if (m_isOrbiting) {
             s.action = QString("ВОЗВРАТ_ДОМОЙ_ОРБИТА%1").arg(vertAction);
         } else {

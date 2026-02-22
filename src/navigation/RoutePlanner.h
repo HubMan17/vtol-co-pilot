@@ -34,6 +34,18 @@ struct Waypoint {
     }
 };
 
+// ─── Operational waypoint (ad-hoc, outside the route) ───────────────
+enum class OperationalMode { GOTO, VIA_POINT };
+
+struct OperationalWaypoint {
+    Waypoint waypoint;
+    OperationalMode mode = OperationalMode::GOTO;
+
+    [[nodiscard]] const char* modeName() const {
+        return mode == OperationalMode::GOTO ? "GOTO" : "VIA_POINT";
+    }
+};
+
 struct Route {
     std::string name;
     std::vector<Waypoint> waypoints;

@@ -28,6 +28,7 @@ private slots:
     void updateDirectPathSource();
     void updateDrawingSource();
     void updateHomeSource();
+    void updateOperationalWpSource();
     void updateWaypointSources();
     void updateZoneSources();
     void updateSettlementSources();

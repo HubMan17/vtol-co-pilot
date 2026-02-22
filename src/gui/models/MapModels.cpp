@@ -447,7 +447,7 @@ void ConflictSegmentModel::setConflicts(const QVariantList& conflicts, const QVe
         auto map = c.toMap();
         int fi = map["from_idx"].toInt();
         int ti = map["to_idx"].toInt();
-        if (fi < waypoints.size() && ti < waypoints.size()) {
+        if (fi >= 0 && ti >= 0 && fi < waypoints.size() && ti < waypoints.size()) {
             m_items.append({
                 waypoints[fi]["lat"].toDouble(), waypoints[fi]["lon"].toDouble(),
                 waypoints[ti]["lat"].toDouble(), waypoints[ti]["lon"].toDouble(),

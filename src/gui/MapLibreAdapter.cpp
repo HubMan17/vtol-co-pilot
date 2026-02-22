@@ -44,6 +44,7 @@ MapLibreAdapter::MapLibreAdapter(QMapLibre::Map* map, MapBackend* backend, QObje
     updateZoneSources();
     updateSettlementSources();
     updateConflictSources();
+    updateOperationalWpSource();
     updateAvoidanceSource();
     updateDirectPathSource();
     updateDrawingSource();
@@ -167,6 +168,7 @@ void MapLibreAdapter::addAllSources()
     addGeoJsonSource("edit-vertices");
     addGeoJsonSource("edit-midpoints");
     addGeoJsonSource("nav-line");
+    addGeoJsonSource("operational-wp");
     addGeoJsonSource("stl-polys");
     addGeoJsonSource("stl-circles");
 }
@@ -311,6 +313,12 @@ void MapLibreAdapter::addAllLayers()
     m_map->setLayoutProperty("wp-icon", "icon-size", 1.0);
     m_map->setLayoutProperty("wp-icon", "icon-allow-overlap", true);
 
+    // --- Operational waypoint (orange icon, above regular waypoints) ---
+    addSymbol("op-wp-icon", "operational-wp");
+    m_map->setLayoutProperty("op-wp-icon", "icon-image", "op-wp");
+    m_map->setLayoutProperty("op-wp-icon", "icon-size", 1.0);
+    m_map->setLayoutProperty("op-wp-icon", "icon-allow-overlap", true);
+
     // --- Drawing (yellow line + vertices, matching Python) ---
     addLine("draw-line", "drawing", "#FFFF00", 2.0);
     addCircle("draw-vertex", "draw-vertices", "#FFFFFF", 5.0, "#000000", 1.0);
@@ -438,6 +446,35 @@ void MapLibreAdapter::addAircraftImage()
         m_map->addImage(QStringLiteral("wp-%1").arg(n), numImg);
     }
 
+    // Operational waypoint marker (orange circle with crosshair)
+    {
+        constexpr int sz = 28;
+        constexpr double cx = 14.0, cy = 14.0, r = 11.0;
+        QImage opImg(sz, sz, QImage::Format_ARGB32_Premultiplied);
+        opImg.fill(Qt::transparent);
+        QPainter op(&opImg);
+        op.setRenderHint(QPainter::Antialiasing);
+        // Shadow
+        op.setBrush(QColor(0, 0, 0, 50));
+        op.setPen(Qt::NoPen);
+        op.drawEllipse(QPointF(cx + 0.5, cy + 0.5), r + 0.5, r + 0.5);
+        // Main circle (#FF6D00 orange)
+        op.setBrush(QColor("#FF6D00"));
+        op.setPen(QPen(Qt::white, 2.0));
+        op.drawEllipse(QPointF(cx, cy), r, r);
+        // Crosshair (thin, proportional)
+        op.setPen(QPen(Qt::white, 1.6, Qt::SolidLine, Qt::RoundCap));
+        constexpr double arm = 5.0;
+        op.drawLine(QPointF(cx - arm, cy), QPointF(cx + arm, cy));
+        op.drawLine(QPointF(cx, cy - arm), QPointF(cx, cy + arm));
+        // Center dot
+        op.setBrush(Qt::white);
+        op.setPen(Qt::NoPen);
+        op.drawEllipse(QPointF(cx, cy), 1.5, 1.5);
+        op.end();
+        m_map->addImage("op-wp", opImg);
+    }
+
     // Home marker (red house icon)
     QImage homeImg(28, 28, QImage::Format_ARGB32_Premultiplied);
     homeImg.fill(Qt::transparent);
@@ -521,6 +558,10 @@ void MapLibreAdapter::connectSignals()
     connect(m_backend, &MapBackend::homePositionChanged, this, &MapLibreAdapter::updateWaypointSources);
     connect(m_backend, &MapBackend::returningHomeChanged, this, &MapLibreAdapter::updateAircraftSource);
 
+    // Operational waypoint
+    connect(m_backend, &MapBackend::operationalWpChanged, this, &MapLibreAdapter::updateOperationalWpSource);
+    connect(m_backend, &MapBackend::operationalWpChanged, this, &MapLibreAdapter::updateAircraftSource);  // nav-line
+
     // Avoidance / direct path
     connect(m_backend, &MapBackend::avoidancePathChanged, this, &MapLibreAdapter::updateAvoidanceSource);
     connect(m_backend, &MapBackend::plannedDirectPathChanged, this, &MapLibreAdapter::updateDirectPathSource);
@@ -597,13 +638,25 @@ void MapLibreAdapter::updateAircraftSource()
     }
     setSourceGeoJson("aircraft", fc);
 
-    // Nav-line: aircraft → target (active WP or home when returning)
+    // Nav-line: aircraft → target (priority: operational > home > active WP)
     QJsonObject navFc = emptyFeatureCollection();
     if (acVis) {
         bool navLineSet = false;
 
-        // Priority: if returning home → nav-line to home
-        if (m_backend->returningHome() && m_backend->homeVisible()) {
+        // Priority 1: operational waypoint
+        if (m_backend->operationalWpVisible()) {
+            auto opPos = m_backend->operationalWpPosition();
+            QJsonArray coords;
+            coords.append(coord(acLat, acLon));
+            coords.append(coord(opPos.latitude(), opPos.longitude()));
+            QJsonArray features;
+            features.append(makeLineFeature(coords));
+            navFc["features"] = features;
+            navLineSet = true;
+        }
+
+        // Priority 2: returning home
+        if (!navLineSet && m_backend->returningHome() && m_backend->homeVisible()) {
             auto home = m_backend->homePosition();
             QJsonArray coords;
             coords.append(coord(acLat, acLon));
@@ -614,7 +667,7 @@ void MapLibreAdapter::updateAircraftSource()
             navLineSet = true;
         }
 
-        // Otherwise: nav-line to active waypoint
+        // Priority 3: active waypoint
         if (!navLineSet) {
             auto* wpModel = qobject_cast<WaypointListModel*>(m_backend->waypointModel());
             if (wpModel && !wpModel->items().isEmpty()) {
@@ -677,6 +730,20 @@ void MapLibreAdapter::updateHomeSource()
         fc["features"] = features;
     }
     setSourceGeoJson("home", fc);
+}
+
+void MapLibreAdapter::updateOperationalWpSource()
+{
+    QJsonObject fc = emptyFeatureCollection();
+    if (m_backend->operationalWpVisible()) {
+        auto pos = m_backend->operationalWpPosition();
+        QJsonObject props;
+        props["mode"] = m_backend->operationalWpMode();
+        QJsonArray features;
+        features.append(makePointFeature(pos.latitude(), pos.longitude(), props));
+        fc["features"] = features;
+    }
+    setSourceGeoJson("operational-wp", fc);
 }
 
 void MapLibreAdapter::updateAvoidanceSource()
