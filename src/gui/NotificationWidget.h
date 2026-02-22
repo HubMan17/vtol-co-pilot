@@ -5,8 +5,11 @@
 #include <QPushButton>
 #include <QProgressBar>
 #include <QTimer>
+#include <QElapsedTimer>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QPropertyAnimation>
+#include <QGraphicsOpacityEffect>
 #include <QObject>
 
 #include <deque>
@@ -50,23 +53,30 @@ public:
 signals:
     void notificationClosed();
 
+private slots:
+    void finalizeDismiss();
+
 private:
     void setupUi();
     void tick();
     void clearButtons();
-    void stopTimer();
+    void fadeIn();
+    void fadeOut();
 
-    QFrame*       m_inner       = nullptr;
-    QLabel*       m_lblTitle    = nullptr;
-    QLabel*       m_lblMessage  = nullptr;
-    QWidget*      m_btnContainer= nullptr;
-    QHBoxLayout*  m_btnLay      = nullptr;
-    QProgressBar* m_progress    = nullptr;
-    QTimer        m_timer;
+    QFrame*                  m_inner          = nullptr;
+    QLabel*                  m_lblTitle       = nullptr;
+    QLabel*                  m_lblMessage     = nullptr;
+    QWidget*                 m_btnContainer   = nullptr;
+    QHBoxLayout*             m_btnLay         = nullptr;
+    QProgressBar*            m_progress       = nullptr;
+    QTimer                   m_timer;
+    QElapsedTimer            m_elapsed;
+    QGraphicsOpacityEffect*  m_opacityEffect  = nullptr;
+    QPropertyAnimation*      m_fadeAnim       = nullptr;
 
     std::optional<Notification> m_current;
-    int m_elapsedMs  = 0;
-    int m_durationMs = 0;
+    int  m_durationMs = 0;
+    bool m_dismissing = false;
 
     std::vector<QPushButton*> m_actionButtons;
 };

@@ -3,6 +3,7 @@
 
 #include <spdlog/spdlog.h>
 
+#include <QEasingCurve>
 #include <QSizePolicy>
 #include <algorithm>
 
@@ -67,7 +68,7 @@ static int defaultDurationSec(NotificationLevel lvl)
 NotificationWidget::NotificationWidget(QWidget* parent)
     : QFrame(parent)
 {
-    m_timer.setInterval(100);
+    m_timer.setInterval(16);  // ~60 FPS
     connect(&m_timer, &QTimer::timeout, this, &NotificationWidget::tick);
     setupUi();
     hide();
@@ -78,33 +79,52 @@ void NotificationWidget::setupUi()
     setObjectName(QStringLiteral("notif_card"));
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
+    // Fade-in / fade-out
+    m_opacityEffect = new QGraphicsOpacityEffect(this);
+    m_opacityEffect->setOpacity(1.0);
+    setGraphicsEffect(m_opacityEffect);
+
+    m_fadeAnim = new QPropertyAnimation(m_opacityEffect, "opacity", this);
+    m_fadeAnim->setDuration(200);
+    m_fadeAnim->setEasingCurve(QEasingCurve::InOutSine);
+    connect(m_fadeAnim, &QPropertyAnimation::finished, this, [this] {
+        if (m_dismissing)
+            finalizeDismiss();
+    });
+
+    // Root layout — горизонтальные поля шире для аккуратного вида
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(10, 6, 10, 6);
+    root->setContentsMargins(14, 6, 14, 6);
     root->setSpacing(0);
 
-    // Inner frame with left-border accent
+    // Inner card frame
     m_inner = new QFrame;
     m_inner->setObjectName(QStringLiteral("notif_inner"));
     auto* innerLay = new QVBoxLayout(m_inner);
-    innerLay->setContentsMargins(12, 10, 12, 6);
-    innerLay->setSpacing(4);
+    innerLay->setContentsMargins(0, 0, 0, 0);
+    innerLay->setSpacing(0);
 
-    // Title
+    // Content area (title + message + buttons)
+    auto* contentWidget = new QWidget;
+    contentWidget->setStyleSheet(QStringLiteral("background: transparent;"));
+    auto* contentLay = new QVBoxLayout(contentWidget);
+    contentLay->setContentsMargins(16, 11, 16, 10);
+    contentLay->setSpacing(3);
+
     m_lblTitle = new QLabel;
     m_lblTitle->setWordWrap(true);
     m_lblTitle->setStyleSheet(QStringLiteral(
         "font-family: \"%1\"; font-size: 13px; font-weight: 700; "
         "border: none; background: transparent;")
         .arg(theme::FONT_FAMILY));
-    innerLay->addWidget(m_lblTitle);
+    contentLay->addWidget(m_lblTitle);
 
-    // Message
     m_lblMessage = new QLabel;
     m_lblMessage->setWordWrap(true);
     m_lblMessage->setStyleSheet(QStringLiteral(
         "color: %1; font-size: 12px; border: none; background: transparent;")
         .arg(theme::TEXT_SECONDARY));
-    innerLay->addWidget(m_lblMessage);
+    contentLay->addWidget(m_lblMessage);
 
     // Action buttons row
     m_btnContainer = new QWidget;
@@ -113,29 +133,40 @@ void NotificationWidget::setupUi()
     m_btnLay->setContentsMargins(0, 4, 0, 2);
     m_btnLay->setSpacing(6);
     m_btnLay->addStretch();
-    innerLay->addWidget(m_btnContainer);
+    contentLay->addWidget(m_btnContainer);
     m_btnContainer->hide();
 
-    root->addWidget(m_inner);
+    innerLay->addWidget(contentWidget);
 
-    // Progress bar (bottom edge)
+    // Progress bar — inside the card, with side margins to respect rounded corners
     m_progress = new QProgressBar;
     m_progress->setTextVisible(false);
     m_progress->setFixedHeight(3);
     m_progress->setRange(0, 1000);
     m_progress->setValue(1000);
+    // No border-radius on the bar itself — it's inset from the card edges
     m_progress->setStyleSheet(QStringLiteral(
-        "QProgressBar { background-color: %1; border: none; border-radius: 0px; }"
-        "QProgressBar::chunk { background-color: %2; border-radius: 0px; }")
-        .arg(theme::BG_INPUT, theme::PRIMARY));
-    root->addWidget(m_progress);
+        "QProgressBar { background-color: rgba(0,0,0,0); border: none; border-radius: 0px; margin: 0 1px; }"
+        "QProgressBar::chunk { background-color: %1; border-radius: 0 0 7px 7px; }")
+        .arg(theme::PRIMARY));
+
+    // Wrapper gives the progress bar rounded bottom corners via clip
+    auto* progressWrapper = new QWidget;
+    progressWrapper->setStyleSheet(QStringLiteral("background: transparent;"));
+    auto* pwLay = new QVBoxLayout(progressWrapper);
+    pwLay->setContentsMargins(0, 0, 0, 0);
+    pwLay->setSpacing(0);
+    pwLay->addWidget(m_progress);
+    innerLay->addWidget(progressWrapper);
+
+    root->addWidget(m_inner);
 }
 
 void NotificationWidget::showNotification(const Notification& n)
 {
-    stopTimer();
+    m_timer.stop();
+    m_dismissing = false;
     m_current = n;
-    m_elapsedMs = 0;
 
     int sec = (n.durationSec < 0) ? defaultDurationSec(n.level) : n.durationSec;
     m_durationMs = sec * 1000;
@@ -159,11 +190,11 @@ void NotificationWidget::showNotification(const Notification& n)
     // Message
     m_lblMessage->setText(n.message);
 
-    // Progress bar color
+    // Progress bar color — subtle dark background, accent chunk
     m_progress->setStyleSheet(QStringLiteral(
-        "QProgressBar { background-color: %1; border: none; border-radius: 0px; }"
-        "QProgressBar::chunk { background-color: %2; border-radius: 0px; }")
-        .arg(theme::BG_INPUT, color));
+        "QProgressBar { background-color: rgba(0,0,0,0.2); border: none; border-radius: 0 0 7px 7px; margin: 0px; }"
+        "QProgressBar::chunk { background-color: %1; border-radius: 0 0 7px 7px; }")
+        .arg(color));
     m_progress->setValue(1000);
 
     // Action buttons
@@ -180,7 +211,6 @@ void NotificationWidget::showNotification(const Notification& n)
                 .arg(theme::BG_INPUT, theme::TEXT_SECONDARY, theme::BORDER,
                      theme::BG_HOVER, theme::TEXT_PRIMARY, theme::BORDER_LIGHT));
 
-            // capture by value for the closure
             auto cb = callback;
             auto lbl = label;
             connect(btn, &QPushButton::clicked, this, [this, cb, lbl] {
@@ -199,28 +229,61 @@ void NotificationWidget::showNotification(const Notification& n)
         m_btnContainer->hide();
     }
 
-    show();
-
     if (m_durationMs > 0) {
         m_progress->show();
+        m_elapsed.start();
         m_timer.start();
     } else {
-        // Infinite notification — no auto-close, hide progress bar
         m_progress->hide();
         SPDLOG_DEBUG("[Notification] infinite duration, timer disabled");
     }
+
+    fadeIn();
 
     SPDLOG_INFO("[Notification] [{}] {} — {} ({}s)",
                 levelName(n.level), n.title.toStdString(), n.message.toStdString(),
                 sec);
 }
 
+void NotificationWidget::fadeIn()
+{
+    m_fadeAnim->stop();
+    if (!isVisible()) {
+        m_opacityEffect->setOpacity(0.0);
+        show();
+    }
+    m_fadeAnim->setStartValue(m_opacityEffect->opacity());
+    m_fadeAnim->setEndValue(1.0);
+    m_fadeAnim->start();
+}
+
+void NotificationWidget::fadeOut()
+{
+    m_fadeAnim->stop();
+    m_fadeAnim->setStartValue(m_opacityEffect->opacity());
+    m_fadeAnim->setEndValue(0.0);
+    m_fadeAnim->start();
+}
+
 void NotificationWidget::dismiss()
 {
-    if (!m_current) return;
-    auto title = m_current->title;
-    stopTimer();
+    if (!m_current || m_dismissing) return;
+    m_timer.stop();
+    m_dismissing = true;
+    SPDLOG_DEBUG("[Notification] dismissing '{}'", m_current->title.toStdString());
+    if (isVisible()) {
+        fadeOut();
+    } else {
+        finalizeDismiss();
+    }
+}
+
+void NotificationWidget::finalizeDismiss()
+{
+    m_dismissing = false;
+    auto title = m_current ? m_current->title : QStringLiteral("?");
     m_current.reset();
+    clearButtons();
     hide();
     SPDLOG_DEBUG("[Notification] dismissed '{}'", title.toStdString());
     emit notificationClosed();
@@ -228,23 +291,14 @@ void NotificationWidget::dismiss()
 
 void NotificationWidget::tick()
 {
-    m_elapsedMs += 100;
-    int remaining = (std::max)(0, m_durationMs - m_elapsedMs);
+    int elapsedMs = static_cast<int>(m_elapsed.elapsed());
+    int remaining = (std::max)(0, m_durationMs - elapsedMs);
     m_progress->setValue(m_durationMs > 0 ? (remaining * 1000 / m_durationMs) : 0);
     if (remaining <= 0) {
-        auto title = m_current ? m_current->title : QStringLiteral("?");
-        stopTimer();
-        m_current.reset();
-        hide();
-        SPDLOG_DEBUG("[Notification] auto-closed '{}'", title.toStdString());
-        emit notificationClosed();
+        SPDLOG_DEBUG("[Notification] auto-closing '{}'",
+                     m_current ? m_current->title.toStdString() : "?");
+        dismiss();
     }
-}
-
-void NotificationWidget::stopTimer()
-{
-    m_timer.stop();
-    clearButtons();
 }
 
 void NotificationWidget::clearButtons()
@@ -270,12 +324,13 @@ bool NotificationWidget::currentHasActions() const
 void NotificationWidget::curtailToPercent(int pct)
 {
     if (!m_current || m_durationMs == 0) return;  // infinite — не трогать
-    int remaining = m_durationMs - m_elapsedMs;
-    int cap = m_elapsedMs + remaining * pct / 100;
+    int elapsedMs = static_cast<int>(m_elapsed.elapsed());
+    int remaining = m_durationMs - elapsedMs;
+    int cap = elapsedMs + remaining * pct / 100;
     if (cap < m_durationMs) {
         m_durationMs = cap;
         SPDLOG_DEBUG("[Notification] curtailed to {}% of remaining (~{}ms left)",
-                     pct, m_durationMs - m_elapsedMs);
+                     pct, m_durationMs - elapsedMs);
     }
 }
 
@@ -351,17 +406,10 @@ void NotificationManager::pushOrReplace(Notification n, const QString& tag)
     n.tag = tag;
     auto key = tag.toStdString();
     if (m_tags.count(key)) {
-        // Remove old from queue
         auto it = std::find_if(m_queue.begin(), m_queue.end(),
             [&tag](const Notification& x) { return x.tag == tag; });
         if (it != m_queue.end())
             m_queue.erase(it);
-
-        // If currently showing the old one — dismiss it
-        if (m_widget->isShowing()) {
-            // We can't directly check tag of current, so just proceed —
-            // the old one will be replaced in queue, new one pushed
-        }
     }
     push(n);
 }
