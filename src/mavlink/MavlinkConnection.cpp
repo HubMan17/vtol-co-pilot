@@ -80,6 +80,10 @@ bool MavlinkConnection::connectToSitl()
 
     m_connected = true;
     emit connectionRestored();
+
+    // Request HOME_POSITION — ArduPilot doesn't send it automatically on TCP
+    requestHomePosition();
+
     SPDLOG_INFO("Connected to SITL successfully");
     return true;
 }
@@ -249,6 +253,20 @@ void MavlinkConnection::setupTelemetrySubscriptions()
                     } else {
                         m_telemetry.setMode(QString("MODE_%1").arg(hb.custom_mode));
                     }
+                }, Qt::QueuedConnection);
+            }
+        );
+
+        // HOME_POSITION (msg_id=242) — RTL point from autopilot
+        m_passthrough->subscribe_message(
+            MAVLINK_MSG_ID_HOME_POSITION,
+            [this](const mavlink_message_t& msg) {
+                mavlink_home_position_t home;
+                mavlink_msg_home_position_decode(&msg, &home);
+                double lat = home.latitude / 1e7;
+                double lon = home.longitude / 1e7;
+                QMetaObject::invokeMethod(this, [this, lat, lon]() {
+                    emit droneHomeReceived(lat, lon);
                 }, Qt::QueuedConnection);
             }
         );
@@ -493,6 +511,15 @@ void MavlinkConnection::requestDataStreams(int rate)
     );
     m_passthrough->send_message(msg);
     SPDLOG_DEBUG("Requested data streams at {} Hz", rate);
+}
+
+void MavlinkConnection::requestHomePosition()
+{
+    if (!m_passthrough) return;
+
+    // MAV_CMD_REQUEST_MESSAGE (512) with param1 = HOME_POSITION msg_id (242)
+    sendCommandLong(512, MAVLINK_MSG_ID_HOME_POSITION, 0, 0, 0, 0, 0, 0);
+    SPDLOG_INFO("Requested HOME_POSITION from autopilot");
 }
 
 void MavlinkConnection::sendReposition(double lat, double lon, double alt)

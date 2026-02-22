@@ -39,6 +39,13 @@ struct ZoneAvoidanceConfig {
     double nofly_buffer = 200.0;
 };
 
+struct HomeConfig {
+    bool auto_from_drone = true;           // Получать home с дрона
+    std::string overwrite_mode = "ask";    // "force" | "keep" | "notify" | "ask"
+    bool notify_auto_set = true;           // Уведомлять при авто-установке
+    bool notify_no_home = true;            // Уведомлять если дом не задан при арме
+};
+
 struct NavigationConfig {
     double waypoint_radius = 150.0;
 };
@@ -59,6 +66,7 @@ struct AppConfig {
     NavigationConfig navigation;
     GuiConfig gui;
     ZoneAvoidanceConfig zone_avoidance;
+    HomeConfig home;
 };
 
 // Load config from JSON file. Returns default config if file doesn't exist.

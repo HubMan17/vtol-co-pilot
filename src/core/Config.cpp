@@ -113,6 +113,15 @@ AppConfig loadConfig(const std::string& path)
         if (z.contains("nofly_buffer"))            z["nofly_buffer"].get_to(cfg.zone_avoidance.nofly_buffer);
     }
 
+    // --- home ---
+    if (data.contains("home")) {
+        auto& h = data["home"];
+        if (h.contains("auto_from_drone"))  h["auto_from_drone"].get_to(cfg.home.auto_from_drone);
+        if (h.contains("overwrite_mode"))   h["overwrite_mode"].get_to(cfg.home.overwrite_mode);
+        if (h.contains("notify_auto_set"))  h["notify_auto_set"].get_to(cfg.home.notify_auto_set);
+        if (h.contains("notify_no_home"))   h["notify_no_home"].get_to(cfg.home.notify_no_home);
+    }
+
     SPDLOG_DEBUG("Config loaded: SITL={}:{}, proxy_port={}, track_length={}",
         cfg.mavlink.sitl_host, cfg.mavlink.sitl_port, cfg.mavlink.proxy_port, cfg.gui.track_length);
 
@@ -172,6 +181,13 @@ void saveConfig(const AppConfig& cfg, const std::string& path)
         {"settlement_buffer",       cfg.zone_avoidance.settlement_buffer},
         {"nofly_mode",              cfg.zone_avoidance.nofly_mode},
         {"nofly_buffer",            cfg.zone_avoidance.nofly_buffer}
+    };
+
+    data["home"] = {
+        {"auto_from_drone",  cfg.home.auto_from_drone},
+        {"overwrite_mode",   cfg.home.overwrite_mode},
+        {"notify_auto_set",  cfg.home.notify_auto_set},
+        {"notify_no_home",   cfg.home.notify_no_home}
     };
 
     std::ofstream file(path);

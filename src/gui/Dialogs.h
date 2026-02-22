@@ -98,7 +98,7 @@ private:
 class SettingsDialog : public QDialog {
     Q_OBJECT
 public:
-    enum Page { PageMap = 0, PageZones = 1, PageData = 2 };
+    enum Page { PageMap = 0, PageZones = 1, PageData = 2, PageHome = 3 };
 
     explicit SettingsDialog(const AppConfig& config,
                             Page initialPage = PageMap,
@@ -116,6 +116,7 @@ private:
     QWidget* createMapPage();
     QWidget* createZonesPage();
     QWidget* createDataPage();
+    QWidget* createHomePage();
     void onSettlementModeChanged();
 
     AppConfig m_config;
@@ -133,6 +134,12 @@ private:
     QSpinBox*  m_spinSettlementBuffer    = nullptr;
     QComboBox* m_comboNoflyMode          = nullptr;
     QSpinBox*  m_spinNoflyBuffer         = nullptr;
+
+    // Home page
+    QCheckBox* m_chkAutoFromDrone     = nullptr;
+    QComboBox* m_comboOverwriteMode   = nullptr;
+    QCheckBox* m_chkNotifyAutoSet     = nullptr;
+    QCheckBox* m_chkNotifyNoHome      = nullptr;
 };
 
 } // namespace vtol

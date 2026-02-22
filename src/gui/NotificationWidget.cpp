@@ -50,6 +50,16 @@ static const char* levelName(NotificationLevel lvl)
     return "info";
 }
 
+static int defaultDurationSec(NotificationLevel lvl)
+{
+    switch (lvl) {
+    case NotificationLevel::Info:     return 5;
+    case NotificationLevel::Warning:  return 7;
+    case NotificationLevel::Critical: return 10;
+    }
+    return 5;
+}
+
 // ═════════════════════════════════════════════════════════════
 //  NotificationWidget
 // ═════════════════════════════════════════════════════════════
@@ -126,7 +136,9 @@ void NotificationWidget::showNotification(const Notification& n)
     stopTimer();
     m_current = n;
     m_elapsedMs = 0;
-    m_durationMs = n.durationSec * 1000;
+
+    int sec = (n.durationSec < 0) ? defaultDurationSec(n.level) : n.durationSec;
+    m_durationMs = sec * 1000;
 
     auto color = levelColor(n.level);
     auto bg    = levelBg(n.level);
@@ -200,7 +212,7 @@ void NotificationWidget::showNotification(const Notification& n)
 
     SPDLOG_INFO("[Notification] [{}] {} — {} ({}s)",
                 levelName(n.level), n.title.toStdString(), n.message.toStdString(),
-                n.durationSec);
+                sec);
 }
 
 void NotificationWidget::dismiss()

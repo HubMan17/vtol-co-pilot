@@ -42,6 +42,7 @@ public:
     void sendWindOverride(int directionDeg, int speedMs, double accuracy = 2.0);
     void setCruiseAirspeed(double speedMs);
     void requestDataStreams(int rate = 4);
+    void requestHomePosition();
     void sendReposition(double lat, double lon, double alt);
 
     static constexpr double ORBIT_RADIUS_COMPENSATION = 0.85;
@@ -51,6 +52,7 @@ signals:
     void connectionLost();
     void connectionRestored();
     void rawMessage(const mavlink_message_t& msg);
+    void droneHomeReceived(double lat, double lon);
 
 private:
     void setupTelemetrySubscriptions();

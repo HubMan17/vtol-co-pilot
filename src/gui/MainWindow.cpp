@@ -444,6 +444,10 @@ void MainWindow::setupConnections()
             this, &MainWindow::onConnectionRestored);
     connect(&m_connection, &MavlinkConnection::connectionLost,
             this, &MainWindow::onConnectionLost);
+    connect(&m_connection, &MavlinkConnection::droneHomeReceived,
+            this, &MainWindow::onDroneHomeReceived);
+    connect(m_connection.telemetry(), &TelemetryState::armedChanged,
+            this, &MainWindow::onArmedStateChanged);
 
     // Autopilot signals
     connect(&m_autopilot, &AutopilotManager::engaged,
@@ -461,7 +465,7 @@ void MainWindow::setupConnections()
             NotificationLevel::Critical,
             QStringLiteral("Обход невозможен"),
             reason,
-            30,
+            -1,
             {
                 {QStringLiteral("Лететь напрямую"), [this] {
                     SPDLOG_INFO("[Notification] action: fly direct — suppressing avoidance rechecks");
@@ -571,7 +575,7 @@ void MainWindow::onConnectionRestored()
         NotificationLevel::Info,
         QStringLiteral("Связь восстановлена"),
         QStringLiteral("MAVLink соединение активно"),
-        10, {}, {}
+        -1, {}, {}
     }, QStringLiteral("connection"));
 }
 
@@ -592,7 +596,7 @@ void MainWindow::onConnectionLost()
         NotificationLevel::Critical,
         QStringLiteral("Связь потеряна"),
         QStringLiteral("MAVLink соединение прервано"),
-        30, {}, {}
+        -1, {}, {}
     }, QStringLiteral("connection"));
 }
 
@@ -647,6 +651,7 @@ void MainWindow::setCorrectionPosition(double lat, double lon)
 void MainWindow::setHomePosition(double lat, double lon)
 {
     m_homePosition = LatLon{lat, lon};
+    m_homeSource = HomeSource::Manual;
     m_autopilot.setHomePosition(m_homePosition);
     m_mapWidget->backend()->setHome(lat, lon);
     m_setHomeMode = false;
@@ -654,6 +659,145 @@ void MainWindow::setHomePosition(double lat, double lon)
     updateLeftClickMode();
     statusBar()->showMessage(QStringLiteral("Дом: %1, %2")
                               .arg(lat, 0, 'f', 6).arg(lon, 0, 'f', 6));
+}
+
+void MainWindow::setHomeFromDrone(double lat, double lon)
+{
+    m_homePosition = LatLon{lat, lon};
+    m_homeSource = HomeSource::Drone;
+    m_lastDroneHome = LatLon{lat, lon};
+    m_autopilot.setHomePosition(m_homePosition);
+    m_mapWidget->backend()->setHome(lat, lon);
+    SPDLOG_INFO("[Home] Set from drone: {:.6f}, {:.6f}", lat, lon);
+}
+
+void MainWindow::onDroneHomeReceived(double lat, double lon)
+{
+    // Filter invalid coordinates (0,0 or very close)
+    if (std::abs(lat) < 0.01 && std::abs(lon) < 0.01) return;
+
+    SPDLOG_INFO("[Home] droneHomeReceived: {:.6f}, {:.6f} (armed={}, auto={})",
+                lat, lon, m_connection.telemetry()->armed(),
+                m_config.home.auto_from_drone);
+
+    // Always store the latest position from drone (for processing on arm)
+    m_pendingDroneHome = LatLon{lat, lon};
+
+    if (!m_config.home.auto_from_drone) return;
+
+    // If not armed yet, just store — will process in onArmedStateChanged
+    if (!m_connection.telemetry()->armed()) return;
+
+    processDroneHome(lat, lon);
+}
+
+void MainWindow::processDroneHome(double lat, double lon)
+{
+    // Dedup: skip if <10m from last drone home
+    if (m_lastDroneHome.lat != 0.0 || m_lastDroneHome.lon != 0.0) {
+        double d = nav::haversineDistance(lat, lon, m_lastDroneHome.lat, m_lastDroneHome.lon);
+        if (d < 10.0) return;
+    }
+
+    const auto& mode = m_config.home.overwrite_mode;
+
+    if (m_homeSource == HomeSource::NotSet) {
+        setHomeFromDrone(lat, lon);
+        if (m_config.home.notify_auto_set) {
+            m_notificationManager->pushOrReplace(Notification{
+                NotificationLevel::Info,
+                QStringLiteral("Точка дома установлена"),
+                QStringLiteral("Получена с дрона: %1, %2")
+                    .arg(lat, 0, 'f', 6).arg(lon, 0, 'f', 6),
+                -1, {}, QStringLiteral("home-point")
+            }, QStringLiteral("home-point"));
+        }
+    } else if (m_homeSource == HomeSource::Drone) {
+        setHomeFromDrone(lat, lon);
+        if (m_config.home.notify_auto_set) {
+            m_notificationManager->pushOrReplace(Notification{
+                NotificationLevel::Info,
+                QStringLiteral("Точка дома обновлена"),
+                QStringLiteral("Обновлена с дрона: %1, %2")
+                    .arg(lat, 0, 'f', 6).arg(lon, 0, 'f', 6),
+                -1, {}, QStringLiteral("home-point")
+            }, QStringLiteral("home-point"));
+        }
+    } else {
+        // HomeSource::Manual — conflict
+        if (mode == "force") {
+            setHomeFromDrone(lat, lon);
+            m_notificationManager->pushOrReplace(Notification{
+                NotificationLevel::Warning,
+                QStringLiteral("Точка дома заменена"),
+                QStringLiteral("Ручная точка заменена на дрон: %1, %2")
+                    .arg(lat, 0, 'f', 6).arg(lon, 0, 'f', 6),
+                -1, {}, QStringLiteral("home-point")
+            }, QStringLiteral("home-point"));
+        } else if (mode == "keep") {
+            m_lastDroneHome = LatLon{lat, lon};
+            SPDLOG_INFO("[Home] Drone home received ({:.6f}, {:.6f}) — keeping manual", lat, lon);
+        } else if (mode == "notify") {
+            m_lastDroneHome = LatLon{lat, lon};
+            m_notificationManager->pushOrReplace(Notification{
+                NotificationLevel::Info,
+                QStringLiteral("Дрон прислал точку дома"),
+                QStringLiteral("Дрон: %1, %2 — ручная точка сохранена")
+                    .arg(lat, 0, 'f', 6).arg(lon, 0, 'f', 6),
+                -1, {}, QStringLiteral("home-point")
+            }, QStringLiteral("home-point"));
+        } else {
+            // "ask"
+            double droneLat = lat, droneLon = lon;
+            m_notificationManager->pushOrReplace(Notification{
+                NotificationLevel::Warning,
+                QStringLiteral("Дрон прислал точку дома"),
+                QStringLiteral("Дрон: %1, %2\nЗаменить ручную точку?")
+                    .arg(lat, 0, 'f', 6).arg(lon, 0, 'f', 6),
+                -1,
+                {
+                    {QStringLiteral("Заменить"), [this, droneLat, droneLon] {
+                        setHomeFromDrone(droneLat, droneLon);
+                        SPDLOG_INFO("[Home] User chose: replace manual with drone home");
+                    }},
+                    {QStringLiteral("Оставить"), [this, droneLat, droneLon] {
+                        m_lastDroneHome = LatLon{droneLat, droneLon};
+                        SPDLOG_INFO("[Home] User chose: keep manual home");
+                    }},
+                },
+                QStringLiteral("home-point")
+            }, QStringLiteral("home-point"));
+        }
+    }
+}
+
+void MainWindow::onArmedStateChanged()
+{
+    bool armed = m_connection.telemetry()->armed();
+    SPDLOG_INFO("[Home] armedChanged: {} → {} (homeSource={}, pending={:.6f},{:.6f})",
+                m_prevArmed, armed,
+                static_cast<int>(m_homeSource),
+                m_pendingDroneHome.lat, m_pendingDroneHome.lon);
+
+    if (!m_prevArmed && armed) {
+        // false → true: arming transition
+        m_lastDroneHome = LatLon{};  // reset dedup
+
+        // Process pending drone home (may have arrived before armed flag)
+        if (m_config.home.auto_from_drone &&
+            (std::abs(m_pendingDroneHome.lat) > 0.01 || std::abs(m_pendingDroneHome.lon) > 0.01)) {
+            processDroneHome(m_pendingDroneHome.lat, m_pendingDroneHome.lon);
+        } else if (m_config.home.notify_no_home && m_homeSource == HomeSource::NotSet) {
+            m_notificationManager->pushOrReplace(Notification{
+                NotificationLevel::Warning,
+                QStringLiteral("Точка дома не установлена"),
+                QStringLiteral("Дрон заармлен, но точка дома не получена с дрона"),
+                -1, {}, QStringLiteral("home-point")
+            }, QStringLiteral("home-point"));
+        }
+    }
+
+    m_prevArmed = armed;
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -1218,7 +1362,7 @@ void MainWindow::onAutopilotDisengaged(const QString& /*prevMode*/, const QStrin
         } else if (reason.contains(QStringLiteral("пилот"), Qt::CaseInsensitive)) {
             title = QStringLiteral("Ручной режим");
         }
-        m_notificationManager->push(Notification{level, title, reason, 30, {}, {}});
+        m_notificationManager->push(Notification{level, title, reason, -1, {}, {}});
     }
 }
 
@@ -1235,7 +1379,7 @@ void MainWindow::onWaypointReached(int reachedId, int nextId)
         NotificationLevel::Info,
         QStringLiteral("Точка достигнута"),
         QStringLiteral("WP%1 пройдена, следующая WP%2").arg(reachedId).arg(nextId),
-        15, {}, {}
+        -1, {}, {}
     });
 }
 

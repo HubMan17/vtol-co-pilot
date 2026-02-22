@@ -360,6 +360,7 @@ void SettingsDialog::setupUi(Page initialPage)
     m_sidebar->addItem(QStringLiteral("Карта"));
     m_sidebar->addItem(QStringLiteral("Зоны"));
     m_sidebar->addItem(QStringLiteral("Данные"));
+    m_sidebar->addItem(QStringLiteral("Точка дома"));
 
     m_stack = new QStackedWidget;
     m_stack->setStyleSheet(QStringLiteral(
@@ -367,6 +368,7 @@ void SettingsDialog::setupUi(Page initialPage)
     m_stack->addWidget(createMapPage());
     m_stack->addWidget(createZonesPage());
     m_stack->addWidget(createDataPage());
+    m_stack->addWidget(createHomePage());
 
     connect(m_sidebar, &QListWidget::currentRowChanged,
             m_stack, &QStackedWidget::setCurrentIndex);
@@ -602,6 +604,58 @@ QWidget* SettingsDialog::createDataPage()
     return page;
 }
 
+QWidget* SettingsDialog::createHomePage()
+{
+    auto* page = new QWidget;
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(20, 20, 20, 20);
+    layout->setSpacing(12);
+
+    // ── Auto from drone ──
+    auto* autoGroup = new QGroupBox(QStringLiteral("Автоматическое получение"));
+    auto* al = new QFormLayout(autoGroup);
+    al->setSpacing(8);
+
+    m_chkAutoFromDrone = new QCheckBox(QStringLiteral("Получать точку дома с дрона"));
+    m_chkAutoFromDrone->setChecked(m_config.home.auto_from_drone);
+    al->addRow(m_chkAutoFromDrone);
+
+    m_comboOverwriteMode = new QComboBox;
+    m_comboOverwriteMode->addItem(QStringLiteral("Принудительно заменить"),     QStringLiteral("force"));
+    m_comboOverwriteMode->addItem(QStringLiteral("Ничего не делать"),           QStringLiteral("keep"));
+    m_comboOverwriteMode->addItem(QStringLiteral("Только уведомить"),           QStringLiteral("notify"));
+    m_comboOverwriteMode->addItem(QStringLiteral("Уведомить с выбором"),        QStringLiteral("ask"));
+    {
+        int idx = m_comboOverwriteMode->findData(
+            QString::fromStdString(m_config.home.overwrite_mode));
+        if (idx >= 0) m_comboOverwriteMode->setCurrentIndex(idx);
+    }
+    al->addRow(QStringLiteral("При конфликте с ручной:"), m_comboOverwriteMode);
+
+    m_comboOverwriteMode->setEnabled(m_config.home.auto_from_drone);
+    connect(m_chkAutoFromDrone, &QCheckBox::toggled,
+            m_comboOverwriteMode, &QComboBox::setEnabled);
+
+    layout->addWidget(autoGroup);
+
+    // ── Notifications ──
+    auto* notifyGroup = new QGroupBox(QStringLiteral("Уведомления"));
+    auto* nl = new QVBoxLayout(notifyGroup);
+    nl->setSpacing(8);
+
+    m_chkNotifyAutoSet = new QCheckBox(QStringLiteral("Уведомлять при получении с дрона"));
+    m_chkNotifyAutoSet->setChecked(m_config.home.notify_auto_set);
+    nl->addWidget(m_chkNotifyAutoSet);
+
+    m_chkNotifyNoHome = new QCheckBox(QStringLiteral("Уведомлять если дом не установлен при армировании"));
+    m_chkNotifyNoHome->setChecked(m_config.home.notify_no_home);
+    nl->addWidget(m_chkNotifyNoHome);
+
+    layout->addWidget(notifyGroup);
+    layout->addStretch();
+    return page;
+}
+
 void SettingsDialog::onSettlementModeChanged()
 {
     bool isAlt = m_comboSettlementMode->currentData().toString() == "below_altitude";
@@ -620,6 +674,13 @@ AppConfig SettingsDialog::getConfig() const
     cfg.zone_avoidance.nofly_mode =
         m_comboNoflyMode->currentData().toString().toStdString();
     cfg.zone_avoidance.nofly_buffer = m_spinNoflyBuffer->value();
+
+    cfg.home.auto_from_drone = m_chkAutoFromDrone->isChecked();
+    cfg.home.overwrite_mode =
+        m_comboOverwriteMode->currentData().toString().toStdString();
+    cfg.home.notify_auto_set = m_chkNotifyAutoSet->isChecked();
+    cfg.home.notify_no_home = m_chkNotifyNoHome->isChecked();
+
     return cfg;
 }
 

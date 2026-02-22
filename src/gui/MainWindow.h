@@ -30,6 +30,8 @@
 
 namespace vtol {
 
+enum class HomeSource { NotSet, Manual, Drone };
+
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
@@ -62,6 +64,10 @@ private:
     void onMapClicked(double lat, double lon);
     void setCorrectionPosition(double lat, double lon);
     void setHomePosition(double lat, double lon);
+    void onDroneHomeReceived(double lat, double lon);
+    void onArmedStateChanged();
+    void setHomeFromDrone(double lat, double lon);
+    void processDroneHome(double lat, double lon);
 
     // ── Route / Waypoints ──
     void onLoadRoute();
@@ -169,6 +175,10 @@ private:
     bool m_setHomeMode = false;
     bool m_drawingZoneMode = false;
     std::optional<LatLon> m_homePosition;
+    HomeSource m_homeSource = HomeSource::NotSet;
+    LatLon m_lastDroneHome;       // дедупликация (<10м)
+    LatLon m_pendingDroneHome;    // последняя позиция от subscribe_home (до арма)
+    bool m_prevArmed = false;
 
     // ── Performance logger ──
     PerfLogger m_perf{"updateDisplay", 50};  // log every 50 ticks (~5 sec)
