@@ -569,6 +569,9 @@ void MapLibreAdapter::connectSignals()
     // Drawing
     connect(m_backend, &MapBackend::drawingPathChanged, this, &MapLibreAdapter::updateDrawingSource);
 
+    // Waypoints direct signal — used for drag preview (dataChanged not covered by connectModel)
+    connect(m_backend, &MapBackend::waypointsChanged, this, &MapLibreAdapter::updateWaypointSources);
+
     // Zones (direct signal — bypasses model signal chain for reliability)
     connect(m_backend, &MapBackend::zonesChanged, this, &MapLibreAdapter::updateZoneSources);
 

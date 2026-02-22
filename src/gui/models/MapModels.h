@@ -33,6 +33,8 @@ public:
 
     void setWaypoints(const QVector<QVariantMap>& waypoints, int activeIdx);
     void updateActive(int activeIdx);
+    /// Update lat/lon in-place for drag preview (no full reset, preserves state/action)
+    void updateItemPosition(int index, double lat, double lon);
 
     const auto& items() const { return m_items; }
 

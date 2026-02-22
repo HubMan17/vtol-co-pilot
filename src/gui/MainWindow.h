@@ -27,6 +27,7 @@
 #include "gui/TileProxy.h"
 #include "gui/SettlementLoader.h"
 #include "gui/PerfLogger.h"
+#include "gui/RoutePlannerPanel.h"
 
 namespace vtol {
 
@@ -77,6 +78,12 @@ private:
     void onWpNext();
     void onWpSelect(int value);
     void onContextAddWaypoint(double lat, double lon);
+    void onWaypointContextMenu(int wpIndex, int sx, int sy);
+    void editWaypoint(int wpIndex);
+    void deleteWaypoint(int wpIndex);
+    void onWaypointMoved(int wpIndex, double lat, double lon);
+    void onWaypointPlacementRequested(double lat, double lon);
+    void onWaypointPlacementCancelled();
 
     // ── Map controls ──
     void onClearTrack();
@@ -140,6 +147,7 @@ private:
     MapWidget* m_mapWidget = nullptr;
     StatusPanel* m_statusPanel = nullptr;
     NotificationWidget* m_notificationWidget = nullptr;
+    RoutePlannerPanel* m_routePlannerPanel = nullptr;
     NotificationManager* m_notificationManager = nullptr;
     TileProxy m_tileProxy;
     SettlementLoader m_settlementLoader;
@@ -162,6 +170,7 @@ private:
     QPushButton* m_btnDrawZone = nullptr;
     QPushButton* m_btnSettings = nullptr;
     QPushButton* m_btnResumeRoute = nullptr;
+    QPushButton* m_btnAddWaypoint = nullptr;
     QPushButton* m_btnWpPrev = nullptr;
     QPushButton* m_btnWpNext = nullptr;
     QSpinBox* m_spinWaypoint = nullptr;

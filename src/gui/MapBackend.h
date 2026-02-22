@@ -78,6 +78,14 @@ class MapBackend : public QObject {
     Q_PROPERTY(QObject* editingMidpointModel READ editingMidpointModel CONSTANT)
     Q_PROPERTY(QObject* obstacleWarningModel READ obstacleWarningModel CONSTANT)
 
+    /// Lightweight info for hover tooltip and hit-test
+    struct WpInfo {
+        double lat = 0, lon = 0, altitude = 0;
+        QString action;
+        int orbitTurns = 1;
+        bool valid = false;
+    };
+
 public:
     explicit MapBackend(QObject* parent = nullptr);
 
@@ -123,6 +131,10 @@ public:
     QObject* editingMidpointModel() { return &m_editingMidpointModel; }
     QObject* obstacleWarningModel() { return &m_obstacleWarningModel; }
 
+    // ── Waypoint query (for hit-test and hover tooltip) ──
+    int waypointCount() const { return m_currentWaypoints.size(); }
+    WpInfo waypointAt(int index) const;
+
     // ── Python API equivalents (called by MainWindow / other C++ code) ──
     void updateAircraft(double lat, double lon, double heading);
     void setAircraftPosition(double lat, double lon);
@@ -164,6 +176,11 @@ public:
     // Operational waypoint
     void setOperationalWp(double lat, double lon, const QString& mode);
     void clearOperationalWp();
+
+    // Waypoint drag preview — updates only m_currentWaypoints GeoJSON data,
+    // does NOT change RoutePlanner. On waypointMoved signal, MainWindow calls
+    // RoutePlanner::updateWaypointPosition + refreshMapWaypoints to finalize.
+    void previewWaypointPosition(int index, double lat, double lon);
 
     // Layer visibility
     void setLayerVisibility(const QString& layerName, bool visible);
@@ -242,6 +259,12 @@ signals:
     // Map control (C++ → QML)
     void mapCenterRequested(double lat, double lon);
     void zoomRequested(int zoom);
+
+    // Waypoint context menu
+    void waypointContextMenuRequested(int wpIndex, int screenX, int screenY);
+
+    // Waypoints data changed (for adapter to rebuild GeoJSON — fired by setWaypoints and previewWaypointPosition)
+    void waypointsChanged();
 
     // Drawing/editing results
     void drawingFinished(const QString& pointsJson);

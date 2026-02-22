@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "Theme.h"
 #include "Dialogs.h"
+#include "RoutePlannerPanel.h"
 #include "navigation/Calculations.h"
 
 #include <QVBoxLayout>
@@ -123,6 +124,15 @@ void MainWindow::setupUi()
     sep2->setFixedHeight(1);
     sep2->setStyleSheet(QStringLiteral("background-color: %1;").arg(theme::BORDER));
     rightLay->addWidget(sep2);
+
+    // ── Route planner panel ──
+    m_routePlannerPanel = new RoutePlannerPanel(this);
+    rightLay->addWidget(m_routePlannerPanel);
+
+    auto* sep3 = new QFrame;
+    sep3->setFixedHeight(1);
+    sep3->setStyleSheet(QStringLiteral("background-color: %1;").arg(theme::BORDER));
+    rightLay->addWidget(sep3);
 
     // Notification widget (hidden by default)
     m_notificationWidget = new NotificationWidget(this);
@@ -272,6 +282,27 @@ QWidget* MainWindow::buildControls()
     m_btnLoadRoute->setFixedHeight(30);
     r1->addWidget(m_btnLoadRoute);
 
+    m_btnAddWaypoint = new QPushButton(QStringLiteral("+ ТЧК"));
+    m_btnAddWaypoint->setCheckable(true);
+    m_btnAddWaypoint->setFixedHeight(30);
+    m_btnAddWaypoint->setToolTip(QStringLiteral("Добавить точку маршрута (кликните на карте)"));
+    m_btnAddWaypoint->setStyleSheet(QStringLiteral(
+        "QPushButton { background-color: %1; color: %2; border: 1px solid %3; "
+        "border-radius: 6px; padding: 0 8px; font-size: 11px; font-weight: 600; }"
+        "QPushButton:hover { background-color: %4; color: %5; }"
+        "QPushButton:checked { background-color: %6; color: #fff; border-color: %6; }")
+        .arg(theme::BG_INPUT, theme::TEXT_SECONDARY, theme::BORDER,
+             theme::BG_HOVER, theme::TEXT_PRIMARY, theme::PRIMARY));
+    connect(m_btnAddWaypoint, &QPushButton::toggled, this, [this](bool checked) {
+        if (checked) {
+            m_mapWidget->startWaypointPlacement();
+            statusBar()->showMessage(QStringLiteral("Кликните на карте для добавления точки (Esc — отмена)"), 0);
+        } else {
+            m_mapWidget->cancelWaypointPlacement();
+        }
+    });
+    r1->addWidget(m_btnAddWaypoint);
+
     lay->addLayout(r1);
 
     // Row 2: Follow + RTH + Clear + Zones + Settings
@@ -418,6 +449,53 @@ void MainWindow::setupConnections()
     // Map backend signals
     connect(be, &MapBackend::mapClicked, this, &MainWindow::onMapClicked);
     connect(be, &MapBackend::contextMenuRequested, this, &MainWindow::onContextAddWaypoint);
+    connect(be, &MapBackend::waypointContextMenuRequested, this, &MainWindow::onWaypointContextMenu);
+    connect(m_mapWidget, &MapWidget::waypointMoved, this, &MainWindow::onWaypointMoved);
+    connect(m_mapWidget, &MapWidget::waypointPlacementRequested,
+            this, &MainWindow::onWaypointPlacementRequested);
+    connect(m_mapWidget, &MapWidget::waypointPlacementCancelled,
+            this, &MainWindow::onWaypointPlacementCancelled);
+
+    // Route planner panel
+    connect(m_routePlannerPanel, &RoutePlannerPanel::editWaypointRequested,
+            this, &MainWindow::editWaypoint);
+    connect(m_routePlannerPanel, &RoutePlannerPanel::deleteWaypointRequested,
+            this, &MainWindow::deleteWaypoint);
+    connect(m_routePlannerPanel, &RoutePlannerPanel::reorderWaypointRequested,
+            this, [this](int from, int to) {
+                m_routePlanner.moveWaypoint(from, to);
+                refreshMapWaypoints();
+            });
+    connect(m_routePlannerPanel, &RoutePlannerPanel::centerOnWaypointRequested,
+            this, [this](int idx) {
+                auto* route = m_routePlanner.getRoute();
+                if (!route || idx < 0 || idx >= static_cast<int>(route->waypoints.size())) return;
+                const auto& wp = route->waypoints[idx];
+                m_mapWidget->backend()->centerOn(wp.lat, wp.lon);
+            });
+    connect(m_routePlannerPanel, &RoutePlannerPanel::clearRouteRequested,
+            this, [this] {
+                m_routePlanner.clearWaypoints();
+                refreshMapWaypoints();
+                statusBar()->showMessage(QStringLiteral("Маршрут очищен"), 3000);
+            });
+    connect(m_routePlannerPanel, &RoutePlannerPanel::loadRouteRequested,
+            this, &MainWindow::onLoadRoute);
+    connect(m_routePlannerPanel, &RoutePlannerPanel::saveRouteRequested,
+            this, [this] {
+                auto* route = m_routePlanner.getRoute();
+                if (!route) return;
+                QString path = QFileDialog::getSaveFileName(this,
+                    QStringLiteral("Сохранить маршрут"), "routes/",
+                    QStringLiteral("JSON (*.json)"));
+                if (path.isEmpty()) return;
+                m_routePlanner.saveRoute(*route, path.toStdString());
+                statusBar()->showMessage(QStringLiteral("Маршрут сохранён: %1").arg(path), 4000);
+            });
+    connect(m_routePlannerPanel, &RoutePlannerPanel::addWaypointRequested,
+            this, [this] {
+                m_mapWidget->startWaypointPlacement();
+            });
     connect(be, &MapBackend::drawingFinished, this, &MainWindow::onZoneDrawingFinished);
     connect(be, &MapBackend::drawingCancelled, this, &MainWindow::onZoneDrawingCancelled);
     connect(be, &MapBackend::zoneDoubleClicked, this, &MainWindow::onZoneDoubleClicked);
@@ -925,6 +1003,9 @@ void MainWindow::refreshMapWaypoints()
         m["altitude"] = wp.altitude;
         m["action"] = QString::fromStdString(wp.action);
         m["wpIndex"] = i;
+        m["orbitTurns"] = wp.orbit_turns;
+        m["orbitRadius"] = wp.orbit_radius;
+        m["radius"] = wp.radius;
         wpList.append(m);
     }
     localPerf.end("build_list");
@@ -935,6 +1016,8 @@ void MainWindow::refreshMapWaypoints()
 
     localPerf.begin("update_controls");
     updateWaypointControls();
+    if (m_routePlannerPanel)
+        m_routePlannerPanel->refresh(wpList, activeIdx);
     localPerf.end("update_controls");
 
     localPerf.tick();
@@ -1072,6 +1155,171 @@ void MainWindow::onContextAddWaypoint(double lat, double lon)
     } else if (chosen == actDrawZone) {
         onStartZoneDrawing();
     }
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+//  Waypoint Context Menu (right-click on waypoint marker)
+// ═════════════════════════════════════════════════════════════════════════
+
+void MainWindow::onWaypointContextMenu(int wpIndex, int sx, int sy)
+{
+    SPDLOG_INFO("[MainWindow] waypointContextMenu: wpIndex={} pos=({},{})", wpIndex, sx, sy);
+
+    auto* route = m_routePlanner.getRoute();
+    if (!route || wpIndex < 0 || wpIndex >= static_cast<int>(route->waypoints.size())) return;
+
+    int total = static_cast<int>(route->waypoints.size());
+    const auto& wp = route->waypoints[wpIndex];
+
+    QMenu menu(this);
+    menu.setStyleSheet(QStringLiteral(
+        "QMenu { background: %1; color: %2; border: 1px solid %3; padding: 4px; }"
+        "QMenu::item { padding: 6px 20px; }"
+        "QMenu::item:selected { background: %4; }"
+        "QMenu::item:disabled { color: %5; }")
+        .arg(theme::BG_CARD, theme::TEXT_SECONDARY, theme::BORDER, theme::BG_HOVER, theme::BORDER_LIGHT));
+
+    QString wpLabel = QStringLiteral("Точка %1").arg(wpIndex + 1);
+    auto* titleAct = menu.addAction(wpLabel);
+    titleAct->setEnabled(false);
+    menu.addSeparator();
+
+    auto* actEdit   = menu.addAction(QStringLiteral("Редактировать параметры..."));
+    auto* actMove   = menu.addAction(QStringLiteral("Переместить на карте"));
+
+    // Reorder submenu
+    QMenu* reorderMenu = nullptr;
+    if (total > 1) {
+        reorderMenu = menu.addMenu(QStringLiteral("Поменять номер"));
+        reorderMenu->setStyleSheet(menu.styleSheet());
+        for (int i = 0; i < total; ++i) {
+            if (i == wpIndex) continue;
+            auto* act = reorderMenu->addAction(QStringLiteral("→ Точка %1").arg(i + 1));
+            act->setData(i);
+        }
+    }
+
+    menu.addSeparator();
+    auto* actUp   = menu.addAction(QStringLiteral("Переместить вверх"));
+    auto* actDown = menu.addAction(QStringLiteral("Переместить вниз"));
+    actUp->setEnabled(wpIndex > 0);
+    actDown->setEnabled(wpIndex < total - 1);
+    menu.addSeparator();
+    auto* actDelete = menu.addAction(QStringLiteral("Удалить точку"));
+
+    auto* chosen = menu.exec(QPoint(sx, sy));
+    if (!chosen) return;
+
+    if (chosen == actEdit) {
+        editWaypoint(wpIndex);
+    } else if (chosen == actMove) {
+        // Drag mode — implemented in Task 4; for now just inform
+        statusBar()->showMessage(QStringLiteral("Перетащите точку %1 в нужное место").arg(wpIndex + 1), 3000);
+        m_mapWidget->startWaypointDrag(wpIndex);
+    } else if (chosen == actUp) {
+        SPDLOG_INFO("[MainWindow] moveWaypoint up: {} → {}", wpIndex, wpIndex - 1);
+        m_routePlanner.moveWaypoint(wpIndex, wpIndex - 1);
+        refreshMapWaypoints();
+    } else if (chosen == actDown) {
+        SPDLOG_INFO("[MainWindow] moveWaypoint down: {} → {}", wpIndex, wpIndex + 1);
+        m_routePlanner.moveWaypoint(wpIndex, wpIndex + 1);
+        refreshMapWaypoints();
+    } else if (reorderMenu && chosen->parent() == reorderMenu) {
+        int toIdx = chosen->data().toInt();
+        SPDLOG_INFO("[MainWindow] moveWaypoint reorder: {} → {}", wpIndex, toIdx);
+        m_routePlanner.moveWaypoint(wpIndex, toIdx);
+        refreshMapWaypoints();
+    } else if (chosen == actDelete) {
+        deleteWaypoint(wpIndex);
+    }
+    Q_UNUSED(wp);
+}
+
+void MainWindow::editWaypoint(int wpIndex)
+{
+    auto* route = m_routePlanner.getRoute();
+    if (!route || wpIndex < 0 || wpIndex >= static_cast<int>(route->waypoints.size())) return;
+
+    const auto& existing = route->waypoints[wpIndex];
+    SPDLOG_INFO("[MainWindow] editWaypoint: index={} pos=({:.5f},{:.5f}) action={}",
+                wpIndex, existing.lat, existing.lon, existing.action);
+
+    WaypointDialog dialog(existing.lat, existing.lon, &m_zoneChecker, false, false, this);
+    if (dialog.exec() != QDialog::Accepted) return;
+
+    auto r = dialog.result();
+    Waypoint updated;
+    updated.lat          = r.lat;
+    updated.lon          = r.lon;
+    updated.altitude     = r.altitude;
+    updated.radius       = r.radius;
+    updated.action       = r.action.toStdString();
+    updated.orbit_radius = r.orbitRadius;
+    updated.orbit_turns  = r.orbitTurns;
+    updated.climb_enroute = r.climbEnroute;
+
+    m_routePlanner.updateWaypoint(wpIndex, updated);
+    SPDLOG_INFO("[MainWindow] editWaypoint done: index={} newPos=({:.5f},{:.5f}) action={}",
+                wpIndex, r.lat, r.lon, r.action.toStdString());
+    refreshMapWaypoints();
+}
+
+void MainWindow::deleteWaypoint(int wpIndex)
+{
+    auto* route = m_routePlanner.getRoute();
+    if (!route || wpIndex < 0 || wpIndex >= static_cast<int>(route->waypoints.size())) return;
+
+    int wpId = route->waypoints[wpIndex].id;
+    SPDLOG_INFO("[MainWindow] deleteWaypoint: index={} id={}", wpIndex, wpId);
+
+    m_routePlanner.removeWaypoint(wpIndex);
+    refreshMapWaypoints();
+    statusBar()->showMessage(QStringLiteral("Точка %1 удалена").arg(wpId), 3000);
+}
+
+void MainWindow::onWaypointPlacementRequested(double lat, double lon)
+{
+    SPDLOG_INFO("[MainWindow] placementRequested: ({:.5f},{:.5f})", lat, lon);
+
+    // Uncheck the add button
+    if (m_btnAddWaypoint) m_btnAddWaypoint->setChecked(false);
+    if (m_routePlannerPanel) m_routePlannerPanel->findChild<QPushButton*>("btnAdd");
+    // (RoutePlannerPanel resets its own button via addWaypointRequested signal flow)
+
+    WaypointDialog dialog(lat, lon, &m_zoneChecker, false, false, this);
+    if (dialog.exec() != QDialog::Accepted) return;
+
+    auto r = dialog.result();
+    if (!m_routePlanner.getRoute())
+        m_routePlanner.createRoute("Новый маршрут");
+
+    m_routePlanner.addWaypoint(r.lat, r.lon, r.altitude, r.radius,
+                                r.action.toStdString(), r.orbitRadius, r.orbitTurns,
+                                r.climbEnroute);
+    SPDLOG_INFO("[MainWindow] addWaypoint from placement: lat={:.5f} lon={:.5f} action={}",
+                r.lat, r.lon, r.action.toStdString());
+    refreshMapWaypoints();
+    statusBar()->showMessage(QStringLiteral("Добавлена точка: %1, %2")
+                              .arg(lat, 0, 'f', 5).arg(lon, 0, 'f', 5));
+}
+
+void MainWindow::onWaypointPlacementCancelled()
+{
+    if (m_btnAddWaypoint) m_btnAddWaypoint->setChecked(false);
+    statusBar()->showMessage(QStringLiteral("Добавление точки отменено"), 2000);
+}
+
+void MainWindow::onWaypointMoved(int wpIndex, double lat, double lon)
+{
+    auto* route = m_routePlanner.getRoute();
+    if (!route || wpIndex < 0 || wpIndex >= static_cast<int>(route->waypoints.size())) return;
+
+    route->waypoints[wpIndex].lat = lat;
+    route->waypoints[wpIndex].lon = lon;
+    SPDLOG_INFO("[MainWindow] waypointMoved finalized: idx={} newPos=({:.5f},{:.5f})", wpIndex, lat, lon);
+    refreshMapWaypoints();
+    checkRouteConflicts();
+    statusBar()->showMessage(QStringLiteral("Точка %1 перемещена").arg(wpIndex + 1), 3000);
 }
 
 // ═════════════════════════════════════════════════════════════════════════

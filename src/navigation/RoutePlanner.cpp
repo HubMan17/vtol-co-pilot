@@ -131,6 +131,42 @@ bool RoutePlanner::removeWaypoint(int index)
     return true;
 }
 
+bool RoutePlanner::updateWaypoint(int index, const Waypoint& newData)
+{
+    if (!m_route || index < 0 || index >= static_cast<int>(m_route->waypoints.size()))
+        return false;
+    int savedId = m_route->waypoints[index].id;
+    m_route->waypoints[index] = newData;
+    m_route->waypoints[index].id = savedId;  // keep sequential id
+    return true;
+}
+
+bool RoutePlanner::moveWaypoint(int fromIndex, int toIndex)
+{
+    if (!m_route) return false;
+    int n = static_cast<int>(m_route->waypoints.size());
+    if (fromIndex < 0 || fromIndex >= n || toIndex < 0 || toIndex >= n) return false;
+    if (fromIndex == toIndex) return true;
+
+    Waypoint wp = m_route->waypoints[fromIndex];
+    m_route->waypoints.erase(m_route->waypoints.begin() + fromIndex);
+    m_route->waypoints.insert(m_route->waypoints.begin() + toIndex, wp);
+
+    // Reindex ids
+    for (int i = 0; i < static_cast<int>(m_route->waypoints.size()); ++i)
+        m_route->waypoints[i].id = i + 1;
+
+    // Adjust active index to follow the moved waypoint if it was active
+    if (m_activeIdx == fromIndex)
+        m_activeIdx = toIndex;
+    else if (fromIndex < toIndex && m_activeIdx > fromIndex && m_activeIdx <= toIndex)
+        --m_activeIdx;
+    else if (fromIndex > toIndex && m_activeIdx >= toIndex && m_activeIdx < fromIndex)
+        ++m_activeIdx;
+
+    return true;
+}
+
 Waypoint* RoutePlanner::activeWaypoint()
 {
     if (!m_route || m_route->waypoints.empty()) return nullptr;

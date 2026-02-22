@@ -27,6 +27,23 @@ public:
     /// Initialize MapLibre GLWidget. Call after setTileServerUrl().
     void loadMap();
 
+    /// Start drag-to-move mode for the given waypoint index (0-based).
+    /// Called from MainWindow after context menu "Переместить".
+    void startWaypointDrag(int wpIndex);
+
+    /// Activate waypoint placement mode: next left-click on the map places a new waypoint.
+    /// Emits waypointPlacementRequested(lat, lon) when user clicks.
+    /// Pressing Escape cancels.
+    void startWaypointPlacement();
+
+    /// Cancel placement mode without placing.
+    void cancelWaypointPlacement();
+
+signals:
+    void waypointMoved(int wpIndex, double lat, double lon);
+    void waypointPlacementRequested(double lat, double lon);
+    void waypointPlacementCancelled();
+
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
     void showEvent(QShowEvent* event) override;
@@ -68,6 +85,21 @@ private:
     static constexpr double VERTEX_HIT_THRESHOLD = 15.0;  // pixels
     int hitTestEditVertex(const QPointF& screenPos);
     int hitTestEditMidpoint(const QPointF& screenPos);
+
+    // Waypoint hit-test (pixel-based, uses pixelForCoordinate)
+    int hitTestWaypoint(const QPointF& screenPos, double thresholdPx = 18.0) const;
+
+    // Hover tooltip state
+    QTimer* m_hoverTimer = nullptr;
+    int m_hoveredWpIndex = -1;
+    QPointF m_lastMouseScreenPos;
+
+    // Waypoint drag-to-move state
+    int m_draggingWpIndex = -1;
+    QGeoCoordinate m_dragOriginalPos;  // for Escape cancellation
+
+    // Waypoint placement mode state
+    bool m_placementMode = false;
 };
 
 } // namespace vtol

@@ -81,6 +81,15 @@ void WaypointListModel::updateActive(int activeIdx) {
     }
 }
 
+void WaypointListModel::updateItemPosition(int idx, double lat, double lon)
+{
+    if (idx < 0 || idx >= m_items.size()) return;
+    m_items[idx].lat = lat;
+    m_items[idx].lon = lon;
+    auto modelIdx = index(idx);
+    emit dataChanged(modelIdx, modelIdx, {LatRole, LonRole});
+}
+
 // ═══════════════════════════════════════════════════════════
 //  RouteSegmentModel
 // ═══════════════════════════════════════════════════════════

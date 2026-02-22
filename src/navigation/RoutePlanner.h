@@ -71,6 +71,8 @@ public:
                            double orbitRadius = 100.0, int orbitTurns = 1,
                            bool climbEnroute = false);
     bool removeWaypoint(int index);
+    bool updateWaypoint(int index, const Waypoint& newData);
+    bool moveWaypoint(int fromIndex, int toIndex);  // reorder (moves element, keeps ids sequential)
 
     Waypoint* activeWaypoint();
     const Waypoint* activeWaypoint() const;

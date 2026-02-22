@@ -123,6 +123,20 @@ void MapBackend::clearOperationalWp()
 
 // ═══════════════════════ Waypoints ═══════════════════════
 
+MapBackend::WpInfo MapBackend::waypointAt(int index) const
+{
+    if (index < 0 || index >= m_currentWaypoints.size()) return {};
+    const auto& m = m_currentWaypoints[index];
+    WpInfo info;
+    info.lat        = m.value("lat").toDouble();
+    info.lon        = m.value("lon").toDouble();
+    info.altitude   = m.value("altitude").toDouble();
+    info.action     = m.value("action").toString();
+    info.orbitTurns = m.value("orbitTurns", 1).toInt();
+    info.valid      = true;
+    return info;
+}
+
 void MapBackend::setWaypoints(const QVector<QVariantMap>& waypoints, int activeIdx)
 {
     m_currentWaypoints = waypoints;
@@ -135,6 +149,17 @@ void MapBackend::setWaypoints(const QVector<QVariantMap>& waypoints, int activeI
         m_activeWpPos = QGeoCoordinate();
     }
     emit activeWpPositionChanged();
+    emit waypointsChanged();
+}
+
+void MapBackend::previewWaypointPosition(int index, double lat, double lon)
+{
+    if (index < 0 || index >= m_currentWaypoints.size()) return;
+    m_currentWaypoints[index]["lat"] = lat;
+    m_currentWaypoints[index]["lon"] = lon;
+    // Update model in-place so MapLibreAdapter rebuilds GeoJSON correctly
+    m_waypointModel.updateItemPosition(index, lat, lon);
+    emit waypointsChanged();
 }
 
 void MapBackend::updateActiveWaypoint(int index)
