@@ -43,6 +43,10 @@ public:
     void dismiss();
     bool isShowing() const { return m_current.has_value(); }
 
+    std::optional<NotificationLevel> currentLevel() const;
+    bool currentHasActions() const;
+    void curtailToPercent(int pct);   // урезать остаток до pct% от оставшегося
+
 signals:
     void notificationClosed();
 
@@ -78,13 +82,22 @@ public:
     void pushOrReplace(Notification n, const QString& tag);
     void clear();
 
+    void setDefaultDurations(int infoSec, int warningSec, int criticalSec);
+    void setCurtailPercent(int pct);
+
 private:
     void insertByPriority(const Notification& n);
     void showNext();
 
+    int resolveDuration(const Notification& n) const;
+
     NotificationWidget*                 m_widget;
     std::deque<Notification>            m_queue;
     std::unordered_map<std::string, int> m_tags; // tag → index hint (approx)
+    int m_infoDurSec     = 5;
+    int m_warningDurSec  = 7;
+    int m_criticalDurSec = 10;
+    int m_curtailPct     = 50;
 };
 
 } // namespace vtol

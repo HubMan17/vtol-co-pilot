@@ -127,6 +127,11 @@ void MainWindow::setupUi()
     // Notification widget (hidden by default)
     m_notificationWidget = new NotificationWidget(this);
     m_notificationManager = new NotificationManager(m_notificationWidget, this);
+    m_notificationManager->setDefaultDurations(
+        m_config.notifications.info_duration_sec,
+        m_config.notifications.warning_duration_sec,
+        m_config.notifications.critical_duration_sec);
+    m_notificationManager->setCurtailPercent(m_config.notifications.interrupt_curtail_pct);
     rightLay->addWidget(m_notificationWidget);
 
     rightLay->addWidget(buildControls());
@@ -1291,6 +1296,13 @@ void MainWindow::onSettings()
     m_zoneChecker.updateConfig(m_config.zone_avoidance);
     m_autopilot.resetZoneAvoidance();
     checkRouteConflicts();
+
+    // Apply notification timings
+    m_notificationManager->setDefaultDurations(
+        m_config.notifications.info_duration_sec,
+        m_config.notifications.warning_duration_sec,
+        m_config.notifications.critical_duration_sec);
+    m_notificationManager->setCurtailPercent(m_config.notifications.interrupt_curtail_pct);
 
     statusBar()->showMessage(QStringLiteral("Настройки сохранены"));
 }

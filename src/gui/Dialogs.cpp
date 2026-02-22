@@ -361,6 +361,7 @@ void SettingsDialog::setupUi(Page initialPage)
     m_sidebar->addItem(QStringLiteral("Зоны"));
     m_sidebar->addItem(QStringLiteral("Данные"));
     m_sidebar->addItem(QStringLiteral("Точка дома"));
+    m_sidebar->addItem(QStringLiteral("Уведомления"));
 
     m_stack = new QStackedWidget;
     m_stack->setStyleSheet(QStringLiteral(
@@ -369,6 +370,7 @@ void SettingsDialog::setupUi(Page initialPage)
     m_stack->addWidget(createZonesPage());
     m_stack->addWidget(createDataPage());
     m_stack->addWidget(createHomePage());
+    m_stack->addWidget(createNotificationsPage());
 
     connect(m_sidebar, &QListWidget::currentRowChanged,
             m_stack, &QStackedWidget::setCurrentIndex);
@@ -656,6 +658,67 @@ QWidget* SettingsDialog::createHomePage()
     return page;
 }
 
+QWidget* SettingsDialog::createNotificationsPage()
+{
+    auto* page = new QWidget;
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(20, 20, 20, 20);
+    layout->setSpacing(12);
+
+    // ── Default durations ──
+    auto* durGroup = new QGroupBox(QStringLiteral("Тайминги по умолчанию"));
+    auto* fl = new QFormLayout(durGroup);
+    fl->setSpacing(8);
+
+    m_spinInfoDuration = new QSpinBox;
+    m_spinInfoDuration->setRange(1, 60);
+    m_spinInfoDuration->setValue(m_config.notifications.info_duration_sec);
+    m_spinInfoDuration->setSuffix(QStringLiteral(" сек"));
+    fl->addRow(QStringLiteral("Информация:"), m_spinInfoDuration);
+
+    m_spinWarningDuration = new QSpinBox;
+    m_spinWarningDuration->setRange(1, 60);
+    m_spinWarningDuration->setValue(m_config.notifications.warning_duration_sec);
+    m_spinWarningDuration->setSuffix(QStringLiteral(" сек"));
+    fl->addRow(QStringLiteral("Предупреждение:"), m_spinWarningDuration);
+
+    m_spinCriticalDuration = new QSpinBox;
+    m_spinCriticalDuration->setRange(1, 120);
+    m_spinCriticalDuration->setValue(m_config.notifications.critical_duration_sec);
+    m_spinCriticalDuration->setSuffix(QStringLiteral(" сек"));
+    fl->addRow(QStringLiteral("Критическое:"), m_spinCriticalDuration);
+
+    layout->addWidget(durGroup);
+
+    // ── Interrupt behaviour ──
+    auto* intGroup = new QGroupBox(QStringLiteral("Прерывание низкоприоритетных"));
+    auto* fl2 = new QFormLayout(intGroup);
+    fl2->setSpacing(8);
+
+    m_spinCurtailPct = new QSpinBox;
+    m_spinCurtailPct->setRange(10, 90);
+    m_spinCurtailPct->setValue(m_config.notifications.interrupt_curtail_pct);
+    m_spinCurtailPct->setSuffix(QStringLiteral(" %"));
+    fl2->addRow(QStringLiteral("Остаток при прерывании:"), m_spinCurtailPct);
+
+    auto* lblCurtail = new QLabel(QStringLiteral(
+        "Когда прилетает более важное уведомление, текущее (без кнопок) срезается до N% своего оставшегося времени."));
+    lblCurtail->setWordWrap(true);
+    lblCurtail->setStyleSheet(QStringLiteral("color: %1; font-size: 11px;").arg(theme::TEXT_SECONDARY));
+    fl2->addRow(lblCurtail);
+
+    layout->addWidget(intGroup);
+
+    auto* lblHint = new QLabel(QStringLiteral(
+        "Бесконечные уведомления (с кнопками действий) не подчиняются этим таймингам."));
+    lblHint->setWordWrap(true);
+    lblHint->setStyleSheet(QStringLiteral("color: %1; font-size: 11px;").arg(theme::TEXT_SECONDARY));
+    layout->addWidget(lblHint);
+
+    layout->addStretch();
+    return page;
+}
+
 void SettingsDialog::onSettlementModeChanged()
 {
     bool isAlt = m_comboSettlementMode->currentData().toString() == "below_altitude";
@@ -680,6 +743,11 @@ AppConfig SettingsDialog::getConfig() const
         m_comboOverwriteMode->currentData().toString().toStdString();
     cfg.home.notify_auto_set = m_chkNotifyAutoSet->isChecked();
     cfg.home.notify_no_home = m_chkNotifyNoHome->isChecked();
+
+    cfg.notifications.info_duration_sec     = m_spinInfoDuration->value();
+    cfg.notifications.warning_duration_sec  = m_spinWarningDuration->value();
+    cfg.notifications.critical_duration_sec = m_spinCriticalDuration->value();
+    cfg.notifications.interrupt_curtail_pct = m_spinCurtailPct->value();
 
     return cfg;
 }

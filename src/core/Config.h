@@ -46,6 +46,13 @@ struct HomeConfig {
     bool notify_no_home = true;            // Уведомлять если дом не задан при арме
 };
 
+struct NotificationConfig {
+    int info_duration_sec     = 5;
+    int warning_duration_sec  = 7;
+    int critical_duration_sec = 10;
+    int interrupt_curtail_pct = 50;  // % оставшегося времени при прерывании низкоприоритетного
+};
+
 struct NavigationConfig {
     double waypoint_radius = 150.0;
 };
@@ -67,6 +74,7 @@ struct AppConfig {
     GuiConfig gui;
     ZoneAvoidanceConfig zone_avoidance;
     HomeConfig home;
+    NotificationConfig notifications;
 };
 
 // Load config from JSON file. Returns default config if file doesn't exist.

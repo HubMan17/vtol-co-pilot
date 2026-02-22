@@ -122,6 +122,18 @@ AppConfig loadConfig(const std::string& path)
         if (h.contains("notify_no_home"))   h["notify_no_home"].get_to(cfg.home.notify_no_home);
     }
 
+    // --- notifications ---
+    if (data.contains("notifications")) {
+        auto& n = data["notifications"];
+        if (n.contains("info_duration_sec"))     n["info_duration_sec"].get_to(cfg.notifications.info_duration_sec);
+        if (n.contains("warning_duration_sec"))  n["warning_duration_sec"].get_to(cfg.notifications.warning_duration_sec);
+        if (n.contains("critical_duration_sec")) n["critical_duration_sec"].get_to(cfg.notifications.critical_duration_sec);
+        if (n.contains("interrupt_curtail_pct")) n["interrupt_curtail_pct"].get_to(cfg.notifications.interrupt_curtail_pct);
+        SPDLOG_DEBUG("Notification timings: info={}s, warning={}s, critical={}s, curtail={}%",
+            cfg.notifications.info_duration_sec, cfg.notifications.warning_duration_sec,
+            cfg.notifications.critical_duration_sec, cfg.notifications.interrupt_curtail_pct);
+    }
+
     SPDLOG_DEBUG("Config loaded: SITL={}:{}, proxy_port={}, track_length={}",
         cfg.mavlink.sitl_host, cfg.mavlink.sitl_port, cfg.mavlink.proxy_port, cfg.gui.track_length);
 
@@ -188,6 +200,13 @@ void saveConfig(const AppConfig& cfg, const std::string& path)
         {"overwrite_mode",   cfg.home.overwrite_mode},
         {"notify_auto_set",  cfg.home.notify_auto_set},
         {"notify_no_home",   cfg.home.notify_no_home}
+    };
+
+    data["notifications"] = {
+        {"info_duration_sec",     cfg.notifications.info_duration_sec},
+        {"warning_duration_sec",  cfg.notifications.warning_duration_sec},
+        {"critical_duration_sec", cfg.notifications.critical_duration_sec},
+        {"interrupt_curtail_pct", cfg.notifications.interrupt_curtail_pct}
     };
 
     std::ofstream file(path);

@@ -256,6 +256,29 @@ void NotificationWidget::clearButtons()
     m_actionButtons.clear();
 }
 
+std::optional<NotificationLevel> NotificationWidget::currentLevel() const
+{
+    if (!m_current) return std::nullopt;
+    return m_current->level;
+}
+
+bool NotificationWidget::currentHasActions() const
+{
+    return m_current.has_value() && !m_current->actions.empty();
+}
+
+void NotificationWidget::curtailToPercent(int pct)
+{
+    if (!m_current || m_durationMs == 0) return;  // infinite — не трогать
+    int remaining = m_durationMs - m_elapsedMs;
+    int cap = m_elapsedMs + remaining * pct / 100;
+    if (cap < m_durationMs) {
+        m_durationMs = cap;
+        SPDLOG_DEBUG("[Notification] curtailed to {}% of remaining (~{}ms left)",
+                     pct, m_durationMs - m_elapsedMs);
+    }
+}
+
 // ═════════════════════════════════════════════════════════════
 //  NotificationManager
 // ═════════════════════════════════════════════════════════════
@@ -267,15 +290,57 @@ NotificationManager::NotificationManager(NotificationWidget* widget, QObject* pa
             this, &NotificationManager::showNext);
 }
 
+void NotificationManager::setDefaultDurations(int infoSec, int warningSec, int criticalSec)
+{
+    m_infoDurSec     = infoSec;
+    m_warningDurSec  = warningSec;
+    m_criticalDurSec = criticalSec;
+    SPDLOG_DEBUG("[NotificationManager] default durations: info={}s, warning={}s, critical={}s",
+                 infoSec, warningSec, criticalSec);
+}
+
+void NotificationManager::setCurtailPercent(int pct)
+{
+    m_curtailPct = pct;
+    SPDLOG_DEBUG("[NotificationManager] curtail percent: {}%", pct);
+}
+
+int NotificationManager::resolveDuration(const Notification& n) const
+{
+    if (n.durationSec >= 0) return n.durationSec;
+    switch (n.level) {
+    case NotificationLevel::Info:     return m_infoDurSec;
+    case NotificationLevel::Warning:  return m_warningDurSec;
+    case NotificationLevel::Critical: return m_criticalDurSec;
+    }
+    return m_infoDurSec;
+}
+
 void NotificationManager::push(const Notification& n)
 {
-    insertByPriority(n);
-    if (!n.tag.isEmpty())
-        m_tags[n.tag.toStdString()] = 1;
+    Notification resolved = n;
+    resolved.durationSec = resolveDuration(n);
 
-    SPDLOG_DEBUG("[NotificationQueue] push '{}' [{}], queue_size={}",
-                 n.title.toStdString(), levelName(n.level),
-                 m_queue.size());
+    insertByPriority(resolved);
+    if (!resolved.tag.isEmpty())
+        m_tags[resolved.tag.toStdString()] = 1;
+
+    // --- interrupt check ---
+    if (m_widget->isShowing() && !m_widget->currentHasActions()) {
+        auto curLvl = m_widget->currentLevel();
+        bool incomingHigher   = curLvl && levelPriority(resolved.level) < levelPriority(*curLvl);
+        bool incomingDecision = !resolved.actions.empty();
+        if (incomingHigher || incomingDecision) {
+            SPDLOG_INFO("[NotificationQueue] interrupting current (curtail to {}% of remaining), incoming '{}' [{}]",
+                        m_curtailPct, resolved.title.toStdString(), levelName(resolved.level));
+            m_widget->curtailToPercent(m_curtailPct);
+        }
+    }
+    // --- end interrupt check ---
+
+    SPDLOG_DEBUG("[NotificationQueue] push '{}' [{}], duration={}s, queue_size={}",
+                 resolved.title.toStdString(), levelName(resolved.level),
+                 resolved.durationSec, m_queue.size());
 
     if (!m_widget->isShowing())
         showNext();
