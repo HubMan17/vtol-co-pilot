@@ -141,6 +141,7 @@ private:
 
     // Route tab helpers
     void rebuildWpList();
+    void selectWpItem(int idx);
     QString wpActionLabel(const QString& action, int turns) const;
 
     // ── Header widgets ────────────────────────────────────────────────────
@@ -160,7 +161,7 @@ private:
     PanelCell* m_airspeed    = nullptr;
     PanelCell* m_groundspeed = nullptr;
     PanelCell* m_altAgl      = nullptr;
-    PanelCell* m_wind        = nullptr;
+    QLabel*    m_wind        = nullptr;   // direct label (no PanelCell wrapper)
     PanelCell* m_battery     = nullptr;
     PanelCell* m_gps         = nullptr;
 

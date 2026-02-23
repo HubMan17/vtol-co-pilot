@@ -6,8 +6,10 @@
 #include <QGridLayout>
 #include <QScrollArea>
 #include <QAbstractSpinBox>
+#include <QEvent>
 #include <QPainter>
 #include <QPen>
+#include <functional>
 #include <cmath>
 #include <spdlog/spdlog.h>
 
@@ -98,6 +100,46 @@ static QIcon makeGearIcon(int sz, const QColor& col)
     }
     return QIcon(pm);
 }
+
+static QIcon makeEditIcon(int sz, const QColor& col)
+{
+    QPixmap pm(sz, sz);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setPen(QPen(col, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    // pencil body (diagonal line)
+    p.drawLine(QPointF(sz*0.25, sz*0.75), QPointF(sz*0.70, sz*0.25));
+    // pencil tip
+    p.drawLine(QPointF(sz*0.25, sz*0.75), QPointF(sz*0.18, sz*0.82));
+    // top cap
+    p.drawLine(QPointF(sz*0.70, sz*0.25), QPointF(sz*0.78, sz*0.18));
+    return QIcon(pm);
+}
+
+static QIcon makeCrossIcon(int sz, const QColor& col)
+{
+    QPixmap pm(sz, sz);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setPen(QPen(col, 1.8, Qt::SolidLine, Qt::RoundCap));
+    p.drawLine(QPointF(sz*0.25, sz*0.25), QPointF(sz*0.75, sz*0.75));
+    p.drawLine(QPointF(sz*0.75, sz*0.25), QPointF(sz*0.25, sz*0.75));
+    return QIcon(pm);
+}
+
+// ── Simple event filter for clickable frames ──────────────────────────────────
+class WpItemFilter : public QObject {
+public:
+    std::function<void()> onPress;
+    WpItemFilter(QObject* parent, std::function<void()> cb)
+        : QObject(parent), onPress(std::move(cb)) {}
+    bool eventFilter(QObject*, QEvent* e) override {
+        if (e->type() == QEvent::MouseButtonPress) { onPress(); return false; }
+        return false;
+    }
+};
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  PanelCell
@@ -288,6 +330,7 @@ QWidget* RightPanel::buildHeader()
 
     m_btnConnect = new QPushButton(QStringLiteral("Подключить"));
     m_btnConnect->setFixedHeight(30);
+    m_btnConnect->setFocusPolicy(Qt::NoFocus);
     m_btnConnect->setStyleSheet(QString(
         "QPushButton { background-color: %1; color: #000; border: none; "
         "border-radius: 6px; padding: 0 14px; font-family: \"%3\"; "
@@ -299,6 +342,7 @@ QWidget* RightPanel::buildHeader()
     m_btnDisconnect = new QPushButton(QStringLiteral("Откл."));
     m_btnDisconnect->setFixedHeight(30);
     m_btnDisconnect->setEnabled(false);
+    m_btnDisconnect->setFocusPolicy(Qt::NoFocus);
     m_btnDisconnect->setStyleSheet(QString(
         "QPushButton { background: transparent; color: %1; "
         "border: 1px solid %2; border-radius: 6px; "
@@ -363,10 +407,13 @@ QWidget* RightPanel::buildTabBar()
         m_tabBtns[i] = new QPushButton(labels[i]);
         m_tabBtns[i]->setStyleSheet(QString(
             "QPushButton { background: transparent; color: %1; font-family: \"%2\"; "
-            "font-size: 12px; font-weight: 500; padding: 8px 6px 6px 6px; border: none; }"
-            "QPushButton:hover { color: %3; }")
+            "font-size: 12px; font-weight: 500; padding: 8px 6px 6px 6px; border: none; "
+            "outline: none; }"
+            "QPushButton:hover { color: %3; }"
+            "QPushButton:focus { border: none; outline: none; }")
             .arg(C::TXT_S, C::SANS, C::TXT));
         m_tabBtns[i]->setCursor(Qt::PointingHandCursor);
+        m_tabBtns[i]->setFocusPolicy(Qt::NoFocus);
         btnRow->addWidget(m_tabBtns[i]);
 
         if (i == 1) {
@@ -397,8 +444,10 @@ QWidget* RightPanel::buildTabBar()
     // Active tab initial style
     m_tabBtns[0]->setStyleSheet(QString(
         "QPushButton { background: transparent; color: %1; font-family: \"%2\"; "
-        "font-size: 12px; font-weight: 600; padding: 8px 6px 6px 6px; border: none; }"
-        "QPushButton:hover { color: %1; }")
+        "font-size: 12px; font-weight: 600; padding: 8px 6px 6px 6px; "
+        "border: none; outline: none; }"
+        "QPushButton:hover { color: %1; }"
+        "QPushButton:focus { border: none; outline: none; }")
         .arg(C::TXT, C::SANS));
 
     return bar;
@@ -411,8 +460,10 @@ void RightPanel::switchTab(int index)
         bool active = (i == index);
         m_tabBtns[i]->setStyleSheet(QString(
             "QPushButton { background: transparent; color: %1; font-family: \"%2\"; "
-            "font-size: 12px; font-weight: %3; padding: 8px 6px 6px 6px; border: none; }"
-            "QPushButton:hover { color: %4; }")
+            "font-size: 12px; font-weight: %3; padding: 8px 6px 6px 6px; "
+            "border: none; outline: none; }"
+            "QPushButton:hover { color: %4; }"
+            "QPushButton:focus { border: none; outline: none; }")
             .arg(active ? C::TXT : C::TXT_S, C::SANS,
                  active ? "600" : "500",
                  active ? C::TXT : C::TXT));
@@ -467,10 +518,11 @@ QWidget* RightPanel::buildMainTab()
         wHdr->addWidget(m_btnWindDrop);
         wcLay->addLayout(wHdr);
 
-        m_wind = new PanelCell("", "", C::CYAN);
-        // Remove the inner label of m_wind — it's already represented by wLbl
-        // We just use setValue/setText on the value label
-        m_wind->setFixedHeight(30);
+        m_wind = new QLabel("---");
+        m_wind->setStyleSheet(QString(
+            "color: %1; font-family: \"%2\"; font-size: 14px; "
+            "font-weight: 700; border: none;")
+            .arg(C::CYAN, C::MONO));
         wcLay->addWidget(m_wind);
 
         m_battery = new PanelCell("Батарея",   "В", C::ORANGE);
@@ -933,6 +985,31 @@ QWidget* RightPanel::buildRouteTab()
     return page;
 }
 
+void RightPanel::selectWpItem(int idx)
+{
+    if (m_selWpIdx == idx) return;
+    int prevSel = m_selWpIdx;
+    m_selWpIdx = idx;
+    m_btnRpEdit->setEnabled(idx >= 0);
+    m_btnRpDelete->setEnabled(idx >= 0);
+
+    // Update stylesheet of previously selected and newly selected items in-place
+    auto updateItem = [&](int j) {
+        if (j < 0 || j >= m_wpItems.size()) return;
+        bool active   = (j == m_activeWpIdx);
+        bool selected = (j == m_selWpIdx);
+        QString bg   = active   ? "rgba(0,230,160,70)" : C::CARD;
+        int    bw    = selected ? 2 : 1;
+        QString bc   = selected ? C::BLUE : (active ? C::GREEN : C::BD);
+        m_wpItems[j]->setStyleSheet(
+            QString("QFrame#wpItem { background-color: %1; "
+                    "border: %2px solid %3; border-radius: 6px; }")
+            .arg(bg).arg(bw).arg(bc));
+    };
+    updateItem(prevSel);
+    updateItem(idx);
+}
+
 QString RightPanel::wpActionLabel(const QString& action, int turns) const
 {
     if (action == "FLYTHROUGH")     return QStringLiteral("Пролёт");
@@ -950,29 +1027,38 @@ void RightPanel::rebuildWpList()
 
     const bool empty = m_waypoints.isEmpty();
     m_wpEmptyLabel->setVisible(empty);
-    m_btnRpEdit->setEnabled(false);
-    m_btnRpDelete->setEnabled(false);
-    m_selWpIdx = -1;
+    if (empty) {
+        m_btnRpEdit->setEnabled(false);
+        m_btnRpDelete->setEnabled(false);
+        m_selWpIdx = -1;
+    }
+
+    // Helper to build the stylesheet for an item
+    auto itemSS = [&](bool active, bool selected) -> QString {
+        QString bg   = active   ? "rgba(0,230,160,70)" : C::CARD;
+        int    bw    = selected ? 2 : 1;
+        QString bc   = selected ? C::BLUE : (active ? C::GREEN : C::BD);
+        return QString("QFrame#wpItem { background-color: %1; "
+                       "border: %2px solid %3; border-radius: 6px; }")
+               .arg(bg).arg(bw).arg(bc);
+    };
 
     for (int i = 0; i < m_waypoints.size(); ++i) {
         const auto& wp = m_waypoints[i];
-        bool isActive = (i == m_activeWpIdx);
+        bool isActive   = (i == m_activeWpIdx);
+        bool isSelected = (i == m_selWpIdx);
 
-        QString action    = wp.value("action").toString();
-        int orbitTurns    = wp.value("orbitTurns", 1).toInt();
-        int alt           = static_cast<int>(wp.value("altitude").toDouble());
-        int radius        = wp.value("radius", 150).toInt();
-        int speed         = wp.value("speed", 20).toInt();
-        QString typeStr   = wpActionLabel(action, orbitTurns);
+        QString action  = wp.value("action").toString();
+        int orbitTurns  = wp.value("orbitTurns", 1).toInt();
+        int alt         = static_cast<int>(wp.value("altitude").toDouble());
+        int radius      = wp.value("radius", 150).toInt();
+        int speed       = wp.value("speed", 20).toInt();
+        QString typeStr = wpActionLabel(action, orbitTurns);
 
         auto* item = new QFrame;
         item->setProperty("wpIdx", i);
         item->setObjectName("wpItem");
-        item->setStyleSheet(QString(
-            "QFrame#wpItem { background-color: %1; border: 1px solid %2; "
-            "border-radius: 6px; }")
-            .arg(isActive ? "rgba(0,230,160,70)" : C::CARD,
-                 isActive ? C::GREEN             : C::BD));
+        item->setStyleSheet(itemSS(isActive, isSelected));
         item->setCursor(Qt::PointingHandCursor);
         item->setFixedHeight(38);
 
@@ -1013,58 +1099,52 @@ void RightPanel::rebuildWpList()
         addVal(QStringLiteral("%1 м").arg(radius));
         addVal(QStringLiteral("%1 м/с").arg(speed));
 
-        // Edit/Delete buttons — use Segoe UI Symbol for guaranteed glyph rendering
-        auto* editBtn = new QPushButton(QStringLiteral("\u270f"));   // ✏ pencil
-        auto* delBtn  = new QPushButton(QStringLiteral("\u00d7"));   // × mult sign
+        // Edit/Delete buttons — QPainter icons, no font dependency
+        QColor iconCol(C::TXT_S);
+        QColor iconHov(C::TXT);
+        auto* editBtn = new QPushButton;
+        editBtn->setIcon(makeEditIcon(16, iconCol));
+        editBtn->setIconSize({14, 14});
+        auto* delBtn = new QPushButton;
+        delBtn->setIcon(makeCrossIcon(16, iconCol));
+        delBtn->setIconSize({14, 14});
+
+        QString btnSS = QString(
+            "QPushButton { background: %1; border: 1px solid %2; "
+            "border-radius: 4px; padding: 0; }"
+            "QPushButton:hover { background: %3; border-color: %4; }")
+            .arg(C::INPUT, C::BD, C::BD_A, C::BLUE);
         for (auto* b : {editBtn, delBtn}) {
             b->setFixedSize(22, 22);
             b->setCursor(Qt::PointingHandCursor);
-            b->setStyleSheet(QString(
-                "QPushButton { background: transparent; border: 1px solid %1; border-radius: 4px; "
-                "color: %2; font-size: 12px; font-weight: 700; "
-                "font-family: \"Segoe UI Symbol\", \"Segoe UI Emoji\", \"Segoe UI\"; }"
-                "QPushButton:hover { background: %3; color: %4; border-color: %5; }")
-                .arg(C::BD, C::TXT_S,
-                     C::BD_A, C::TXT, C::BLUE));
+            b->setFocusPolicy(Qt::NoFocus);
+            b->setStyleSheet(btnSS);
         }
-        connect(editBtn, &QPushButton::clicked, this, [this, i] {
-            emit editWaypointRequested(i);
+        Q_UNUSED(iconHov)
+
+        const int ci = i;
+        connect(editBtn, &QPushButton::clicked, this, [this, ci] {
+            selectWpItem(ci);
+            emit editWaypointRequested(ci);
         });
-        connect(delBtn, &QPushButton::clicked, this, [this, i] {
-            emit deleteWaypointRequested(i);
+        connect(delBtn, &QPushButton::clicked, this, [this, ci] {
+            selectWpItem(ci);
+            emit deleteWaypointRequested(ci);
         });
         il->addWidget(editBtn);
         il->addWidget(delBtn);
 
-        // Click to select
-        const int ci = i;
-        auto* filter = new QObject(item);
-        item->installEventFilter(filter);
-        connect(filter, &QObject::destroyed, []{});  // keep alive
-        // Use press/release via child click detection
-        item->setFocusPolicy(Qt::ClickFocus);
+        // Click anywhere on row → select it
+        item->installEventFilter(new WpItemFilter(item, [this, ci] {
+            selectWpItem(ci);
+        }));
 
-        m_wpListLay->insertWidget(m_wpListLay->count() - 1, item);
-        // Stretch is at end, insert before it
-        // Re-order: insert at correct position
         m_wpItems.append(item);
-
-        connect(editBtn, &QPushButton::clicked, this, [this, ci] {
-            m_selWpIdx = ci;
-            m_btnRpEdit->setEnabled(true);
-            m_btnRpDelete->setEnabled(true);
-            emit centerOnWaypointRequested(ci);
-        });
-        connect(delBtn, &QPushButton::clicked, this, [this, ci] {
-            m_selWpIdx = ci;
-        });
     }
 
-    // Fix layout order — rebuild fresh
-    // Remove all, re-add in order
+    // Rebuild layout order: empty label first, then items
     while (m_wpListLay->count() > 0)
         m_wpListLay->takeAt(0);
-
     m_wpListLay->addWidget(m_wpEmptyLabel);
     for (auto* w : m_wpItems)
         m_wpListLay->addWidget(w);
@@ -1304,6 +1384,7 @@ QWidget* RightPanel::buildCommandArea()
     m_btnNav->setCheckable(true);
     m_btnNav->setEnabled(false);
     m_btnNav->setFixedHeight(38);
+    m_btnNav->setFocusPolicy(Qt::NoFocus);
     m_btnNav->setStyleSheet(QString(
         "QPushButton { background-color: %1; color: #000; border: none; "
         "border-radius: 10px; font-family: \"%2\"; font-size: 13px; font-weight: 700; }"
@@ -1317,6 +1398,7 @@ QWidget* RightPanel::buildCommandArea()
     m_btnResumeRoute = new QPushButton(QStringLiteral("Продолжить маршрут"));
     m_btnResumeRoute->setFixedHeight(38);
     m_btnResumeRoute->setVisible(false);
+    m_btnResumeRoute->setFocusPolicy(Qt::NoFocus);
     m_btnResumeRoute->setStyleSheet(QString(
         "QPushButton { background-color: %1; color: #000; border: none; "
         "border-radius: 10px; font-family: \"%2\"; font-size: 13px; font-weight: 700; }"
@@ -1372,6 +1454,8 @@ QWidget* RightPanel::buildBottomNav()
     m_btnClearTrack = new QPushButton(QStringLiteral("Трек"));
 
     for (auto* btn : {m_btnFollow, m_btnHome}) btn->setCheckable(true);
+    for (auto* btn : {m_btnFollow, m_btnHome, m_btnClearTrack})
+        btn->setFocusPolicy(Qt::NoFocus);
 
     m_btnFollow->setStyleSheet(navBtnStyle());
     m_btnHome->setStyleSheet(QString(
@@ -1399,6 +1483,7 @@ QWidget* RightPanel::buildBottomNav()
         btn->setFixedHeight(26);
         btn->setCheckable(checkable);
         btn->setCursor(Qt::PointingHandCursor);
+        btn->setFocusPolicy(Qt::NoFocus);
         btn->setStyleSheet(QString(
             "QPushButton { font-size: 11px; font-weight: 500; padding: 0 8px; "
             "border: 1px solid %1; border-radius: 5px; "
@@ -1422,6 +1507,7 @@ QWidget* RightPanel::buildBottomNav()
     m_btnSettings->setIcon(makeGearIcon(16, QColor(C::TXT_S)));
     m_btnSettings->setIconSize({16, 16});
     m_btnSettings->setCursor(Qt::PointingHandCursor);
+    m_btnSettings->setFocusPolicy(Qt::NoFocus);
     m_btnSettings->setToolTip(QStringLiteral("Настройки"));
     m_btnSettings->setStyleSheet(QString(
         "QPushButton { background: transparent; border: 1px solid %1; border-radius: 5px; }"
@@ -1465,6 +1551,7 @@ QWidget* RightPanel::buildBottomNav()
     m_btnWpPrev->setIconSize({14, 14});
     m_btnWpPrev->setFixedSize(26, 26);
     m_btnWpPrev->setEnabled(false);
+    m_btnWpPrev->setFocusPolicy(Qt::NoFocus);
     m_btnWpPrev->setStyleSheet(QString(
         "QPushButton { background: %1; border: 1px solid %2; border-radius: 5px; }"
         "QPushButton:hover { border-color: %3; }"
@@ -1476,6 +1563,7 @@ QWidget* RightPanel::buildBottomNav()
     m_btnWpNext->setIconSize({14, 14});
     m_btnWpNext->setFixedSize(26, 26);
     m_btnWpNext->setEnabled(false);
+    m_btnWpNext->setFocusPolicy(Qt::NoFocus);
     m_btnWpNext->setStyleSheet(m_btnWpPrev->styleSheet());
     row3->addWidget(m_btnWpNext);
 
