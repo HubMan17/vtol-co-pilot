@@ -425,9 +425,10 @@ QWidget* RightPanel::buildTabBar()
         if (i == 1) {
             m_routeBadge = new QLabel("0");
             m_routeBadge->setStyleSheet(QString(
-                "color: #fff; font-family: \"%1\"; font-size: 9px; font-weight: 700; "
-                "background-color: %2; padding: 1px 6px; border-radius: 7px; "
-                "border: none;").arg(C::MONO, C::BLUE));
+                "color: %1; font-family: \"%2\"; font-size: 9px; font-weight: 700; "
+                "background-color: %3; padding: 1px 6px; border-radius: 4px; "
+                "border: 1px solid rgba(59,139,255,48);")
+                .arg(C::BLUE, C::MONO, C::BLUE_D));
             m_routeBadge->hide();  // hidden until there are waypoints
             btnRow->addWidget(m_routeBadge);
         }
