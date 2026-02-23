@@ -148,8 +148,6 @@ private:
     QPushButton* m_btnDisconnect   = nullptr;
     QLabel*      m_lblMode         = nullptr;
     QFrame*      m_statusDot       = nullptr;
-    QTimer*      m_dotTimer        = nullptr;
-    bool         m_dotBlink        = true;
 
     // ── Tab bar ───────────────────────────────────────────────────────────
     QPushButton* m_tabBtns[3]      = {};

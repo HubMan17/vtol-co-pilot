@@ -165,8 +165,9 @@ QFrame* RightPanel::makeSeparator()
 QFrame* RightPanel::makeDataRow(std::initializer_list<QWidget*> cells)
 {
     auto* card = new QFrame;
+    card->setObjectName("dataRow");
     card->setStyleSheet(QString(
-        "QFrame { background-color: %1; border: 1px solid %2; border-radius: 10px; }")
+        "QFrame#dataRow { background-color: %1; border: 1px solid %2; border-radius: 10px; }")
         .arg(C::CARD, C::BD));
     auto* grid = new QGridLayout(card);
     grid->setContentsMargins(0, 0, 0, 0);
@@ -190,8 +191,9 @@ QFrame* RightPanel::makeBlock(const QString& icon, const QString& title,
                                QWidget* content, QLabel** badgeOut)
 {
     auto* block = new QFrame;
+    block->setObjectName("panelBlock");
     block->setStyleSheet(QString(
-        "QFrame { border: none; border-bottom: 1px solid %1; }").arg(C::BD));
+        "QFrame#panelBlock { border: none; border-bottom: 1px solid %1; }").arg(C::BD));
     auto* lay = new QVBoxLayout(block);
     lay->setContentsMargins(14, 12, 14, 12);
     lay->setSpacing(10);
@@ -266,16 +268,7 @@ void RightPanel::setupUi()
     root->addWidget(makeSeparator());
     root->addWidget(buildBottomNav());
 
-    // Blink timer for status dot
-    m_dotTimer = new QTimer(this);
-    m_dotTimer->setInterval(1000);
-    connect(m_dotTimer, &QTimer::timeout, this, [this] {
-        m_dotBlink = !m_dotBlink;
-        if (m_statusDot)
-            m_statusDot->setStyleSheet(QString(
-                "border-radius: 5px; background-color: %1;")
-                .arg(m_dotBlink ? C::GREEN : "#1a3020"));
-    });
+    // (no blink timer — dot is solid green/red)
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -640,8 +633,9 @@ void RightPanel::rebuildAutopilotContent(bool navActive)
     // Mode line
     {
         auto* modeLine = new QFrame;
+        modeLine->setObjectName("apModeLine");
         modeLine->setStyleSheet(QString(
-            "QFrame { background-color: %1; border: 1px solid %2; border-radius: 10px; }")
+            "QFrame#apModeLine { background-color: %1; border: 1px solid %2; border-radius: 10px; }")
             .arg(C::CARD, C::BD));
         auto* ml = new QHBoxLayout(modeLine);
         ml->setContentsMargins(12, 8, 12, 8);
@@ -750,8 +744,9 @@ void RightPanel::rebuildAutopilotContent(bool navActive)
 
     for (auto& d : defs) {
         auto* item = new QFrame;
+        item->setObjectName("apParamItem");
         item->setStyleSheet(QString(
-            "QFrame { background-color: %1; border: 1px solid %2; border-radius: 10px; }")
+            "QFrame#apParamItem { background-color: %1; border: 1px solid %2; border-radius: 10px; }")
             .arg(C::CARD, C::BD));
         auto* il = new QHBoxLayout(item);
         il->setContentsMargins(10, 8, 8, 8);
@@ -972,11 +967,12 @@ void RightPanel::rebuildWpList()
 
         auto* item = new QFrame;
         item->setProperty("wpIdx", i);
+        item->setObjectName("wpItem");
         item->setStyleSheet(QString(
-            "QFrame { background-color: %1; border: 1px solid %2; "
+            "QFrame#wpItem { background-color: %1; border: 1px solid %2; "
             "border-radius: 6px; }")
-            .arg(isActive ? C::GREEN_D : C::CARD,
-                 isActive ? C::GREEN   : C::BD));
+            .arg(isActive ? "rgba(0,230,160,70)" : C::CARD,
+                 isActive ? C::GREEN             : C::BD));
         item->setCursor(Qt::PointingHandCursor);
         item->setFixedHeight(38);
 
@@ -1021,13 +1017,14 @@ void RightPanel::rebuildWpList()
         auto* editBtn = new QPushButton(QStringLiteral("\u270e"));
         auto* delBtn  = new QPushButton(QStringLiteral("\xd7"));
         for (auto* b : {editBtn, delBtn}) {
-            b->setFixedSize(22, 22);
+            b->setFixedSize(24, 24);
             b->setCursor(Qt::PointingHandCursor);
             b->setStyleSheet(QString(
-                "QPushButton { background: %1; border: none; border-radius: 4px; "
-                "color: %2; font-size: 12px; }"
-                "QPushButton:hover { background: %3; color: %4; }")
-                .arg(C::INPUT, C::TXT_S, C::BD_A, C::TXT));
+                "QPushButton { background: %1; border: 1px solid %2; border-radius: 5px; "
+                "color: %3; font-size: 13px; font-weight: 600; }"
+                "QPushButton:hover { background: %4; color: %5; border-color: %6; }")
+                .arg(C::CARD, C::BD_A, C::TXT_S,
+                     C::BD_A, C::TXT, C::BLUE));
         }
         connect(editBtn, &QPushButton::clicked, this, [this, i] {
             emit editWaypointRequested(i);
@@ -1094,8 +1091,9 @@ QWidget* RightPanel::buildSystemTab()
 
         // Main battery bar
         auto* bar = new QFrame;
+        bar->setObjectName("battBar");
         bar->setStyleSheet(QString(
-            "QFrame { background-color: %1; border: 1px solid %2; border-radius: 10px; }")
+            "QFrame#battBar { background-color: %1; border: 1px solid %2; border-radius: 10px; }")
             .arg(C::CARD, C::BD));
         auto* bl = new QHBoxLayout(bar);
         bl->setContentsMargins(14, 10, 14, 10);
@@ -1103,9 +1101,10 @@ QWidget* RightPanel::buildSystemTab()
 
         // Battery icon
         auto* battIconBox = new QFrame;
+        battIconBox->setObjectName("battIconBox");
         battIconBox->setFixedSize(42, 21);
         battIconBox->setStyleSheet(QString(
-            "QFrame { border: 2px solid %1; border-radius: 3px; background: transparent; }")
+            "QFrame#battIconBox { border: 2px solid %1; border-radius: 3px; background: transparent; }")
             .arg(C::GREEN));
 
         m_battFill = new QFrame(battIconBox);
@@ -1167,8 +1166,9 @@ QWidget* RightPanel::buildSystemTab()
 
         auto addBattMetric = [&](const QString& lbl, QLabel*& val, const QString& color) {
             auto* m = new QFrame;
+            m->setObjectName("battMetric");
             m->setStyleSheet(QString(
-                "QFrame { background-color: %1; border: 1px solid %2; border-radius: 6px; }")
+                "QFrame#battMetric { background-color: %1; border: 1px solid %2; border-radius: 6px; }")
                 .arg(C::CARD, C::BD));
             auto* ml = new QVBoxLayout(m);
             ml->setContentsMargins(10, 6, 10, 6);
@@ -1536,11 +1536,34 @@ void RightPanel::updateTelemetry(const TelemetryState& state)
     }
 
     // System tab — battery update
+    const double v = state.batteryVoltage();
     if (m_battVoltLabel)
-        m_battVoltLabel->setText(QString("%1 В").arg(state.batteryVoltage(), 0, 'f', 1));
+        m_battVoltLabel->setText(v > 0.5
+            ? QString("%1 В").arg(v, 0, 'f', 1)
+            : QStringLiteral("--- В"));
     if (m_battCurrLabel)
         m_battCurrLabel->setText(QString("%1 А").arg(state.batteryCurrent(), 0, 'f', 1));
-    // Percentage and time are not available — keep as "—"
+
+    // Calculate percentage from voltage (12S LiPo: 3.3V–4.2V per cell → 39.6–50.4V total)
+    const double V_MIN = 39.6, V_MAX = 50.4;
+    if (v > 0.5) {
+        int pct = static_cast<int>(qBound(0.0, (v - V_MIN) / (V_MAX - V_MIN) * 100.0, 100.0));
+        if (m_battPctLabel)
+            m_battPctLabel->setText(QString("%1%").arg(pct));
+
+        // Update battery icon fill bar (inner max width = 34px)
+        if (m_battFill) {
+            const int MAX_W = 34;
+            int fillW = qMax(1, pct * MAX_W / 100);
+            m_battFill->setGeometry(3, 3, fillW, 13);
+            const char* fillColor = pct > 50 ? C::GREEN : (pct > 20 ? C::ORANGE : C::RED);
+            m_battFill->setStyleSheet(
+                QString("background-color: %1; border-radius: 1px;").arg(fillColor));
+        }
+    } else {
+        if (m_battPctLabel) m_battPctLabel->setText(QStringLiteral("—%"));
+        if (m_battFill)     m_battFill->setGeometry(3, 3, 0, 13);
+    }
 }
 
 void RightPanel::updateNavigation(int wpIdx, int total,
@@ -1679,14 +1702,8 @@ void RightPanel::setConnected(bool connected)
 {
     m_btnConnect->setEnabled(!connected);
     m_btnDisconnect->setEnabled(connected);
-
-    if (connected) {
-        m_statusDot->setStyleSheet(QString("border-radius: 5px; background-color: %1;").arg(C::GREEN));
-        m_dotTimer->start();
-    } else {
-        m_dotTimer->stop();
-        m_statusDot->setStyleSheet(QString("border-radius: 5px; background-color: %1;").arg(C::TXT_D));
-    }
+    m_statusDot->setStyleSheet(QString("border-radius: 5px; background-color: %1;")
+        .arg(connected ? C::GREEN : C::RED));
 }
 
 void RightPanel::setFlightMode(const QString& mode)
