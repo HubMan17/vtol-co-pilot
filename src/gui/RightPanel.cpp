@@ -424,12 +424,15 @@ QWidget* RightPanel::buildTabBar()
 
         if (i == 1) {
             m_routeBadge = new QLabel("0");
+            m_routeBadge->setAlignment(Qt::AlignCenter);
+            m_routeBadge->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+            m_routeBadge->setFixedHeight(16);
             m_routeBadge->setStyleSheet(QString(
                 "color: #fff; font-family: \"%1\"; font-size: 9px; font-weight: 700; "
-                "background-color: rgba(59,139,255,90); padding: 1px 7px; "
+                "background-color: rgba(59,139,255,90); padding: 0 5px; "
                 "border-radius: 4px; border: none;")
                 .arg(C::MONO));
-            m_routeBadge->hide();  // hidden until there are waypoints
+            m_routeBadge->hide();
             btnRow->addWidget(m_routeBadge);
         }
 
@@ -1916,6 +1919,7 @@ void RightPanel::refreshRoute(const QVector<QVariantMap>& waypoints, int activeI
     if (m_routeBadge) {
         const int n = waypoints.size();
         m_routeBadge->setText(QString::number(n));
+        m_routeBadge->adjustSize();
         m_routeBadge->setVisible(n > 0);
     }
 
