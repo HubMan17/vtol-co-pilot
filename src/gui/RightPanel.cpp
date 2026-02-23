@@ -936,7 +936,7 @@ QWidget* RightPanel::buildRouteTab()
 QString RightPanel::wpActionLabel(const QString& action, int turns) const
 {
     if (action == "FLYTHROUGH")     return QStringLiteral("Пролёт");
-    if (action == "ORBIT_TURNS")    return QStringLiteral("Кружение \xd7%1").arg(turns);
+    if (action == "ORBIT_TURNS")    return QStringLiteral("Кружение \u00d7%1").arg(turns);
     if (action == "ORBIT_INFINITE") return QStringLiteral("\u221e Кружение");
     if (action == "ALTITUDE")       return QStringLiteral("Высота");
     return action;
@@ -1013,17 +1013,18 @@ void RightPanel::rebuildWpList()
         addVal(QStringLiteral("%1 м").arg(radius));
         addVal(QStringLiteral("%1 м/с").arg(speed));
 
-        // Edit/Delete buttons
-        auto* editBtn = new QPushButton(QStringLiteral("\u270e"));
-        auto* delBtn  = new QPushButton(QStringLiteral("\xd7"));
+        // Edit/Delete buttons — use Segoe UI Symbol for guaranteed glyph rendering
+        auto* editBtn = new QPushButton(QStringLiteral("\u270f"));   // ✏ pencil
+        auto* delBtn  = new QPushButton(QStringLiteral("\u00d7"));   // × mult sign
         for (auto* b : {editBtn, delBtn}) {
-            b->setFixedSize(24, 24);
+            b->setFixedSize(22, 22);
             b->setCursor(Qt::PointingHandCursor);
             b->setStyleSheet(QString(
-                "QPushButton { background: %1; border: 1px solid %2; border-radius: 5px; "
-                "color: %3; font-size: 13px; font-weight: 600; }"
-                "QPushButton:hover { background: %4; color: %5; border-color: %6; }")
-                .arg(C::CARD, C::BD_A, C::TXT_S,
+                "QPushButton { background: transparent; border: 1px solid %1; border-radius: 4px; "
+                "color: %2; font-size: 12px; font-weight: 700; "
+                "font-family: \"Segoe UI Symbol\", \"Segoe UI Emoji\", \"Segoe UI\"; }"
+                "QPushButton:hover { background: %3; color: %4; border-color: %5; }")
+                .arg(C::BD, C::TXT_S,
                      C::BD_A, C::TXT, C::BLUE));
         }
         connect(editBtn, &QPushButton::clicked, this, [this, i] {
@@ -1521,9 +1522,13 @@ void RightPanel::updateTelemetry(const TelemetryState& state)
     m_groundspeed->setValue(state.groundspeed(), 1);
     m_altAgl->setValue(state.altitudeAgl(), 0);
 
-    m_wind->setText(QString("%1\xb0/%2")
-                        .arg(static_cast<int>(state.windDirection()), 3, 10, QChar('0'))
-                        .arg(state.windSpeed(), 0, 'f', 0));
+    {
+        int dir = static_cast<int>(state.windDirection());
+        if (dir < 0) dir += 360;  // normalize to 0–360
+        m_wind->setText(QString("%1\u00b0 / %2")
+                            .arg(dir, 3, 10, QChar('0'))
+                            .arg(state.windSpeed(), 0, 'f', 0));
+    }
 
     m_battery->setValue(state.batteryVoltage(), 1);
 
@@ -1643,10 +1648,10 @@ void RightPanel::updateAutopilot(const QString& mode, const AutopilotStatus& sta
     }
 
     if (m_apTarget && status.targetHeading >= 0)
-        m_apTarget->setText(QString("%1\xb0").arg(status.targetHeading, 0, 'f', 0));
+        m_apTarget->setText(QString("%1\u00b0").arg(status.targetHeading, 0, 'f', 0));
 
     if (m_apError) {
-        m_apError->setText(QString("%1%2\xb0")
+        m_apError->setText(QString("%1%2\u00b0")
                                .arg(status.headingError >= 0 ? "+" : "")
                                .arg(status.headingError, 0, 'f', 1));
         m_apError->setStyleSheet(QString(
