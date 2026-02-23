@@ -64,6 +64,7 @@ set(SOURCES
     src/gui/NotificationWidget.cpp
     src/gui/Dialogs.cpp
     src/gui/RoutePlannerPanel.cpp
+    src/gui/RightPanel.cpp
     src/gui/SettlementLoader.cpp
     src/gui/MainWindow.cpp
 )

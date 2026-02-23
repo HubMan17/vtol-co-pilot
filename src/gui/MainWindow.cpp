@@ -1,7 +1,6 @@
 #include "MainWindow.h"
 #include "Theme.h"
 #include "Dialogs.h"
-#include "RoutePlannerPanel.h"
 #include "navigation/Calculations.h"
 
 #include <QVBoxLayout>
@@ -101,51 +100,15 @@ void MainWindow::setupUi()
 
     splitter->addWidget(m_mapWidget);
 
-    // ── RIGHT: Panel ──
-    auto* right = new QWidget;
-    right->setStyleSheet(QStringLiteral("background-color: %1;").arg(theme::BG_SIDEBAR));
-    right->setMinimumWidth(280);
-    right->setMaximumWidth(800);
-    auto* rightLay = new QVBoxLayout(right);
-    rightLay->setContentsMargins(0, 0, 0, 0);
-    rightLay->setSpacing(0);
-
-    rightLay->addWidget(buildPanelHeader());
-
-    auto* sep = new QFrame;
-    sep->setFixedHeight(1);
-    sep->setStyleSheet(QStringLiteral("background-color: %1;").arg(theme::BORDER));
-    rightLay->addWidget(sep);
-
-    m_statusPanel = new StatusPanel(this);
-    rightLay->addWidget(m_statusPanel, 1);
-
-    auto* sep2 = new QFrame;
-    sep2->setFixedHeight(1);
-    sep2->setStyleSheet(QStringLiteral("background-color: %1;").arg(theme::BORDER));
-    rightLay->addWidget(sep2);
-
-    // ── Route planner panel ──
-    m_routePlannerPanel = new RoutePlannerPanel(this);
-    rightLay->addWidget(m_routePlannerPanel);
-
-    auto* sep3 = new QFrame;
-    sep3->setFixedHeight(1);
-    sep3->setStyleSheet(QStringLiteral("background-color: %1;").arg(theme::BORDER));
-    rightLay->addWidget(sep3);
-
-    // Notification widget (hidden by default)
-    m_notificationWidget = new NotificationWidget(this);
-    m_notificationManager = new NotificationManager(m_notificationWidget, this);
-    m_notificationManager->setDefaultDurations(
+    // ── RIGHT: unified panel ──
+    m_rightPanel = new RightPanel(this);
+    m_rightPanel->notificationManager()->setDefaultDurations(
         m_config.notifications.info_duration_sec,
         m_config.notifications.warning_duration_sec,
         m_config.notifications.critical_duration_sec);
-    m_notificationManager->setCurtailPercent(m_config.notifications.interrupt_curtail_pct);
-    rightLay->addWidget(m_notificationWidget);
-
-    rightLay->addWidget(buildControls());
-    splitter->addWidget(right);
+    m_rightPanel->notificationManager()->setCurtailPercent(
+        m_config.notifications.interrupt_curtail_pct);
+    splitter->addWidget(m_rightPanel);
 
     splitter->setSizes({900, 580});
     splitter->setStretchFactor(0, 1);
@@ -187,238 +150,6 @@ void MainWindow::setupUi()
         sb->addPermanentWidget(w);
 }
 
-QWidget* MainWindow::buildPanelHeader()
-{
-    auto* hdr = new QWidget;
-    hdr->setFixedHeight(48);
-    auto* lay = new QHBoxLayout(hdr);
-    lay->setContentsMargins(10, 0, 10, 0);
-    lay->setSpacing(8);
-
-    m_btnConnect = new QPushButton(QStringLiteral("Подключить"));
-    m_btnConnect->setFixedHeight(30);
-    m_btnConnect->setStyleSheet(QStringLiteral(
-        "QPushButton { background-color: %1; color: #fff; border: none; "
-        "border-radius: 6px; padding: 0 12px; font-size: 12px; font-weight: 600; }"
-        "QPushButton:hover { background-color: %2; }")
-        .arg(theme::PRIMARY, theme::PRIMARY_HOVER));
-    lay->addWidget(m_btnConnect);
-
-    m_btnDisconnect = new QPushButton(QStringLiteral("Откл."));
-    m_btnDisconnect->setFixedHeight(30);
-    m_btnDisconnect->setEnabled(false);
-    lay->addWidget(m_btnDisconnect);
-
-    lay->addStretch();
-
-    m_lblMode = new QLabel(QStringLiteral("---"));
-    m_lblMode->setStyleSheet(QStringLiteral(
-        "color: %1; font-family: \"%2\"; font-size: 12px; font-weight: 700; "
-        "padding: 3px 10px; border-radius: 4px; background-color: %3;")
-        .arg(theme::TEXT_TERTIARY, theme::FONT_MONO, theme::BG_INPUT));
-    lay->addWidget(m_lblMode);
-
-    m_lblStatus = new QLabel(QStringLiteral("OFF"));
-    m_lblStatus->setStyleSheet(QStringLiteral(
-        "color: %1; font-size: 10px; font-weight: 700; padding: 2px 8px; "
-        "border-radius: 10px; background-color: %2;")
-        .arg(theme::ERROR_CLR, theme::ERROR_BG));
-    lay->addWidget(m_lblStatus);
-
-    return hdr;
-}
-
-QWidget* MainWindow::buildControls()
-{
-    auto* panel = new QWidget;
-    auto* lay = new QVBoxLayout(panel);
-    lay->setContentsMargins(10, 8, 10, 10);
-    lay->setSpacing(6);
-
-    // NAV button
-    m_btnNav = new QPushButton(QStringLiteral("Навигация"));
-    m_btnNav->setCheckable(true);
-    m_btnNav->setEnabled(false);
-    m_btnNav->setFixedHeight(36);
-    m_btnNav->setStyleSheet(QStringLiteral(
-        "QPushButton { background-color: %1; color: %2; border: 1px solid %3; "
-        "border-radius: 8px; font-size: 13px; font-weight: 600; padding: 0 16px; }"
-        "QPushButton:hover { background-color: %4; color: %5; border-color: %6; }"
-        "QPushButton:checked { background-color: %7; color: #fff; border-color: %7; }"
-        "QPushButton:disabled { background-color: %8; color: %9; border-color: %10; }")
-        .arg(theme::BG_INPUT, theme::TEXT_SECONDARY, theme::BORDER,
-             theme::BG_HOVER, theme::TEXT_PRIMARY, theme::BORDER_LIGHT,
-             theme::SUCCESS, theme::BG_CARD, theme::TEXT_DIM, theme::BORDER_SUBTLE));
-    lay->addWidget(m_btnNav);
-
-    // Resume route button (visible only when operational WP is active)
-    m_btnResumeRoute = new QPushButton(QStringLiteral("Продолжить маршрут"));
-    m_btnResumeRoute->setFixedHeight(32);
-    m_btnResumeRoute->setVisible(false);
-    m_btnResumeRoute->setStyleSheet(QStringLiteral(
-        "QPushButton { background-color: #FF6D00; color: #fff; border: none; "
-        "border-radius: 6px; font-size: 12px; font-weight: 600; padding: 0 14px; }"
-        "QPushButton:hover { background-color: #E65100; }"));
-    lay->addWidget(m_btnResumeRoute);
-
-    // Row 1: Position + Home + Route
-    auto* r1 = new QHBoxLayout;
-    r1->setSpacing(4);
-
-    m_btnSetPos = new QPushButton(QStringLiteral("Коррекция"));
-    m_btnSetPos->setCheckable(true);
-    m_btnSetPos->setEnabled(false);
-    m_btnSetPos->setFixedHeight(30);
-    r1->addWidget(m_btnSetPos);
-
-    m_btnSetHome = new QPushButton(QStringLiteral("Дом"));
-    m_btnSetHome->setCheckable(true);
-    m_btnSetHome->setEnabled(false);
-    m_btnSetHome->setFixedHeight(30);
-    r1->addWidget(m_btnSetHome);
-
-    m_btnLoadRoute = new QPushButton(QStringLiteral("Маршрут"));
-    m_btnLoadRoute->setEnabled(false);
-    m_btnLoadRoute->setFixedHeight(30);
-    r1->addWidget(m_btnLoadRoute);
-
-    m_btnAddWaypoint = new QPushButton(QStringLiteral("+ ТЧК"));
-    m_btnAddWaypoint->setCheckable(true);
-    m_btnAddWaypoint->setFixedHeight(30);
-    m_btnAddWaypoint->setToolTip(QStringLiteral("Добавить точку маршрута (кликните на карте)"));
-    m_btnAddWaypoint->setStyleSheet(QStringLiteral(
-        "QPushButton { background-color: %1; color: %2; border: 1px solid %3; "
-        "border-radius: 6px; padding: 0 8px; font-size: 11px; font-weight: 600; }"
-        "QPushButton:hover { background-color: %4; color: %5; }"
-        "QPushButton:checked { background-color: %6; color: #fff; border-color: %6; }")
-        .arg(theme::BG_INPUT, theme::TEXT_SECONDARY, theme::BORDER,
-             theme::BG_HOVER, theme::TEXT_PRIMARY, theme::PRIMARY));
-    connect(m_btnAddWaypoint, &QPushButton::toggled, this, [this](bool checked) {
-        if (checked) {
-            m_mapWidget->startWaypointPlacement();
-            statusBar()->showMessage(QStringLiteral("Кликните на карте для добавления точки (Esc — отмена)"), 0);
-        } else {
-            m_mapWidget->cancelWaypointPlacement();
-        }
-    });
-    r1->addWidget(m_btnAddWaypoint);
-
-    lay->addLayout(r1);
-
-    // Row 2: Follow + RTH + Clear + Zones + Settings
-    auto* r2 = new QHBoxLayout;
-    r2->setSpacing(4);
-
-    m_btnFollow = new QPushButton(QStringLiteral("Слежение"));
-    m_btnFollow->setCheckable(true);
-    m_btnFollow->setEnabled(false);
-    m_btnFollow->setFixedHeight(30);
-    r2->addWidget(m_btnFollow);
-
-    m_btnHome = new QPushButton(QStringLiteral("Домой"));
-    m_btnHome->setCheckable(true);
-    m_btnHome->setEnabled(false);
-    m_btnHome->setFixedHeight(30);
-    m_btnHome->setStyleSheet(QStringLiteral(
-        "QPushButton { background-color: %1; color: %2; border: 1px solid %3; "
-        "border-radius: 6px; padding: 0 10px; font-size: 12px; font-weight: 500; }"
-        "QPushButton:hover { background-color: %4; color: %5; }"
-        "QPushButton:checked { background-color: %6; color: #000; border-color: %6; }"
-        "QPushButton:disabled { background-color: %7; color: %8; border-color: %9; }")
-        .arg(theme::BG_INPUT, theme::TEXT_SECONDARY, theme::BORDER,
-             theme::BG_HOVER, theme::TEXT_PRIMARY,
-             theme::WARNING, theme::BG_CARD, theme::TEXT_DIM, theme::BORDER_SUBTLE));
-    r2->addWidget(m_btnHome);
-
-    m_btnClearTrack = new QPushButton(QStringLiteral("Трек"));
-    m_btnClearTrack->setEnabled(false);
-    m_btnClearTrack->setFixedHeight(30);
-    r2->addWidget(m_btnClearTrack);
-
-    m_btnDrawZone = new QPushButton(QStringLiteral("Зоны"));
-    m_btnDrawZone->setCheckable(true);
-    m_btnDrawZone->setFixedHeight(30);
-    r2->addWidget(m_btnDrawZone);
-
-    // Gear icon — painted
-    auto makeGearIcon = [](int sz, const QColor& c) {
-        QPixmap pm(sz, sz);
-        pm.fill(Qt::transparent);
-        QPainter p(&pm);
-        p.setRenderHint(QPainter::Antialiasing);
-        p.setPen(QPen(c, 1.4));
-        p.setBrush(Qt::NoBrush);
-        double cx = sz / 2.0, cy = sz / 2.0;
-        p.drawEllipse(QPointF(cx, cy), sz * 0.15, sz * 0.15);
-        for (int i = 0; i < 8; ++i) {
-            double a = i * M_PI / 4.0;
-            p.drawLine(QPointF(cx + sz * 0.22 * std::cos(a), cy + sz * 0.22 * std::sin(a)),
-                       QPointF(cx + sz * 0.40 * std::cos(a), cy + sz * 0.40 * std::sin(a)));
-        }
-        return QIcon(pm);
-    };
-
-    m_btnSettings = new QPushButton();
-    m_btnSettings->setIcon(makeGearIcon(18, QColor(theme::TEXT_SECONDARY)));
-    m_btnSettings->setIconSize(QSize(18, 18));
-    m_btnSettings->setFixedSize(30, 30);
-    m_btnSettings->setToolTip(QStringLiteral("Настройки"));
-    r2->addWidget(m_btnSettings);
-
-    lay->addLayout(r2);
-
-    // Waypoint nav row — painted arrow icons
-    auto makeArrowIcon = [](int sz, const QColor& c, bool left) {
-        QPixmap pm(sz, sz);
-        pm.fill(Qt::transparent);
-        QPainter p(&pm);
-        p.setRenderHint(QPainter::Antialiasing);
-        p.setPen(QPen(c, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        if (left) {
-            p.drawLine(QPointF(sz * 0.6, sz * 0.2), QPointF(sz * 0.3, sz * 0.5));
-            p.drawLine(QPointF(sz * 0.3, sz * 0.5), QPointF(sz * 0.6, sz * 0.8));
-        } else {
-            p.drawLine(QPointF(sz * 0.4, sz * 0.2), QPointF(sz * 0.7, sz * 0.5));
-            p.drawLine(QPointF(sz * 0.7, sz * 0.5), QPointF(sz * 0.4, sz * 0.8));
-        }
-        return QIcon(pm);
-    };
-
-    auto* wr = new QHBoxLayout;
-    wr->setSpacing(4);
-
-    auto* wl = new QLabel(QStringLiteral("ТЧК"));
-    wl->setStyleSheet(QStringLiteral("color: %1; font-size: 10px;").arg(theme::TEXT_TERTIARY));
-    wr->addWidget(wl);
-
-    m_spinWaypoint = new QSpinBox;
-    m_spinWaypoint->setButtonSymbols(QAbstractSpinBox::NoButtons);
-    m_spinWaypoint->setMinimum(1);
-    m_spinWaypoint->setMaximum(1);
-    m_spinWaypoint->setEnabled(false);
-    m_spinWaypoint->setFixedSize(44, 28);
-    wr->addWidget(m_spinWaypoint);
-
-    m_btnWpPrev = new QPushButton();
-    m_btnWpPrev->setIcon(makeArrowIcon(16, QColor(theme::TEXT_SECONDARY), true));
-    m_btnWpPrev->setIconSize(QSize(16, 16));
-    m_btnWpPrev->setFixedSize(28, 28);
-    m_btnWpPrev->setEnabled(false);
-    wr->addWidget(m_btnWpPrev);
-
-    m_btnWpNext = new QPushButton();
-    m_btnWpNext->setIcon(makeArrowIcon(16, QColor(theme::TEXT_SECONDARY), false));
-    m_btnWpNext->setIconSize(QSize(16, 16));
-    m_btnWpNext->setFixedSize(28, 28);
-    m_btnWpNext->setEnabled(false);
-    wr->addWidget(m_btnWpNext);
-
-    wr->addStretch();
-    lay->addLayout(wr);
-
-    return panel;
-}
-
 // ═════════════════════════════════════════════════════════════════════════
 //  Connections
 // ═════════════════════════════════════════════════════════════════════════
@@ -427,26 +158,67 @@ void MainWindow::setupConnections()
 {
     auto* be = m_mapWidget->backend();
 
-    // Header buttons
-    connect(m_btnConnect, &QPushButton::clicked, this, &MainWindow::onConnect);
-    connect(m_btnDisconnect, &QPushButton::clicked, this, &MainWindow::onDisconnect);
+    // ── RightPanel signals ──
+    connect(m_rightPanel, &RightPanel::connectRequested,    this, &MainWindow::onConnect);
+    connect(m_rightPanel, &RightPanel::disconnectRequested, this, &MainWindow::onDisconnect);
+    connect(m_rightPanel, &RightPanel::navToggled,          this, &MainWindow::onNavToggle);
+    connect(m_rightPanel, &RightPanel::homeToggled,         this, &MainWindow::onHomeToggle);
+    connect(m_rightPanel, &RightPanel::followToggled,       this, &MainWindow::onFollowToggle);
+    connect(m_rightPanel, &RightPanel::setPositionToggled,  this, &MainWindow::onSetPositionToggle);
+    connect(m_rightPanel, &RightPanel::setHomeToggled,      this, &MainWindow::onSetHomeToggle);
+    connect(m_rightPanel, &RightPanel::clearTrackRequested, this, &MainWindow::onClearTrack);
+    connect(m_rightPanel, &RightPanel::drawZoneToggled,     this, &MainWindow::onDrawZoneToggle);
+    connect(m_rightPanel, &RightPanel::settingsRequested,   this, &MainWindow::onSettings);
+    connect(m_rightPanel, &RightPanel::wpPrevRequested,     this, &MainWindow::onWpPrev);
+    connect(m_rightPanel, &RightPanel::wpNextRequested,     this, &MainWindow::onWpNext);
+    connect(m_rightPanel, &RightPanel::wpSelected,          this, &MainWindow::onWpSelect);
+    connect(m_rightPanel, &RightPanel::loadRouteRequested,  this, &MainWindow::onLoadRoute);
+    connect(m_rightPanel, &RightPanel::editWaypointRequested,   this, &MainWindow::editWaypoint);
+    connect(m_rightPanel, &RightPanel::deleteWaypointRequested, this, &MainWindow::deleteWaypoint);
+    connect(m_rightPanel, &RightPanel::orbitRadiusChanged,  this, &MainWindow::onOrbitRadiusChanged);
+    connect(m_rightPanel, &RightPanel::targetAltitudeChanged, this, &MainWindow::onTargetAltitudeChanged);
+    connect(m_rightPanel, &RightPanel::targetAirspeedChanged, this, &MainWindow::onTargetAirspeedChanged);
+    connect(m_rightPanel, &RightPanel::windOverrideRequested, this, &MainWindow::onWindOverride);
 
-    // Control buttons
-    connect(m_btnSetPos, &QPushButton::clicked, this, &MainWindow::onSetPositionToggle);
-    connect(m_btnSetHome, &QPushButton::clicked, this, &MainWindow::onSetHomeToggle);
-    connect(m_btnLoadRoute, &QPushButton::clicked, this, &MainWindow::onLoadRoute);
-    connect(m_btnClearTrack, &QPushButton::clicked, this, &MainWindow::onClearTrack);
-    connect(m_btnDrawZone, &QPushButton::clicked, this, &MainWindow::onDrawZoneToggle);
-    connect(m_btnSettings, &QPushButton::clicked, this, &MainWindow::onSettings);
-    connect(m_btnNav, &QPushButton::clicked, this, &MainWindow::onNavToggle);
-    connect(m_btnFollow, &QPushButton::clicked, this, &MainWindow::onFollowToggle);
-    connect(m_btnHome, &QPushButton::clicked, this, &MainWindow::onHomeToggle);
-    connect(m_btnWpPrev, &QPushButton::clicked, this, &MainWindow::onWpPrev);
-    connect(m_btnWpNext, &QPushButton::clicked, this, &MainWindow::onWpNext);
-    connect(m_spinWaypoint, qOverload<int>(&QSpinBox::valueChanged),
-            this, &MainWindow::onWpSelect);
+    connect(m_rightPanel, &RightPanel::resumeRouteRequested, this, [this]() {
+        SPDLOG_INFO("[MainWindow] Resume route button clicked");
+        m_autopilot.cancelOperational();
+    });
+    connect(m_rightPanel, &RightPanel::reorderWaypointRequested, this, [this](int from, int to) {
+        m_routePlanner.moveWaypoint(from, to);
+        refreshMapWaypoints();
+    });
+    connect(m_rightPanel, &RightPanel::centerOnWaypointRequested, this, [this](int idx) {
+        auto* route = m_routePlanner.getRoute();
+        if (!route || idx < 0 || idx >= static_cast<int>(route->waypoints.size())) return;
+        const auto& wp = route->waypoints[idx];
+        m_mapWidget->backend()->centerOn(wp.lat, wp.lon);
+    });
+    connect(m_rightPanel, &RightPanel::clearRouteRequested, this, [this] {
+        m_routePlanner.clearWaypoints();
+        refreshMapWaypoints();
+        statusBar()->showMessage(QStringLiteral("Маршрут очищен"), 3000);
+    });
+    connect(m_rightPanel, &RightPanel::saveRouteRequested, this, [this] {
+        auto* route = m_routePlanner.getRoute();
+        if (!route) return;
+        QString path = QFileDialog::getSaveFileName(this,
+            QStringLiteral("Сохранить маршрут"), "routes/",
+            QStringLiteral("JSON (*.json)"));
+        if (path.isEmpty()) return;
+        m_routePlanner.saveRoute(*route, path.toStdString());
+        statusBar()->showMessage(QStringLiteral("Маршрут сохранён: %1").arg(path), 4000);
+    });
+    connect(m_rightPanel, &RightPanel::addWaypointToggled, this, [this](bool checked) {
+        if (checked) {
+            m_mapWidget->startWaypointPlacement();
+            statusBar()->showMessage(QStringLiteral("Кликните на карте для добавления точки (Esc — отмена)"), 0);
+        } else {
+            m_mapWidget->cancelWaypointPlacement();
+        }
+    });
 
-    // Map backend signals
+    // ── Map backend signals ──
     connect(be, &MapBackend::mapClicked, this, &MainWindow::onMapClicked);
     connect(be, &MapBackend::contextMenuRequested, this, &MainWindow::onContextAddWaypoint);
     connect(be, &MapBackend::waypointContextMenuRequested, this, &MainWindow::onWaypointContextMenu);
@@ -455,84 +227,32 @@ void MainWindow::setupConnections()
             this, &MainWindow::onWaypointPlacementRequested);
     connect(m_mapWidget, &MapWidget::waypointPlacementCancelled,
             this, &MainWindow::onWaypointPlacementCancelled);
-
-    // Route planner panel
-    connect(m_routePlannerPanel, &RoutePlannerPanel::editWaypointRequested,
-            this, &MainWindow::editWaypoint);
-    connect(m_routePlannerPanel, &RoutePlannerPanel::deleteWaypointRequested,
-            this, &MainWindow::deleteWaypoint);
-    connect(m_routePlannerPanel, &RoutePlannerPanel::reorderWaypointRequested,
-            this, [this](int from, int to) {
-                m_routePlanner.moveWaypoint(from, to);
-                refreshMapWaypoints();
-            });
-    connect(m_routePlannerPanel, &RoutePlannerPanel::centerOnWaypointRequested,
-            this, [this](int idx) {
-                auto* route = m_routePlanner.getRoute();
-                if (!route || idx < 0 || idx >= static_cast<int>(route->waypoints.size())) return;
-                const auto& wp = route->waypoints[idx];
-                m_mapWidget->backend()->centerOn(wp.lat, wp.lon);
-            });
-    connect(m_routePlannerPanel, &RoutePlannerPanel::clearRouteRequested,
-            this, [this] {
-                m_routePlanner.clearWaypoints();
-                refreshMapWaypoints();
-                statusBar()->showMessage(QStringLiteral("Маршрут очищен"), 3000);
-            });
-    connect(m_routePlannerPanel, &RoutePlannerPanel::loadRouteRequested,
-            this, &MainWindow::onLoadRoute);
-    connect(m_routePlannerPanel, &RoutePlannerPanel::saveRouteRequested,
-            this, [this] {
-                auto* route = m_routePlanner.getRoute();
-                if (!route) return;
-                QString path = QFileDialog::getSaveFileName(this,
-                    QStringLiteral("Сохранить маршрут"), "routes/",
-                    QStringLiteral("JSON (*.json)"));
-                if (path.isEmpty()) return;
-                m_routePlanner.saveRoute(*route, path.toStdString());
-                statusBar()->showMessage(QStringLiteral("Маршрут сохранён: %1").arg(path), 4000);
-            });
-    connect(m_routePlannerPanel, &RoutePlannerPanel::addWaypointRequested,
-            this, [this] {
-                m_mapWidget->startWaypointPlacement();
-            });
-    connect(be, &MapBackend::drawingFinished, this, &MainWindow::onZoneDrawingFinished);
+    connect(be, &MapBackend::drawingFinished,  this, &MainWindow::onZoneDrawingFinished);
     connect(be, &MapBackend::drawingCancelled, this, &MainWindow::onZoneDrawingCancelled);
-    connect(be, &MapBackend::zoneDoubleClicked, this, &MainWindow::onZoneDoubleClicked);
-    connect(be, &MapBackend::zoneContextMenuRequested, this, &MainWindow::onZoneContextMenu);
-    connect(be, &MapBackend::zoneVerticesUpdated, this, &MainWindow::onZoneVerticesUpdated);
-    connect(be, &MapBackend::mouseMoved, this, &MainWindow::onMapMouseMove);
-    connect(be, &MapBackend::zoomChanged, this, &MainWindow::onMapZoomChanged);
+    connect(be, &MapBackend::zoneDoubleClicked,         this, &MainWindow::onZoneDoubleClicked);
+    connect(be, &MapBackend::zoneContextMenuRequested,  this, &MainWindow::onZoneContextMenu);
+    connect(be, &MapBackend::zoneVerticesUpdated,       this, &MainWindow::onZoneVerticesUpdated);
+    connect(be, &MapBackend::mouseMoved,   this, &MainWindow::onMapMouseMove);
+    connect(be, &MapBackend::zoomChanged,  this, &MainWindow::onMapZoomChanged);
 
-    // Settlement loader
+    // ── Settlement loader ──
     connect(&m_settlementLoader, &SettlementLoader::tileLoaded,
             this, &MainWindow::onSettlementTileLoaded);
 
-    // Map bounds → settlement loader (skip if settlements hidden or zoom outside visibility)
     auto shouldLoadSettlements = [this]() {
         auto* be = m_mapWidget->backend();
         int z = be->currentZoom();
         return be->showSettlements() && z >= 11 && z <= 16;
     };
     connect(be, &MapBackend::boundsChanged, this, [this, shouldLoadSettlements](double s, double w, double n, double e) {
-        if (shouldLoadSettlements())
-            m_settlementLoader.request(s, w, n, e);
+        if (shouldLoadSettlements()) m_settlementLoader.request(s, w, n, e);
     });
-
-    // Render area → settlement loader (fetch tiles for render area, not just viewport)
     connect(be, &MapBackend::renderAreaChanged, this,
         [this, shouldLoadSettlements](double s, double w, double n, double e) {
-            if (shouldLoadSettlements())
-                m_settlementLoader.request(s, w, n, e);
+            if (shouldLoadSettlements()) m_settlementLoader.request(s, w, n, e);
         });
 
-    // Status panel
-    connect(m_statusPanel, &StatusPanel::orbitRadiusChanged, this, &MainWindow::onOrbitRadiusChanged);
-    connect(m_statusPanel, &StatusPanel::targetAltitudeChanged, this, &MainWindow::onTargetAltitudeChanged);
-    connect(m_statusPanel, &StatusPanel::targetAirspeedChanged, this, &MainWindow::onTargetAirspeedChanged);
-    connect(m_statusPanel, &StatusPanel::windOverrideRequested, this, &MainWindow::onWindOverride);
-
-    // MavlinkConnection signals
+    // ── MavlinkConnection signals ──
     connect(&m_connection, &MavlinkConnection::connectionRestored,
             this, &MainWindow::onConnectionRestored);
     connect(&m_connection, &MavlinkConnection::connectionLost,
@@ -542,19 +262,19 @@ void MainWindow::setupConnections()
     connect(m_connection.telemetry(), &TelemetryState::armedChanged,
             this, &MainWindow::onArmedStateChanged);
 
-    // Autopilot signals
-    connect(&m_autopilot, &AutopilotManager::engaged,
-            this, &MainWindow::onAutopilotEngaged);
-    connect(&m_autopilot, &AutopilotManager::disengaged,
-            this, &MainWindow::onAutopilotDisengaged);
-    connect(&m_autopilot, &AutopilotManager::waypointReached,
-            this, &MainWindow::onWaypointReached);
+    // ── Autopilot signals ──
+    connect(&m_autopilot, &AutopilotManager::engaged,         this, &MainWindow::onAutopilotEngaged);
+    connect(&m_autopilot, &AutopilotManager::disengaged,      this, &MainWindow::onAutopilotDisengaged);
+    connect(&m_autopilot, &AutopilotManager::waypointReached, this, &MainWindow::onWaypointReached);
+    connect(&m_autopilot, &AutopilotManager::homeOrbitEstablished,
+            this, &MainWindow::onHomeOrbitEstablished);
+
     connect(&m_autopilot, &AutopilotManager::avoidanceFailed,
             this, [this](const QString& reason) {
         statusBar()->showMessage(reason, 10000);
         SPDLOG_WARN("[MainWindow] Avoidance failed: {}", reason.toStdString());
 
-        m_notificationManager->pushOrReplace(Notification{
+        m_rightPanel->notificationManager()->pushOrReplace(Notification{
             NotificationLevel::Critical,
             QStringLiteral("Обход невозможен"),
             reason,
@@ -577,24 +297,13 @@ void MainWindow::setupConnections()
         }, QStringLiteral("avoidance"));
     });
 
-    connect(&m_autopilot, &AutopilotManager::homeOrbitEstablished,
-            this, &MainWindow::onHomeOrbitEstablished);
-
-    // Operational waypoint signals
-    connect(m_btnResumeRoute, &QPushButton::clicked, this, [this]() {
-        SPDLOG_INFO("[MainWindow] Resume route button clicked");
-        m_autopilot.cancelOperational();
-    });
-
+    // ── Operational WP signals ──
     connect(&m_autopilot, &AutopilotManager::operationalEngaged, this, [this]() {
         bool hasRoute = m_routePlanner.getRoute()
             && !m_routePlanner.getRoute()->waypoints.empty();
-        m_btnResumeRoute->setText(hasRoute
-            ? QStringLiteral("Продолжить маршрут")
-            : QStringLiteral("Завершить"));
-        m_btnResumeRoute->setVisible(true);
+        m_rightPanel->setResumeRouteVisible(true, hasRoute);
         SPDLOG_INFO("[MainWindow] Operational WP engaged — hasRoute={}", hasRoute);
-        m_notificationManager->pushOrReplace(Notification{
+        m_rightPanel->notificationManager()->pushOrReplace(Notification{
             NotificationLevel::Info,
             QStringLiteral("Оперативная точка"),
             QStringLiteral("Навигация к оперативной точке"),
@@ -608,19 +317,17 @@ void MainWindow::setupConnections()
         SPDLOG_INFO("[MainWindow] Operational WP reached, mode={}",
                     isVia ? "VIA" : "GOTO");
         if (isVia) {
-            // VIA_POINT — cancelOperational will follow automatically
-            m_btnResumeRoute->setVisible(false);
+            m_rightPanel->setResumeRouteVisible(false);
             m_mapWidget->backend()->clearOperationalWp();
             refreshMapWaypoints();
-            m_notificationManager->pushOrReplace(Notification{
+            m_rightPanel->notificationManager()->pushOrReplace(Notification{
                 NotificationLevel::Info,
                 QStringLiteral("Промежуточная пройдена"),
                 QStringLiteral("Возврат к маршруту"),
                 -1, {}, {}
             }, QStringLiteral("operational"));
         } else {
-            // GOTO — waiting for operator
-            m_notificationManager->pushOrReplace(Notification{
+            m_rightPanel->notificationManager()->pushOrReplace(Notification{
                 NotificationLevel::Warning,
                 QStringLiteral("Точка достигнута"),
                 QStringLiteral("Нажмите «Продолжить маршрут» для возврата"),
@@ -630,14 +337,14 @@ void MainWindow::setupConnections()
     });
 
     connect(&m_autopilot, &AutopilotManager::operationalCancelled, this, [this]() {
-        m_btnResumeRoute->setVisible(false);
+        m_rightPanel->setResumeRouteVisible(false);
         m_mapWidget->backend()->clearOperationalWp();
         refreshMapWaypoints();
         bool hasRoute = m_autopilot.isEngaged()
             && m_routePlanner.getRoute()
             && !m_routePlanner.getRoute()->waypoints.empty();
         SPDLOG_INFO("[MainWindow] Operational WP cancelled — hasRoute={}", hasRoute);
-        m_notificationManager->pushOrReplace(Notification{
+        m_rightPanel->notificationManager()->pushOrReplace(Notification{
             NotificationLevel::Info,
             hasRoute ? QStringLiteral("Маршрут") : QStringLiteral("Оперативная точка"),
             hasRoute ? QStringLiteral("Навигация по маршруту возобновлена")
@@ -646,7 +353,7 @@ void MainWindow::setupConnections()
         }, QStringLiteral("operational"));
     });
 
-    // Layer visibility → save config
+    // ── Layer visibility → save config ──
     connect(be, &MapBackend::showTrackChanged, this, [this] {
         m_config.gui.show_track = m_mapWidget->backend()->showTrack();
         saveConfig(m_config);
@@ -663,8 +370,6 @@ void MainWindow::setupConnections()
         m_config.gui.show_settlements = m_mapWidget->backend()->showSettlements();
         saveConfig(m_config);
     });
-
-    // Zones loaded deferred via QTimer::singleShot in constructor
 }
 
 void MainWindow::setupTimer()
@@ -707,30 +412,22 @@ void MainWindow::onDisconnect()
 
 void MainWindow::enableControls(bool enabled)
 {
-    for (auto* btn : {m_btnNav, m_btnSetPos, m_btnSetHome,
-                      m_btnLoadRoute, m_btnClearTrack, m_btnFollow, m_btnHome})
-        btn->setEnabled(enabled);
+    m_rightPanel->enableControls(enabled);
 }
 
 void MainWindow::onConnectionRestored()
 {
-    m_btnConnect->setEnabled(false);
-    m_btnDisconnect->setEnabled(true);
+    m_rightPanel->setConnected(true);
     enableControls(true);
 
-    m_lblStatus->setText(QStringLiteral("ON"));
-    m_lblStatus->setStyleSheet(QStringLiteral(
-        "color: %1; font-size: 10px; font-weight: 700; padding: 2px 8px; "
-        "border-radius: 10px; background-color: %2;")
-        .arg(theme::SUCCESS, theme::SUCCESS_BG));
     statusBar()->showMessage(QStringLiteral("Подключено — порт %1")
                               .arg(m_config.mavlink.sitl_port));
 
-    m_btnFollow->setChecked(true);
+    m_rightPanel->setFollowActive(true);
     m_mapWidget->backend()->setFollowMode(true);
     m_mapWidget->backend()->setZoom(13);
 
-    m_notificationManager->pushOrReplace(Notification{
+    m_rightPanel->notificationManager()->pushOrReplace(Notification{
         NotificationLevel::Info,
         QStringLiteral("Связь восстановлена"),
         QStringLiteral("MAVLink соединение активно"),
@@ -740,18 +437,11 @@ void MainWindow::onConnectionRestored()
 
 void MainWindow::onConnectionLost()
 {
-    m_btnConnect->setEnabled(true);
-    m_btnDisconnect->setEnabled(false);
+    m_rightPanel->setConnected(false);
     enableControls(false);
-
-    m_lblStatus->setText(QStringLiteral("OFF"));
-    m_lblStatus->setStyleSheet(QStringLiteral(
-        "color: %1; font-size: 10px; font-weight: 700; padding: 2px 8px; "
-        "border-radius: 10px; background-color: %2;")
-        .arg(theme::ERROR_CLR, theme::ERROR_BG));
     statusBar()->showMessage(QStringLiteral("Отключено"));
 
-    m_notificationManager->pushOrReplace(Notification{
+    m_rightPanel->notificationManager()->pushOrReplace(Notification{
         NotificationLevel::Critical,
         QStringLiteral("Связь потеряна"),
         QStringLiteral("MAVLink соединение прервано"),
@@ -763,18 +453,18 @@ void MainWindow::onConnectionLost()
 //  Position / Home
 // ═════════════════════════════════════════════════════════════════════════
 
-void MainWindow::onSetPositionToggle()
+void MainWindow::onSetPositionToggle(bool checked)
 {
-    m_setPositionMode = m_btnSetPos->isChecked();
+    m_setPositionMode = checked;
     updateLeftClickMode();
     statusBar()->showMessage(m_setPositionMode
         ? QStringLiteral("Кликните на карте для коррекции позиции EKF...")
         : QStringLiteral("Режим коррекции отменён"));
 }
 
-void MainWindow::onSetHomeToggle()
+void MainWindow::onSetHomeToggle(bool checked)
 {
-    m_setHomeMode = m_btnSetHome->isChecked();
+    m_setHomeMode = checked;
     updateLeftClickMode();
     statusBar()->showMessage(m_setHomeMode
         ? QStringLiteral("Кликните на карте для установки точки дома...")
@@ -798,7 +488,7 @@ void MainWindow::setCorrectionPosition(double lat, double lon)
 {
     m_connection.sendPositionReset(lat, lon);
     m_setPositionMode = false;
-    m_btnSetPos->setChecked(false);
+    m_rightPanel->setPositionMode(false);
     updateLeftClickMode();
     m_mapWidget->backend()->setAircraftPosition(lat, lon);
     // Force autopilot to recompute avoidance from new position
@@ -814,7 +504,7 @@ void MainWindow::setHomePosition(double lat, double lon)
     m_autopilot.setHomePosition(m_homePosition);
     m_mapWidget->backend()->setHome(lat, lon);
     m_setHomeMode = false;
-    m_btnSetHome->setChecked(false);
+    m_rightPanel->setHomePlacementMode(false);
     updateLeftClickMode();
     statusBar()->showMessage(QStringLiteral("Дом: %1, %2")
                               .arg(lat, 0, 'f', 6).arg(lon, 0, 'f', 6));
@@ -863,7 +553,7 @@ void MainWindow::processDroneHome(double lat, double lon)
     if (m_homeSource == HomeSource::NotSet) {
         setHomeFromDrone(lat, lon);
         if (m_config.home.notify_auto_set) {
-            m_notificationManager->pushOrReplace(Notification{
+            m_rightPanel->notificationManager()->pushOrReplace(Notification{
                 NotificationLevel::Info,
                 QStringLiteral("Точка дома установлена"),
                 QStringLiteral("Получена с дрона: %1, %2")
@@ -874,7 +564,7 @@ void MainWindow::processDroneHome(double lat, double lon)
     } else if (m_homeSource == HomeSource::Drone) {
         setHomeFromDrone(lat, lon);
         if (m_config.home.notify_auto_set) {
-            m_notificationManager->pushOrReplace(Notification{
+            m_rightPanel->notificationManager()->pushOrReplace(Notification{
                 NotificationLevel::Info,
                 QStringLiteral("Точка дома обновлена"),
                 QStringLiteral("Обновлена с дрона: %1, %2")
@@ -886,7 +576,7 @@ void MainWindow::processDroneHome(double lat, double lon)
         // HomeSource::Manual — conflict
         if (mode == "force") {
             setHomeFromDrone(lat, lon);
-            m_notificationManager->pushOrReplace(Notification{
+            m_rightPanel->notificationManager()->pushOrReplace(Notification{
                 NotificationLevel::Warning,
                 QStringLiteral("Точка дома заменена"),
                 QStringLiteral("Ручная точка заменена на дрон: %1, %2")
@@ -898,7 +588,7 @@ void MainWindow::processDroneHome(double lat, double lon)
             SPDLOG_INFO("[Home] Drone home received ({:.6f}, {:.6f}) — keeping manual", lat, lon);
         } else if (mode == "notify") {
             m_lastDroneHome = LatLon{lat, lon};
-            m_notificationManager->pushOrReplace(Notification{
+            m_rightPanel->notificationManager()->pushOrReplace(Notification{
                 NotificationLevel::Info,
                 QStringLiteral("Дрон прислал точку дома"),
                 QStringLiteral("Дрон: %1, %2 — ручная точка сохранена")
@@ -908,7 +598,7 @@ void MainWindow::processDroneHome(double lat, double lon)
         } else {
             // "ask"
             double droneLat = lat, droneLon = lon;
-            m_notificationManager->pushOrReplace(Notification{
+            m_rightPanel->notificationManager()->pushOrReplace(Notification{
                 NotificationLevel::Warning,
                 QStringLiteral("Дрон прислал точку дома"),
                 QStringLiteral("Дрон: %1, %2\nЗаменить ручную точку?")
@@ -947,7 +637,7 @@ void MainWindow::onArmedStateChanged()
             (std::abs(m_pendingDroneHome.lat) > 0.01 || std::abs(m_pendingDroneHome.lon) > 0.01)) {
             processDroneHome(m_pendingDroneHome.lat, m_pendingDroneHome.lon);
         } else if (m_config.home.notify_no_home && m_homeSource == HomeSource::NotSet) {
-            m_notificationManager->pushOrReplace(Notification{
+            m_rightPanel->notificationManager()->pushOrReplace(Notification{
                 NotificationLevel::Warning,
                 QStringLiteral("Точка дома не установлена"),
                 QStringLiteral("Дрон заармлен, но точка дома не получена с дрона"),
@@ -1016,8 +706,7 @@ void MainWindow::refreshMapWaypoints()
 
     localPerf.begin("update_controls");
     updateWaypointControls();
-    if (m_routePlannerPanel)
-        m_routePlannerPanel->refresh(wpList, activeIdx);
+    m_rightPanel->refreshRoute(wpList, activeIdx);
     localPerf.end("update_controls");
 
     localPerf.tick();
@@ -1027,15 +716,11 @@ void MainWindow::refreshMapWaypoints()
 void MainWindow::updateWaypointControls()
 {
     int n = m_routePlanner.waypointCount();
-    for (auto* w : {m_btnWpPrev, m_btnWpNext})
-        w->setEnabled(n > 0);
-    m_spinWaypoint->setEnabled(n > 0);
-
     if (n > 0) {
-        m_spinWaypoint->blockSignals(true);
-        m_spinWaypoint->setMaximum(n);
-        m_spinWaypoint->setValue(m_routePlanner.activeWaypointIndex() + 1);
-        m_spinWaypoint->blockSignals(false);
+        m_rightPanel->setWaypointRange(1, n);
+        m_rightPanel->setWaypointValue(m_routePlanner.activeWaypointIndex() + 1);
+    } else {
+        m_rightPanel->setWaypointRange(1, 1);
     }
 }
 
@@ -1282,9 +967,7 @@ void MainWindow::onWaypointPlacementRequested(double lat, double lon)
     SPDLOG_INFO("[MainWindow] placementRequested: ({:.5f},{:.5f})", lat, lon);
 
     // Uncheck the add button
-    if (m_btnAddWaypoint) m_btnAddWaypoint->setChecked(false);
-    if (m_routePlannerPanel) m_routePlannerPanel->findChild<QPushButton*>("btnAdd");
-    // (RoutePlannerPanel resets its own button via addWaypointRequested signal flow)
+    m_rightPanel->setAddWaypointMode(false);
 
     WaypointDialog dialog(lat, lon, &m_zoneChecker, false, false, this);
     if (dialog.exec() != QDialog::Accepted) return;
@@ -1305,7 +988,7 @@ void MainWindow::onWaypointPlacementRequested(double lat, double lon)
 
 void MainWindow::onWaypointPlacementCancelled()
 {
-    if (m_btnAddWaypoint) m_btnAddWaypoint->setChecked(false);
+    m_rightPanel->setAddWaypointMode(false);
     statusBar()->showMessage(QStringLiteral("Добавление точки отменено"), 2000);
 }
 
@@ -1332,9 +1015,9 @@ void MainWindow::onClearTrack()
     statusBar()->showMessage(QStringLiteral("Трек очищен"));
 }
 
-void MainWindow::onFollowToggle()
+void MainWindow::onFollowToggle(bool checked)
 {
-    m_mapWidget->backend()->setFollowMode(m_btnFollow->isChecked());
+    m_mapWidget->backend()->setFollowMode(checked);
 }
 
 void MainWindow::onMapMouseMove(double lat, double lon)
@@ -1418,9 +1101,9 @@ void MainWindow::loadZones()
     m_mapWidget->backend()->loadAllZones(zoneList);
 }
 
-void MainWindow::onDrawZoneToggle()
+void MainWindow::onDrawZoneToggle(bool checked)
 {
-    if (m_btnDrawZone->isChecked())
+    if (checked)
         onStartZoneDrawing();
     else
         cancelZoneDrawing();
@@ -1430,11 +1113,11 @@ void MainWindow::onStartZoneDrawing()
 {
     m_setPositionMode = false;
     m_setHomeMode = false;
-    m_btnSetPos->setChecked(false);
-    m_btnSetHome->setChecked(false);
+    m_rightPanel->setPositionMode(false);
+    m_rightPanel->setHomePlacementMode(false);
 
     m_drawingZoneMode = true;
-    m_btnDrawZone->setChecked(true);
+    m_rightPanel->setDrawZoneMode(true);
     m_mapWidget->backend()->startDrawing();
     statusBar()->showMessage(QStringLiteral(
         "Кликайте по карте для создания зоны... (двойной клик для завершения, Esc — отмена)"));
@@ -1443,7 +1126,7 @@ void MainWindow::onStartZoneDrawing()
 void MainWindow::cancelZoneDrawing()
 {
     m_drawingZoneMode = false;
-    m_btnDrawZone->setChecked(false);
+    m_rightPanel->setDrawZoneMode(false);
     m_mapWidget->backend()->cancelDrawing();
     statusBar()->showMessage(QString());
 }
@@ -1451,7 +1134,7 @@ void MainWindow::cancelZoneDrawing()
 void MainWindow::onZoneDrawingFinished(const QString& pointsJson)
 {
     m_drawingZoneMode = false;
-    m_btnDrawZone->setChecked(false);
+    m_rightPanel->setDrawZoneMode(false);
 
     SPDLOG_INFO("[MainWindow] onZoneDrawingFinished: json='{}' (len={})",
                  pointsJson.toStdString(), pointsJson.size());
@@ -1503,7 +1186,7 @@ void MainWindow::onZoneDrawingFinished(const QString& pointsJson)
 void MainWindow::onZoneDrawingCancelled()
 {
     m_drawingZoneMode = false;
-    m_btnDrawZone->setChecked(false);
+    m_rightPanel->setDrawZoneMode(false);
     statusBar()->showMessage(QStringLiteral("Рисование зоны отменено"));
 }
 
@@ -1656,11 +1339,11 @@ void MainWindow::onSettings()
     checkRouteConflicts();
 
     // Apply notification timings
-    m_notificationManager->setDefaultDurations(
+    m_rightPanel->notificationManager()->setDefaultDurations(
         m_config.notifications.info_duration_sec,
         m_config.notifications.warning_duration_sec,
         m_config.notifications.critical_duration_sec);
-    m_notificationManager->setCurtailPercent(m_config.notifications.interrupt_curtail_pct);
+    m_rightPanel->notificationManager()->setCurtailPercent(m_config.notifications.interrupt_curtail_pct);
 
     statusBar()->showMessage(QStringLiteral("Настройки сохранены"));
 }
@@ -1669,9 +1352,9 @@ void MainWindow::onSettings()
 //  Autopilot
 // ═════════════════════════════════════════════════════════════════════════
 
-void MainWindow::onNavToggle()
+void MainWindow::onNavToggle(bool checked)
 {
-    if (m_btnNav->isChecked()) {
+    if (checked) {
         if (m_autopilot.engageNav()) {
             auto* wp = m_routePlanner.activeWaypoint();
             if (wp) {
@@ -1679,7 +1362,7 @@ void MainWindow::onNavToggle()
                     .arg(wp->id).arg(m_routePlanner.waypointCount()));
             }
         } else {
-            m_btnNav->setChecked(false);
+            m_rightPanel->setNavActive(false);
             if (!m_routePlanner.getRoute())
                 statusBar()->showMessage(QStringLiteral("Загрузите маршрут"));
             else
@@ -1690,19 +1373,19 @@ void MainWindow::onNavToggle()
     }
 }
 
-void MainWindow::onHomeToggle()
+void MainWindow::onHomeToggle(bool checked)
 {
-    if (m_btnHome->isChecked()) {
+    if (checked) {
         if (!m_homePosition) {
-            m_btnHome->setChecked(false);
+            m_rightPanel->setHomeActive(false);
             statusBar()->showMessage(QStringLiteral("Установите точку Дом на карте"));
             return;
         }
         if (m_autopilot.engageHome()) {
-            m_btnNav->setChecked(false);
+            m_rightPanel->setNavActive(false);
             statusBar()->showMessage(QStringLiteral("Возврат домой"));
         } else {
-            m_btnHome->setChecked(false);
+            m_rightPanel->setHomeActive(false);
         }
     } else {
         m_autopilot.disengage(QStringLiteral("Отключено пользователем"));
@@ -1712,14 +1395,14 @@ void MainWindow::onHomeToggle()
 void MainWindow::onAutopilotEngaged(const QString& mode)
 {
     if (mode == "NAV")
-        m_btnNav->setChecked(true);
+        m_rightPanel->setNavActive(true);
 }
 
 void MainWindow::onAutopilotDisengaged(const QString& /*prevMode*/, const QString& reason)
 {
-    m_btnNav->setChecked(false);
-    m_btnHome->setChecked(false);
-    m_btnResumeRoute->setVisible(false);
+    m_rightPanel->setNavActive(false);
+    m_rightPanel->setHomeActive(false);
+    m_rightPanel->setResumeRouteVisible(false);
     m_mapWidget->backend()->clearOperationalWp();
     statusBar()->showMessage(reason.isEmpty()
         ? QStringLiteral("АП отключен")
@@ -1734,7 +1417,7 @@ void MainWindow::onAutopilotDisengaged(const QString& /*prevMode*/, const QStrin
         } else if (reason.contains(QStringLiteral("пилот"), Qt::CaseInsensitive)) {
             title = QStringLiteral("Ручной режим");
         }
-        m_notificationManager->push(Notification{level, title, reason, -1, {}, {}});
+        m_rightPanel->notificationManager()->push(Notification{level, title, reason, -1, {}, {}});
     }
 }
 
@@ -1747,7 +1430,7 @@ void MainWindow::onWaypointReached(int reachedId, int nextId)
     checkRouteConflicts();
     statusBar()->showMessage(QStringLiteral("WPT reached → %1/%2").arg(nextId).arg(total));
 
-    m_notificationManager->push(Notification{
+    m_rightPanel->notificationManager()->push(Notification{
         NotificationLevel::Info,
         QStringLiteral("Точка достигнута"),
         QStringLiteral("WP%1 пройдена, следующая WP%2").arg(reachedId).arg(nextId),
@@ -1798,7 +1481,7 @@ void MainWindow::onHomeOrbitEstablished()
         };
     }
 
-    m_notificationManager->pushOrReplace(std::move(n), QStringLiteral("home-orbit"));
+    m_rightPanel->notificationManager()->pushOrReplace(std::move(n), QStringLiteral("home-orbit"));
     statusBar()->showMessage(QStringLiteral("Самолёт в круге над домом — ожидаем решение"));
 }
 
@@ -1841,8 +1524,8 @@ void MainWindow::updateDisplay()
     auto* tel = m_connection.telemetry();
 
     { PerfScope s(m_perf, "telemetry_ui");
-        m_statusPanel->updateTelemetry(*tel);
-        m_lblMode->setText(tel->mode().isEmpty() ? QStringLiteral("---") : tel->mode());
+        m_rightPanel->updateTelemetry(*tel);
+        m_rightPanel->setFlightMode(tel->mode().isEmpty() ? QStringLiteral("---") : tel->mode());
     }
 
     auto pos = tel->position();
@@ -1859,7 +1542,7 @@ void MainWindow::updateDisplay()
                 double d = nav::haversineDistance(pos.lat, pos.lon,
                                                   m_homePosition->lat, m_homePosition->lon);
                 double e = nav::etaSeconds(d, tel->groundspeed());
-                m_statusPanel->updateNavigation(0, 0, d, e, 0.0);
+                m_rightPanel->updateNavigation(0, 0, d, e, 0.0);
             } else if (m_routePlanner.getRoute()) {
                 if (!m_autopilot.isEngaged()) {
                     if (m_routePlanner.isWaypointReached(pos)) {
@@ -1879,7 +1562,7 @@ void MainWindow::updateDisplay()
                 double xtk = m_routePlanner.crossTrackError(pos);
                 int idx = m_routePlanner.activeWaypointIndex();
                 int total = m_routePlanner.waypointCount();
-                m_statusPanel->updateNavigation(idx + 1, total, dist, eta, xtk);
+                m_rightPanel->updateNavigation(idx + 1, total, dist, eta, xtk);
             }
         }
     }
@@ -1898,7 +1581,7 @@ void MainWindow::updateDisplay()
         auto apMode = m_autopilot.mode();
         auto apStatus = m_autopilot.status();
         m_mapWidget->backend()->setReturningHome(apStatus.returningHome);
-        m_statusPanel->updateAutopilot(
+        m_rightPanel->updateAutopilot(
             apMode == AutopilotMode::MANUAL ? QStringLiteral("MANUAL") : QStringLiteral("NAV"),
             apStatus);
     }

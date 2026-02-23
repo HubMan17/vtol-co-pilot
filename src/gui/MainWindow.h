@@ -22,12 +22,10 @@
 #include "navigation/PathPlanner.h"
 #include "autopilot/AutopilotManager.h"
 #include "gui/MapWidget.h"
-#include "gui/StatusPanel.h"
-#include "gui/NotificationWidget.h"
+#include "gui/RightPanel.h"
 #include "gui/TileProxy.h"
 #include "gui/SettlementLoader.h"
 #include "gui/PerfLogger.h"
-#include "gui/RoutePlannerPanel.h"
 
 namespace vtol {
 
@@ -45,8 +43,6 @@ protected:
 private:
     // ── UI construction ──
     void setupUi();
-    QWidget* buildPanelHeader();
-    QWidget* buildControls();
     void setupConnections();
     void setupTimer();
     void applyConfig();
@@ -59,8 +55,8 @@ private:
     void onConnectionLost();
 
     // ── Position / Home ──
-    void onSetPositionToggle();
-    void onSetHomeToggle();
+    void onSetPositionToggle(bool checked);
+    void onSetHomeToggle(bool checked);
     void updateLeftClickMode();
     void onMapClicked(double lat, double lon);
     void setCorrectionPosition(double lat, double lon);
@@ -87,13 +83,13 @@ private:
 
     // ── Map controls ──
     void onClearTrack();
-    void onFollowToggle();
+    void onFollowToggle(bool checked);
     void onMapMouseMove(double lat, double lon);
     void onMapZoomChanged(int zoom);
 
     // ── Zones ──
     void loadZones();
-    void onDrawZoneToggle();
+    void onDrawZoneToggle(bool checked);
     void onStartZoneDrawing();
     void cancelZoneDrawing();
     void onZoneDrawingFinished(const QString& pointsJson);
@@ -108,8 +104,8 @@ private:
     void onSettlementTileLoaded(const QString& key, const FeatureList& features);
 
     // ── Autopilot ──
-    void onNavToggle();
-    void onHomeToggle();
+    void onNavToggle(bool checked);
+    void onHomeToggle(bool checked);
     void onAutopilotEngaged(const QString& mode);
     void onAutopilotDisengaged(const QString& prevMode, const QString& reason);
     void onWaypointReached(int reachedId, int nextId);
@@ -144,36 +140,11 @@ private:
     AutopilotManager m_autopilot;
 
     // ── GUI components ──
-    MapWidget* m_mapWidget = nullptr;
-    StatusPanel* m_statusPanel = nullptr;
-    NotificationWidget* m_notificationWidget = nullptr;
-    RoutePlannerPanel* m_routePlannerPanel = nullptr;
-    NotificationManager* m_notificationManager = nullptr;
-    TileProxy m_tileProxy;
+    MapWidget*   m_mapWidget   = nullptr;
+    RightPanel*  m_rightPanel  = nullptr;
+    TileProxy    m_tileProxy;
     SettlementLoader m_settlementLoader;
-    QTimer* m_updateTimer = nullptr;
-
-    // ── Header widgets ──
-    QPushButton* m_btnConnect = nullptr;
-    QPushButton* m_btnDisconnect = nullptr;
-    QLabel* m_lblMode = nullptr;
-    QLabel* m_lblStatus = nullptr;
-
-    // ── Control buttons ──
-    QPushButton* m_btnNav = nullptr;
-    QPushButton* m_btnSetPos = nullptr;
-    QPushButton* m_btnSetHome = nullptr;
-    QPushButton* m_btnLoadRoute = nullptr;
-    QPushButton* m_btnClearTrack = nullptr;
-    QPushButton* m_btnFollow = nullptr;
-    QPushButton* m_btnHome = nullptr;
-    QPushButton* m_btnDrawZone = nullptr;
-    QPushButton* m_btnSettings = nullptr;
-    QPushButton* m_btnResumeRoute = nullptr;
-    QPushButton* m_btnAddWaypoint = nullptr;
-    QPushButton* m_btnWpPrev = nullptr;
-    QPushButton* m_btnWpNext = nullptr;
-    QSpinBox* m_spinWaypoint = nullptr;
+    QTimer*      m_updateTimer = nullptr;
 
     // ── Status bar widgets ──
     QLabel* m_sbZoomVal = nullptr;
