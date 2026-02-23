@@ -408,18 +408,17 @@ QWidget* RightPanel::buildTabBar()
 
         auto* btnRow = new QHBoxLayout;
         btnRow->setContentsMargins(0, 0, 0, 0);
-        btnRow->setSpacing(3);
+        btnRow->setSpacing(4);
 
         m_tabBtns[i] = new QPushButton(labels[i]);
-        // For tab 1 (Маршрут) reduce right padding so badge sits tight
-        const QString tabPad = (i == 1) ? "8px 2px 6px 6px" : "8px 6px 6px 6px";
+        m_tabBtns[i]->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
         m_tabBtns[i]->setStyleSheet(QString(
             "QPushButton { background: transparent; color: %1; font-family: \"%2\"; "
-            "font-size: 12px; font-weight: 500; padding: %3; border: none; "
+            "font-size: 12px; font-weight: 500; padding: 8px 4px 6px 6px; border: none; "
             "outline: none; }"
-            "QPushButton:hover { color: %4; }"
+            "QPushButton:hover { color: %3; }"
             "QPushButton:focus { border: none; outline: none; }")
-            .arg(C::TXT_S, C::SANS, tabPad, C::TXT));
+            .arg(C::TXT_S, C::SANS, C::TXT));
         m_tabBtns[i]->setCursor(Qt::PointingHandCursor);
         m_tabBtns[i]->setFocusPolicy(Qt::NoFocus);
         btnRow->addWidget(m_tabBtns[i]);
@@ -437,6 +436,7 @@ QWidget* RightPanel::buildTabBar()
             m_routeBadge->hide();
             btnRow->addWidget(m_routeBadge);
         }
+        btnRow->addStretch();  // push text+badge to the left
 
         colLay->addLayout(btnRow);
 
@@ -457,7 +457,7 @@ QWidget* RightPanel::buildTabBar()
     // Active tab initial style
     m_tabBtns[0]->setStyleSheet(QString(
         "QPushButton { background: transparent; color: %1; font-family: \"%2\"; "
-        "font-size: 12px; font-weight: 600; padding: 8px 6px 6px 6px; "
+        "font-size: 12px; font-weight: 600; padding: 8px 4px 6px 6px; "
         "border: none; outline: none; }"
         "QPushButton:hover { color: %1; }"
         "QPushButton:focus { border: none; outline: none; }")
@@ -471,15 +471,14 @@ void RightPanel::switchTab(int index)
     if (index == m_activeTab) return;
     for (int i = 0; i < 3; ++i) {
         bool active = (i == index);
-        const QString pad = (i == 1) ? "8px 2px 6px 6px" : "8px 6px 6px 6px";
         m_tabBtns[i]->setStyleSheet(QString(
             "QPushButton { background: transparent; color: %1; font-family: \"%2\"; "
-            "font-size: 12px; font-weight: %3; padding: %4; "
+            "font-size: 12px; font-weight: %3; padding: 8px 4px 6px 6px; "
             "border: none; outline: none; }"
-            "QPushButton:hover { color: %5; }"
+            "QPushButton:hover { color: %4; }"
             "QPushButton:focus { border: none; outline: none; }")
             .arg(active ? C::TXT : C::TXT_S, C::SANS,
-                 active ? "600" : "500", pad,
+                 active ? "600" : "500",
                  active ? C::TXT : C::TXT));
         m_tabIndicators[i]->setStyleSheet(QString("background-color: %1;")
             .arg(active ? C::BLUE : "transparent"));
