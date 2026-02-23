@@ -391,6 +391,7 @@ void SettingsDialog::setupUi(Page initialPage)
     m_sidebar->addItem(QStringLiteral("Данные"));
     m_sidebar->addItem(QStringLiteral("Точка дома"));
     m_sidebar->addItem(QStringLiteral("Уведомления"));
+    m_sidebar->addItem(QStringLiteral("Система"));
 
     m_stack = new QStackedWidget;
     m_stack->setStyleSheet(QStringLiteral(
@@ -400,6 +401,7 @@ void SettingsDialog::setupUi(Page initialPage)
     m_stack->addWidget(createDataPage());
     m_stack->addWidget(createHomePage());
     m_stack->addWidget(createNotificationsPage());
+    m_stack->addWidget(createSystemPage());
 
     connect(m_sidebar, &QListWidget::currentRowChanged,
             m_stack, &QStackedWidget::setCurrentIndex);
@@ -748,6 +750,119 @@ QWidget* SettingsDialog::createNotificationsPage()
     return page;
 }
 
+QWidget* SettingsDialog::createSystemPage()
+{
+    auto* page = new QWidget;
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(20, 20, 20, 20);
+    layout->setSpacing(12);
+
+    // ── Battery thresholds ──
+    auto* battGroup = new QGroupBox(QStringLiteral("Батарея — пороги напряжения"));
+    auto* bl = new QFormLayout(battGroup);
+    bl->setSpacing(8);
+
+    m_spinVMax = new QDoubleSpinBox;
+    m_spinVMax->setRange(10.0, 100.0);
+    m_spinVMax->setDecimals(1);
+    m_spinVMax->setSingleStep(0.1);
+    m_spinVMax->setValue(m_config.system.v_max);
+    m_spinVMax->setSuffix(QStringLiteral(" В"));
+    bl->addRow(QStringLiteral("Макс. напряжение:"), m_spinVMax);
+
+    m_spinVOpZero = new QDoubleSpinBox;
+    m_spinVOpZero->setRange(10.0, 100.0);
+    m_spinVOpZero->setDecimals(1);
+    m_spinVOpZero->setSingleStep(0.1);
+    m_spinVOpZero->setValue(m_config.system.v_operational_zero);
+    m_spinVOpZero->setSuffix(QStringLiteral(" В"));
+    bl->addRow(QStringLiteral("Операционный ноль:"), m_spinVOpZero);
+
+    m_spinVAbsZero = new QDoubleSpinBox;
+    m_spinVAbsZero->setRange(5.0, 100.0);
+    m_spinVAbsZero->setDecimals(1);
+    m_spinVAbsZero->setSingleStep(0.1);
+    m_spinVAbsZero->setValue(m_config.system.v_absolute_zero);
+    m_spinVAbsZero->setSuffix(QStringLiteral(" В"));
+    bl->addRow(QStringLiteral("Абсолютный ноль:"), m_spinVAbsZero);
+
+    m_spinVCritical = new QDoubleSpinBox;
+    m_spinVCritical->setRange(5.0, 100.0);
+    m_spinVCritical->setDecimals(1);
+    m_spinVCritical->setSingleStep(0.1);
+    m_spinVCritical->setValue(m_config.system.v_critical);
+    m_spinVCritical->setSuffix(QStringLiteral(" В"));
+    bl->addRow(QStringLiteral("Критическое напряжение:"), m_spinVCritical);
+
+    m_spinHysteresis = new QDoubleSpinBox;
+    m_spinHysteresis->setRange(0.1, 5.0);
+    m_spinHysteresis->setDecimals(1);
+    m_spinHysteresis->setSingleStep(0.1);
+    m_spinHysteresis->setValue(m_config.system.hysteresis_margin);
+    m_spinHysteresis->setSuffix(QStringLiteral(" В"));
+    bl->addRow(QStringLiteral("Гистерезис:"), m_spinHysteresis);
+
+    auto* lblHyst = new QLabel(QStringLiteral(
+        "На сколько вольт выше порога должно подняться напряжение, "
+        "чтобы сбросить предупреждение (борьба с прыжками)."));
+    lblHyst->setWordWrap(true);
+    lblHyst->setStyleSheet(QStringLiteral("color: %1; font-size: 11px;").arg(theme::TEXT_SECONDARY));
+    bl->addRow(lblHyst);
+
+    layout->addWidget(battGroup);
+
+    // ── Amperage ──
+    auto* ampGroup = new QGroupBox(QStringLiteral("Ток"));
+    auto* al = new QFormLayout(ampGroup);
+    al->setSpacing(8);
+
+    m_spinAmpWarning = new QDoubleSpinBox;
+    m_spinAmpWarning->setRange(1.0, 200.0);
+    m_spinAmpWarning->setDecimals(1);
+    m_spinAmpWarning->setSingleStep(1.0);
+    m_spinAmpWarning->setValue(m_config.system.amperage_warning);
+    m_spinAmpWarning->setSuffix(QStringLiteral(" А"));
+    al->addRow(QStringLiteral("Порог предупреждения:"), m_spinAmpWarning);
+
+    auto* lblAmp = new QLabel(QStringLiteral(
+        "Предупреждение о высоком токе срабатывает только при активном автопилоте."));
+    lblAmp->setWordWrap(true);
+    lblAmp->setStyleSheet(QStringLiteral("color: %1; font-size: 11px;").arg(theme::TEXT_SECONDARY));
+    al->addRow(lblAmp);
+
+    layout->addWidget(ampGroup);
+
+    // ── Actions ──
+    auto* actGroup = new QGroupBox(QStringLiteral("Действия при критических порогах"));
+    auto* fl = new QFormLayout(actGroup);
+    fl->setSpacing(8);
+
+    m_comboActionLimit = new QComboBox;
+    m_comboActionLimit->addItem(QStringLiteral("Только уведомление"),        QStringLiteral("notify"));
+    m_comboActionLimit->addItem(QStringLiteral("Предложить возврат домой"),  QStringLiteral("suggest_rth"));
+    m_comboActionLimit->addItem(QStringLiteral("Автоматический RTL"),        QStringLiteral("auto_rtl"));
+    {
+        int idx = m_comboActionLimit->findData(
+            QString::fromStdString(m_config.system.action_on_limit));
+        if (idx >= 0) m_comboActionLimit->setCurrentIndex(idx);
+    }
+    fl->addRow(QStringLiteral("При исчерпании заряда:"), m_comboActionLimit);
+
+    m_comboActionCritical = new QComboBox;
+    m_comboActionCritical->addItem(QStringLiteral("Только уведомление"),  QStringLiteral("notify"));
+    m_comboActionCritical->addItem(QStringLiteral("Автоматический RTL"),  QStringLiteral("auto_rtl"));
+    {
+        int idx = m_comboActionCritical->findData(
+            QString::fromStdString(m_config.system.action_on_critical));
+        if (idx >= 0) m_comboActionCritical->setCurrentIndex(idx);
+    }
+    fl->addRow(QStringLiteral("При критическом заряде:"), m_comboActionCritical);
+
+    layout->addWidget(actGroup);
+    layout->addStretch();
+    return page;
+}
+
 void SettingsDialog::onSettlementModeChanged()
 {
     bool isAlt = m_comboSettlementMode->currentData().toString() == "below_altitude";
@@ -777,6 +892,17 @@ AppConfig SettingsDialog::getConfig() const
     cfg.notifications.warning_duration_sec  = m_spinWarningDuration->value();
     cfg.notifications.critical_duration_sec = m_spinCriticalDuration->value();
     cfg.notifications.interrupt_curtail_pct = m_spinCurtailPct->value();
+
+    cfg.system.v_max              = m_spinVMax->value();
+    cfg.system.v_operational_zero = m_spinVOpZero->value();
+    cfg.system.v_absolute_zero    = m_spinVAbsZero->value();
+    cfg.system.v_critical         = m_spinVCritical->value();
+    cfg.system.hysteresis_margin  = m_spinHysteresis->value();
+    cfg.system.amperage_warning   = m_spinAmpWarning->value();
+    cfg.system.action_on_limit    =
+        m_comboActionLimit->currentData().toString().toStdString();
+    cfg.system.action_on_critical =
+        m_comboActionCritical->currentData().toString().toStdString();
 
     return cfg;
 }

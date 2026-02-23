@@ -10,6 +10,7 @@
 #include <QTimer>
 #include <QVariantMap>
 #include <QVector>
+#include <QPainter>
 #include <optional>
 
 #include "autopilot/AutopilotManager.h"
@@ -18,6 +19,64 @@
 namespace vtol {
 
 class TelemetryState;
+
+// ─── BatteryIconWidget ─── realistic battery shape via QPainter ─────────────
+class BatteryIconWidget : public QWidget {
+    Q_OBJECT
+public:
+    explicit BatteryIconWidget(QWidget* parent = nullptr)
+        : QWidget(parent) { setFixedSize(48, 24); }
+
+    void setPercent(int pct) {
+        m_pct = qBound(0, pct, 100);
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+
+        const QColor green("#00e6a0");
+        const QColor orange("#ff9933");
+        const QColor red("#ff4466");
+        const QColor borderColor = m_pct > 50 ? green : (m_pct > 20 ? orange : red);
+        const QColor fillColor   = borderColor;
+
+        // Body: rounded rect (left portion)
+        const double bodyW = 38.0, bodyH = 20.0;
+        const double bodyX = 1.0,  bodyY = 2.0;
+        const double r = 3.0;
+
+        // Terminal nub on the right
+        const double nubW = 4.0, nubH = 8.0;
+        const double nubX = bodyX + bodyW + 1.0;
+        const double nubY = bodyY + (bodyH - nubH) / 2.0;
+
+        // Draw body border
+        p.setPen(QPen(borderColor, 1.5));
+        p.setBrush(Qt::NoBrush);
+        p.drawRoundedRect(QRectF(bodyX, bodyY, bodyW, bodyH), r, r);
+
+        // Draw terminal nub
+        p.setPen(Qt::NoPen);
+        p.setBrush(borderColor);
+        p.drawRoundedRect(QRectF(nubX, nubY, nubW, nubH), 1.5, 1.5);
+
+        // Fill bar inside body
+        const double pad = 3.0;
+        const double maxFillW = bodyW - 2 * pad;
+        const double fillW = maxFillW * m_pct / 100.0;
+        if (fillW > 0.5) {
+            p.setBrush(fillColor);
+            p.drawRoundedRect(QRectF(bodyX + pad, bodyY + pad,
+                                     fillW, bodyH - 2 * pad), 1.5, 1.5);
+        }
+    }
+
+private:
+    int m_pct = 0;
+};
 
 // ─── PanelCell ─── compact metric display cell ─────────────────────────────
 class PanelCell : public QWidget {
@@ -227,7 +286,7 @@ private:
     int          m_dropTargetIdx   = -1;
 
     // ── System tab ────────────────────────────────────────────────────────
-    QFrame*  m_battFill        = nullptr;
+    BatteryIconWidget* m_battIcon = nullptr;
     QLabel*  m_battVoltLabel   = nullptr;
     QLabel*  m_battPctLabel    = nullptr;
     QLabel*  m_battTimeLabel   = nullptr;

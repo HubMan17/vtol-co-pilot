@@ -134,6 +134,24 @@ AppConfig loadConfig(const std::string& path)
             cfg.notifications.critical_duration_sec, cfg.notifications.interrupt_curtail_pct);
     }
 
+    // --- system ---
+    if (data.contains("system")) {
+        auto& s = data["system"];
+        if (s.contains("v_max"))                s["v_max"].get_to(cfg.system.v_max);
+        if (s.contains("v_operational_zero"))    s["v_operational_zero"].get_to(cfg.system.v_operational_zero);
+        if (s.contains("v_absolute_zero"))       s["v_absolute_zero"].get_to(cfg.system.v_absolute_zero);
+        if (s.contains("v_critical"))            s["v_critical"].get_to(cfg.system.v_critical);
+        if (s.contains("hysteresis_margin"))     s["hysteresis_margin"].get_to(cfg.system.hysteresis_margin);
+        if (s.contains("rolling_avg_samples"))   s["rolling_avg_samples"].get_to(cfg.system.rolling_avg_samples);
+        if (s.contains("amperage_warning"))      s["amperage_warning"].get_to(cfg.system.amperage_warning);
+        if (s.contains("amperage_debounce_sec")) s["amperage_debounce_sec"].get_to(cfg.system.amperage_debounce_sec);
+        if (s.contains("action_on_limit"))       s["action_on_limit"].get_to(cfg.system.action_on_limit);
+        if (s.contains("action_on_critical"))    s["action_on_critical"].get_to(cfg.system.action_on_critical);
+        SPDLOG_INFO("[Config::load] system: v_max={:.1f}, v_op_zero={:.1f}, v_crit={:.1f}, hysteresis={:.1f}",
+            cfg.system.v_max, cfg.system.v_operational_zero,
+            cfg.system.v_critical, cfg.system.hysteresis_margin);
+    }
+
     SPDLOG_DEBUG("Config loaded: SITL={}:{}, proxy_port={}, track_length={}",
         cfg.mavlink.sitl_host, cfg.mavlink.sitl_port, cfg.mavlink.proxy_port, cfg.gui.track_length);
 
@@ -207,6 +225,19 @@ void saveConfig(const AppConfig& cfg, const std::string& path)
         {"warning_duration_sec",  cfg.notifications.warning_duration_sec},
         {"critical_duration_sec", cfg.notifications.critical_duration_sec},
         {"interrupt_curtail_pct", cfg.notifications.interrupt_curtail_pct}
+    };
+
+    data["system"] = {
+        {"v_max",                cfg.system.v_max},
+        {"v_operational_zero",   cfg.system.v_operational_zero},
+        {"v_absolute_zero",      cfg.system.v_absolute_zero},
+        {"v_critical",           cfg.system.v_critical},
+        {"hysteresis_margin",    cfg.system.hysteresis_margin},
+        {"rolling_avg_samples",  cfg.system.rolling_avg_samples},
+        {"amperage_warning",     cfg.system.amperage_warning},
+        {"amperage_debounce_sec", cfg.system.amperage_debounce_sec},
+        {"action_on_limit",      cfg.system.action_on_limit},
+        {"action_on_critical",   cfg.system.action_on_critical}
     };
 
     std::ofstream file(path);

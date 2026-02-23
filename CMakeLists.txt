@@ -42,6 +42,7 @@ include(cmake/Dependencies.cmake)
 set(SOURCES
     src/main.cpp
     src/core/Config.cpp
+    src/core/BatteryMonitor.cpp
     src/mavlink/TelemetryState.cpp
     src/mavlink/MavlinkConnection.cpp
     src/mavlink/MavlinkProxy.cpp

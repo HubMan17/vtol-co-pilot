@@ -53,6 +53,27 @@ struct NotificationConfig {
     int interrupt_curtail_pct = 50;  // % оставшегося времени при прерывании низкоприоритетного
 };
 
+struct SystemConfig {
+    // Battery voltage thresholds
+    double v_max              = 50.2;    // Fully charged
+    double v_operational_zero = 40.5;    // Operational zero — time to land
+    double v_absolute_zero    = 35.0;    // Real zero
+    double v_critical         = 38.0;    // Critical — risk of thrust loss
+
+    // Hysteresis
+    double hysteresis_margin  = 1.0;     // Volts above threshold to reset
+    int    rolling_avg_samples = 5;      // Smoothing window size
+
+    // Amperage
+    double amperage_warning     = 20.0;  // Amps threshold for warning
+    int    amperage_debounce_sec = 30;   // Minimum interval between warnings
+
+    // Actions: "notify" | "suggest_rth" | "auto_rtl"
+    std::string action_on_limit    = "notify";
+    // Actions: "notify" | "auto_rtl"
+    std::string action_on_critical = "notify";
+};
+
 struct NavigationConfig {
     double waypoint_radius = 150.0;
 };
@@ -75,6 +96,7 @@ struct AppConfig {
     ZoneAvoidanceConfig zone_avoidance;
     HomeConfig home;
     NotificationConfig notifications;
+    SystemConfig system;
 };
 
 // Load config from JSON file. Returns default config if file doesn't exist.

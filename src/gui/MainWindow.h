@@ -14,6 +14,7 @@
 
 #include "core/Config.h"
 #include "core/Types.h"
+#include "core/BatteryMonitor.h"
 #include "mavlink/MavlinkConnection.h"
 #include "mavlink/MavlinkProxy.h"
 #include "navigation/RoutePlanner.h"
@@ -115,6 +116,9 @@ private:
     void onTargetAirspeedChanged(int s);
     void onWindOverride(int direction, int speed);
 
+    // ── Battery monitor ──
+    void setupBatteryMonitor();
+
     // ── Display loop ──
     void updateDisplay();
     void checkRouteConflicts();
@@ -138,6 +142,7 @@ private:
     ZoneChecker m_zoneChecker;
     PathPlanner m_pathPlanner;
     AutopilotManager m_autopilot;
+    BatteryMonitor   m_batteryMonitor;
 
     // ── GUI components ──
     MapWidget*   m_mapWidget   = nullptr;

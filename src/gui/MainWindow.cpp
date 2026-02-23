@@ -54,6 +54,10 @@ MainWindow::MainWindow(AppConfig config, QWidget* parent)
     theme::applyDarkTitlebar(static_cast<quintptr>(winId()));
     showMaximized();
 
+    // ── Battery monitor ──
+    m_batteryMonitor.configure(m_config.system);
+    setupBatteryMonitor();
+
     // Deferred zone loading — let the event loop process UI first
     QTimer::singleShot(0, this, &MainWindow::loadZones);
 
@@ -1345,7 +1349,115 @@ void MainWindow::onSettings()
         m_config.notifications.critical_duration_sec);
     m_rightPanel->notificationManager()->setCurtailPercent(m_config.notifications.interrupt_curtail_pct);
 
+    // Apply system / battery monitor settings
+    m_batteryMonitor.configure(m_config.system);
+
     statusBar()->showMessage(QStringLiteral("Настройки сохранены"));
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+//  Battery monitor
+// ═════════════════════════════════════════════════════════════════════════
+
+void MainWindow::setupBatteryMonitor()
+{
+    auto* nm = m_rightPanel->notificationManager();
+
+    // 25% / 50% consumed — informational warnings
+    connect(&m_batteryMonitor, &BatteryMonitor::batteryWarning,
+            this, [this, nm](const QString& title, const QString& message, const QString& tag) {
+        SPDLOG_INFO("[MainWindow] battery warning: {} ({})", title.toStdString(), tag.toStdString());
+
+        if (tag == QStringLiteral("batt-75")) {
+            // 75% consumed — suggest return home
+            Notification n;
+            n.level = NotificationLevel::Warning;
+            n.title = title;
+            n.message = message;
+            n.durationSec = 0;  // infinite until dismissed
+            if (m_config.system.action_on_limit != "notify") {
+                n.actions.push_back({QStringLiteral("Возврат домой"), [this]{
+                    SPDLOG_WARN("[MainWindow] battery 75%: user chose RTH");
+                    m_rightPanel->setHomeActive(true);
+                    onHomeToggle(true);
+                }});
+            }
+            nm->pushOrReplace(std::move(n), tag);
+        } else {
+            // 25% / 50% — just notify
+            nm->pushOrReplace(Notification{
+                tag == QStringLiteral("batt-25") ? NotificationLevel::Info : NotificationLevel::Warning,
+                title, message, -1, {}, {}
+            }, tag);
+        }
+    });
+
+    // Operational zero (limit reached — need to land)
+    connect(&m_batteryMonitor, &BatteryMonitor::batteryLimit,
+            this, [this, nm](const QString& title, const QString& message) {
+        const auto& action = m_config.system.action_on_limit;
+        SPDLOG_WARN("[MainWindow] battery limit reached, action={}", action);
+
+        if (action == "auto_rtl") {
+            m_autopilot.activateRtl();
+            nm->pushOrReplace(Notification{
+                NotificationLevel::Critical, title,
+                message + QStringLiteral("\nRTL активирован автоматически"),
+                0, {}, {}
+            }, QStringLiteral("batt-limit"));
+        } else {
+            Notification n;
+            n.level = NotificationLevel::Critical;
+            n.title = title;
+            n.message = message;
+            n.durationSec = 0;
+            if (action == "suggest_rth") {
+                n.actions.push_back({QStringLiteral("Возврат домой"), [this]{
+                    SPDLOG_WARN("[MainWindow] battery limit: user chose RTH");
+                    m_rightPanel->setHomeActive(true);
+                    onHomeToggle(true);
+                }});
+            }
+            nm->pushOrReplace(std::move(n), QStringLiteral("batt-limit"));
+        }
+    });
+
+    // Critical voltage — thrust loss risk
+    connect(&m_batteryMonitor, &BatteryMonitor::batteryCritical,
+            this, [this, nm](const QString& title, const QString& message) {
+        const auto& action = m_config.system.action_on_critical;
+        SPDLOG_ERROR("[MainWindow] BATTERY CRITICAL, action={}", action);
+
+        if (action == "auto_rtl") {
+            m_autopilot.activateRtl();
+            nm->pushOrReplace(Notification{
+                NotificationLevel::Critical, title,
+                message + QStringLiteral("\nRTL активирован автоматически!"),
+                0, {}, {}
+            }, QStringLiteral("batt-critical"));
+        } else {
+            Notification n;
+            n.level = NotificationLevel::Critical;
+            n.title = title;
+            n.message = message;
+            n.durationSec = 0;
+            n.actions.push_back({QStringLiteral("Активировать RTL"), [this]{
+                SPDLOG_ERROR("[MainWindow] battery critical: user chose RTL");
+                m_autopilot.activateRtl();
+            }});
+            nm->pushOrReplace(std::move(n), QStringLiteral("batt-critical"));
+        }
+    });
+
+    // High amperage
+    connect(&m_batteryMonitor, &BatteryMonitor::amperageWarning,
+            this, [nm](const QString& title, const QString& message) {
+        nm->pushOrReplace(Notification{
+            NotificationLevel::Warning, title, message, -1, {}, {}
+        }, QStringLiteral("amp-high"));
+    });
+
+    SPDLOG_INFO("[MainWindow] battery monitor initialized");
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -1526,6 +1638,10 @@ void MainWindow::updateDisplay()
     { PerfScope s(m_perf, "telemetry_ui");
         m_rightPanel->updateTelemetry(*tel);
         m_rightPanel->setFlightMode(tel->mode().isEmpty() ? QStringLiteral("---") : tel->mode());
+
+        // Feed battery monitor
+        m_batteryMonitor.setAutopilotEngaged(m_autopilot.isEngaged());
+        m_batteryMonitor.update(tel->batteryVoltage(), tel->batteryCurrent());
     }
 
     auto pos = tel->position();

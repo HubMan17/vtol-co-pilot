@@ -1322,26 +1322,9 @@ QWidget* RightPanel::buildSystemTab()
         bl->setContentsMargins(14, 10, 14, 10);
         bl->setSpacing(12);
 
-        // Battery icon
-        auto* battIconBox = new QFrame;
-        battIconBox->setObjectName("battIconBox");
-        battIconBox->setFixedSize(42, 21);
-        battIconBox->setStyleSheet(QString(
-            "QFrame#battIconBox { border: 2px solid %1; border-radius: 3px; background: transparent; }")
-            .arg(C::GREEN));
-
-        m_battFill = new QFrame(battIconBox);
-        m_battFill->setGeometry(3, 3, 25, 13);
-        m_battFill->setStyleSheet(QString(
-            "background-color: %1; border-radius: 1px;").arg(C::GREEN));
-
-        // Tip of battery
-        auto* tip = new QFrame(battIconBox);
-        tip->setGeometry(42, 6, 4, 9);
-        tip->setStyleSheet(QString("background-color: %1; border-radius: 1px;").arg(C::GREEN));
-        tip->setFixedSize(4, 9);
-
-        bl->addWidget(battIconBox);
+        // Battery icon (QPainter widget)
+        m_battIcon = new BatteryIconWidget;
+        bl->addWidget(m_battIcon);
 
         // Voltage + spec
         auto* voltGroup = new QWidget;
@@ -1354,9 +1337,6 @@ QWidget* RightPanel::buildSystemTab()
             "color: %1; font-family: \"%2\"; font-size: 18px; font-weight: 700; border: none;")
             .arg(C::GREEN, C::MONO));
         vl->addWidget(m_battVoltLabel);
-        auto* specLbl = new QLabel(QStringLiteral("12S · 22000 мАч"));
-        specLbl->setStyleSheet(QString("color: %1; font-size: 10px; border: none;").arg(C::TXT_S));
-        vl->addWidget(specLbl);
         bl->addWidget(voltGroup);
 
         bl->addStretch();
@@ -1430,7 +1410,13 @@ QWidget* RightPanel::buildSystemTab()
         grid->setContentsMargins(0, 0, 0, 0);
         grid->setSpacing(6);
 
-        const char* names[] = {"M1 FL", "M2 FR", "M3 BL", "M4 BR", "Pusher"};
+        const QString names[] = {
+            QStringLiteral("\u041C\u0031 \u0417\u041F"),   // М1 ЗП
+            QStringLiteral("\u041C\u0032 \u041F\u041F"),   // М2 ПП
+            QStringLiteral("\u041C\u0033 \u0417\u041B"),   // М3 ЗЛ
+            QStringLiteral("\u041C\u0034 \u041F\u041B"),   // М4 ПЛ
+            QStringLiteral("\u0422\u044F\u0433\u0430")     // Тяга
+        };
         for (int i = 0; i < 5; ++i) {
             auto* cell = new QFrame;
             cell->setStyleSheet(QString(
@@ -1779,25 +1765,17 @@ void RightPanel::updateTelemetry(const TelemetryState& state)
     if (m_battCurrLabel)
         m_battCurrLabel->setText(QString("%1 А").arg(state.batteryCurrent(), 0, 'f', 1));
 
-    // Calculate percentage from voltage (12S LiPo: 3.3V–4.2V per cell → 39.6–50.4V total)
-    const double V_MIN = 39.6, V_MAX = 50.4;
+    // Calculate percentage from voltage (operational range: v_max → v_operational_zero)
+    const double V_OP_ZERO = 40.5, V_MAX = 50.2;
     if (v > 0.5) {
-        int pct = static_cast<int>(qBound(0.0, (v - V_MIN) / (V_MAX - V_MIN) * 100.0, 100.0));
+        int pct = static_cast<int>(qBound(0.0, (v - V_OP_ZERO) / (V_MAX - V_OP_ZERO) * 100.0, 100.0));
         if (m_battPctLabel)
             m_battPctLabel->setText(QString("%1%").arg(pct));
-
-        // Update battery icon fill bar (inner max width = 34px)
-        if (m_battFill) {
-            const int MAX_W = 34;
-            int fillW = qMax(1, pct * MAX_W / 100);
-            m_battFill->setGeometry(3, 3, fillW, 13);
-            const char* fillColor = pct > 50 ? C::GREEN : (pct > 20 ? C::ORANGE : C::RED);
-            m_battFill->setStyleSheet(
-                QString("background-color: %1; border-radius: 1px;").arg(fillColor));
-        }
+        if (m_battIcon)
+            m_battIcon->setPercent(pct);
     } else {
         if (m_battPctLabel) m_battPctLabel->setText(QStringLiteral("—%"));
-        if (m_battFill)     m_battFill->setGeometry(3, 3, 0, 13);
+        if (m_battIcon)     m_battIcon->setPercent(0);
     }
 }
 

@@ -2,6 +2,7 @@
 
 #include <QDialog>
 #include <QSpinBox>
+#include <QDoubleSpinBox>
 #include <QComboBox>
 #include <QCheckBox>
 #include <QLineEdit>
@@ -105,7 +106,7 @@ private:
 class SettingsDialog : public QDialog {
     Q_OBJECT
 public:
-    enum Page { PageMap = 0, PageZones = 1, PageData = 2, PageHome = 3, PageNotifications = 4 };
+    enum Page { PageMap = 0, PageZones = 1, PageData = 2, PageHome = 3, PageNotifications = 4, PageSystem = 5 };
 
     explicit SettingsDialog(const AppConfig& config,
                             Page initialPage = PageMap,
@@ -125,6 +126,7 @@ private:
     QWidget* createDataPage();
     QWidget* createHomePage();
     QWidget* createNotificationsPage();
+    QWidget* createSystemPage();
     void onSettlementModeChanged();
 
     AppConfig m_config;
@@ -154,6 +156,16 @@ private:
     QSpinBox* m_spinWarningDuration  = nullptr;
     QSpinBox* m_spinCriticalDuration = nullptr;
     QSpinBox* m_spinCurtailPct       = nullptr;
+
+    // System page
+    QDoubleSpinBox* m_spinVMax           = nullptr;
+    QDoubleSpinBox* m_spinVOpZero        = nullptr;
+    QDoubleSpinBox* m_spinVAbsZero       = nullptr;
+    QDoubleSpinBox* m_spinVCritical      = nullptr;
+    QDoubleSpinBox* m_spinHysteresis     = nullptr;
+    QDoubleSpinBox* m_spinAmpWarning     = nullptr;
+    QComboBox*      m_comboActionLimit   = nullptr;
+    QComboBox*      m_comboActionCritical = nullptr;
 };
 
 } // namespace vtol
