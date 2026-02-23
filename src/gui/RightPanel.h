@@ -144,6 +144,14 @@ private:
     void selectWpItem(int idx);
     QString wpActionLabel(const QString& action, int turns) const;
 
+    // Drag-to-reorder helpers
+    bool eventFilter(QObject* obj, QEvent* e) override;
+    void onItemPress(int idx, QPoint globalPos);
+    int  calcDropTarget(QPoint globalPos) const;
+    void updateDragVisuals();
+    void finalizeDrag();
+    void cancelDrag();
+
     // ── Header widgets ────────────────────────────────────────────────────
     QPushButton* m_btnConnect      = nullptr;
     QPushButton* m_btnDisconnect   = nullptr;
@@ -210,6 +218,13 @@ private:
     QVector<QVariantMap> m_waypoints;
     int          m_activeWpIdx     = -1;
     QVector<QWidget*> m_wpItems;
+
+    // Drag reorder state
+    QFrame*      m_dropLine        = nullptr;
+    int          m_dragSrcIdx      = -1;
+    bool         m_dragging        = false;
+    QPoint       m_dragStartPos;
+    int          m_dropTargetIdx   = -1;
 
     // ── System tab ────────────────────────────────────────────────────────
     QFrame*  m_battFill        = nullptr;

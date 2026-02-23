@@ -7,6 +7,8 @@
 #include <QScrollArea>
 #include <QAbstractSpinBox>
 #include <QEvent>
+#include <QMouseEvent>
+#include <QApplication>
 #include <QPainter>
 #include <QPen>
 #include <functional>
@@ -129,15 +131,19 @@ static QIcon makeCrossIcon(int sz, const QColor& col)
     return QIcon(pm);
 }
 
-// ── Simple event filter for clickable frames ──────────────────────────────────
+// ── Simple event filter for wp-item press (passes global position) ───────────
 class WpItemFilter : public QObject {
 public:
-    std::function<void()> onPress;
-    WpItemFilter(QObject* parent, std::function<void()> cb)
+    std::function<void(QPoint)> onPress;
+    WpItemFilter(QObject* parent, std::function<void(QPoint)> cb)
         : QObject(parent), onPress(std::move(cb)) {}
     bool eventFilter(QObject*, QEvent* e) override {
-        if (e->type() == QEvent::MouseButtonPress) { onPress(); return false; }
-        return false;
+        if (e->type() == QEvent::MouseButtonPress) {
+            auto* me = static_cast<QMouseEvent*>(e);
+            if (me->button() == Qt::LeftButton)
+                onPress(me->globalPosition().toPoint());
+        }
+        return false;  // never consume — let buttons handle their own clicks
     }
 };
 
@@ -419,9 +425,10 @@ QWidget* RightPanel::buildTabBar()
         if (i == 1) {
             m_routeBadge = new QLabel("0");
             m_routeBadge->setStyleSheet(QString(
-                "color: %1; font-family: \"%2\"; font-size: 9px; font-weight: 700; "
-                "background-color: %3; padding: 1px 5px; border-radius: 3px; "
-                "border: none;").arg(C::BLUE, C::MONO, C::BLUE_D));
+                "color: #fff; font-family: \"%1\"; font-size: 9px; font-weight: 700; "
+                "background-color: %2; padding: 1px 6px; border-radius: 7px; "
+                "border: none;").arg(C::MONO, C::BLUE));
+            m_routeBadge->hide();  // hidden until there are waypoints
             btnRow->addWidget(m_routeBadge);
         }
 
@@ -909,6 +916,12 @@ QWidget* RightPanel::buildRouteTab()
     m_wpListLay->setContentsMargins(0, 0, 0, 0);
     m_wpListLay->setSpacing(4);
 
+    // Drop indicator line (shown during drag, positioned between items)
+    m_dropLine = new QFrame(m_wpListWidget);
+    m_dropLine->setFixedHeight(2);
+    m_dropLine->setStyleSheet(QString("background-color: %1;").arg(C::BLUE));
+    m_dropLine->hide();
+
     m_wpEmptyLabel = new QLabel(QStringLiteral("Нет точек маршрута"));
     m_wpEmptyLabel->setAlignment(Qt::AlignCenter);
     m_wpEmptyLabel->setStyleSheet(QString(
@@ -1021,6 +1034,10 @@ QString RightPanel::wpActionLabel(const QString& action, int turns) const
 
 void RightPanel::rebuildWpList()
 {
+    // Cancel any in-progress drag before rebuilding
+    if (m_dragSrcIdx >= 0)
+        cancelDrag();
+
     // Remove old items
     for (auto* w : m_wpItems) { m_wpListLay->removeWidget(w); delete w; }
     m_wpItems.clear();
@@ -1134,10 +1151,14 @@ void RightPanel::rebuildWpList()
         il->addWidget(editBtn);
         il->addWidget(delBtn);
 
-        // Click anywhere on row → select it
-        item->installEventFilter(new WpItemFilter(item, [this, ci] {
-            selectWpItem(ci);
-        }));
+        // Press anywhere on row (except buttons) → select + start potential drag
+        auto* itemFilter = new WpItemFilter(item, [this, ci](QPoint gPos) {
+            onItemPress(ci, gPos);
+        });
+        item->installEventFilter(itemFilter);
+        // Also catch presses on label children (they don't consume mouse by default)
+        numLbl->installEventFilter(itemFilter);
+        typeLbl->installEventFilter(itemFilter);
 
         m_wpItems.append(item);
     }
@@ -1148,6 +1169,121 @@ void RightPanel::rebuildWpList()
     m_wpListLay->addWidget(m_wpEmptyLabel);
     for (auto* w : m_wpItems)
         m_wpListLay->addWidget(w);
+}
+
+// ── Drag-to-reorder implementation ────────────────────────────────────────────
+
+void RightPanel::onItemPress(int idx, QPoint globalPos)
+{
+    selectWpItem(idx);
+    m_dragSrcIdx    = idx;
+    m_dragging      = false;
+    m_dragStartPos  = globalPos;
+    m_dropTargetIdx = idx;
+    qApp->installEventFilter(this);
+}
+
+bool RightPanel::eventFilter(QObject* obj, QEvent* e)
+{
+    // Only handle our drag tracking events injected via qApp filter
+    if (m_dragSrcIdx >= 0 && obj != this) {
+        const auto type = e->type();
+        if (type == QEvent::MouseMove) {
+            auto* me = static_cast<QMouseEvent*>(e);
+            const QPoint gPos = me->globalPosition().toPoint();
+            if (!m_dragging && (gPos - m_dragStartPos).manhattanLength() > 8) {
+                m_dragging = true;
+                QApplication::setOverrideCursor(Qt::SizeVerCursor);
+            }
+            if (m_dragging) {
+                const int newTarget = calcDropTarget(gPos);
+                if (newTarget != m_dropTargetIdx) {
+                    m_dropTargetIdx = newTarget;
+                    updateDragVisuals();
+                }
+                return true;  // consume move events during drag
+            }
+        } else if (type == QEvent::MouseButtonRelease) {
+            auto* me = static_cast<QMouseEvent*>(e);
+            if (me->button() == Qt::LeftButton) {
+                if (m_dragging) {
+                    finalizeDrag();
+                    return true;  // consume release to prevent spurious clicks
+                }
+                cancelDrag();
+            }
+        }
+    }
+    return QWidget::eventFilter(obj, e);
+}
+
+int RightPanel::calcDropTarget(QPoint globalPos) const
+{
+    if (m_wpItems.isEmpty()) return 0;
+    const QPoint local = m_wpListWidget->mapFromGlobal(globalPos);
+    int target = 0;
+    for (int i = 0; i < m_wpItems.size(); ++i) {
+        const QRect r = m_wpItems[i]->geometry();
+        if (local.y() > r.top() + r.height() / 2)
+            target = i + 1;
+        else
+            break;
+    }
+    return target;
+}
+
+void RightPanel::updateDragVisuals()
+{
+    if (!m_dropLine || m_wpItems.isEmpty()) return;
+    int y = 0;
+    if (m_dropTargetIdx <= 0) {
+        y = m_wpItems.front()->geometry().top() - 3;
+    } else if (m_dropTargetIdx >= m_wpItems.size()) {
+        y = m_wpItems.back()->geometry().bottom() + 3;
+    } else {
+        const int prevBottom = m_wpItems[m_dropTargetIdx - 1]->geometry().bottom();
+        const int nextTop    = m_wpItems[m_dropTargetIdx]->geometry().top();
+        y = (prevBottom + nextTop) / 2;
+    }
+    m_dropLine->setGeometry(0, y - 1, m_wpListWidget->width(), 2);
+    m_dropLine->raise();
+    m_dropLine->show();
+}
+
+void RightPanel::finalizeDrag()
+{
+    QApplication::restoreOverrideCursor();
+    qApp->removeEventFilter(this);
+    if (m_dropLine) m_dropLine->hide();
+
+    const int from      = m_dragSrcIdx;
+    const int dropPos   = m_dropTargetIdx;  // insert-before index (0..N)
+    m_dragSrcIdx      = -1;
+    m_dragging        = false;
+    m_dropTargetIdx   = -1;
+
+    // Convert insert position → final destination index
+    int to;
+    if (dropPos <= from)
+        to = dropPos;
+    else
+        to = dropPos - 1;
+
+    if (to != from && to >= 0 && to < m_waypoints.size()) {
+        spdlog::debug("[RightPanel] drag reorder: {} → {}", from, to);
+        emit reorderWaypointRequested(from, to);
+    }
+}
+
+void RightPanel::cancelDrag()
+{
+    if (m_dragging)
+        QApplication::restoreOverrideCursor();
+    qApp->removeEventFilter(this);
+    if (m_dropLine) m_dropLine->hide();
+    m_dragSrcIdx    = -1;
+    m_dragging      = false;
+    m_dropTargetIdx = -1;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1775,9 +1911,12 @@ void RightPanel::refreshRoute(const QVector<QVariantMap>& waypoints, int activeI
     m_activeWpIdx = activeIdx;
     rebuildWpList();
 
-    // Update route badge
-    if (m_routeBadge)
-        m_routeBadge->setText(QString::number(waypoints.size()));
+    // Update route badge (hide when empty)
+    if (m_routeBadge) {
+        const int n = waypoints.size();
+        m_routeBadge->setText(QString::number(n));
+        m_routeBadge->setVisible(n > 0);
+    }
 
     // Update bottom spinbox
     if (m_spinWp) {
