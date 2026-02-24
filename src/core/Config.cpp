@@ -147,6 +147,11 @@ AppConfig loadConfig(const std::string& path)
         if (s.contains("amperage_debounce_sec")) s["amperage_debounce_sec"].get_to(cfg.system.amperage_debounce_sec);
         if (s.contains("action_on_limit"))       s["action_on_limit"].get_to(cfg.system.action_on_limit);
         if (s.contains("action_on_critical"))    s["action_on_critical"].get_to(cfg.system.action_on_critical);
+        if (s.contains("batt50_max_notifications"))   s["batt50_max_notifications"].get_to(cfg.system.batt50_max_notifications);
+        if (s.contains("batt50_timeout_sec"))         s["batt50_timeout_sec"].get_to(cfg.system.batt50_timeout_sec);
+        if (s.contains("no_home_max_warnings"))       s["no_home_max_warnings"].get_to(cfg.system.no_home_max_warnings);
+        if (s.contains("home_orbit_action"))          s["home_orbit_action"].get_to(cfg.system.home_orbit_action);
+        if (s.contains("home_decision_reminder_sec")) s["home_decision_reminder_sec"].get_to(cfg.system.home_decision_reminder_sec);
         SPDLOG_INFO("[Config::load] system: v_max={:.1f}, v_op_zero={:.1f}, v_crit={:.1f}, hysteresis={:.1f}",
             cfg.system.v_max, cfg.system.v_operational_zero,
             cfg.system.v_critical, cfg.system.hysteresis_margin);
@@ -237,7 +242,12 @@ void saveConfig(const AppConfig& cfg, const std::string& path)
         {"amperage_warning",     cfg.system.amperage_warning},
         {"amperage_debounce_sec", cfg.system.amperage_debounce_sec},
         {"action_on_limit",      cfg.system.action_on_limit},
-        {"action_on_critical",   cfg.system.action_on_critical}
+        {"action_on_critical",   cfg.system.action_on_critical},
+        {"batt50_max_notifications",   cfg.system.batt50_max_notifications},
+        {"batt50_timeout_sec",         cfg.system.batt50_timeout_sec},
+        {"no_home_max_warnings",       cfg.system.no_home_max_warnings},
+        {"home_orbit_action",          cfg.system.home_orbit_action},
+        {"home_decision_reminder_sec", cfg.system.home_decision_reminder_sec}
     };
 
     std::ofstream file(path);

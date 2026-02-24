@@ -166,6 +166,15 @@ private:
     QDoubleSpinBox* m_spinAmpWarning     = nullptr;
     QComboBox*      m_comboActionLimit   = nullptr;
     QComboBox*      m_comboActionCritical = nullptr;
+
+    // 50% decision flow
+    QSpinBox*       m_spinBatt50MaxNotif      = nullptr;
+    QSpinBox*       m_spinBatt50Timeout       = nullptr;
+    QSpinBox*       m_spinNoHomeMaxWarnings   = nullptr;
+
+    // Home orbit behavior
+    QComboBox*      m_comboHomeOrbitAction    = nullptr;
+    QSpinBox*       m_spinHomeDecisionReminder = nullptr;
 };
 
 } // namespace vtol

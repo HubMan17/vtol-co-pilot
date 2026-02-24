@@ -335,7 +335,7 @@ void MainWindow::setupConnections()
                 NotificationLevel::Warning,
                 QStringLiteral("Точка достигнута"),
                 QStringLiteral("Нажмите «Продолжить маршрут» для возврата"),
-                0, {}, {}
+                -1, {}, {}
             }, QStringLiteral("operational"));
         }
     });
@@ -421,6 +421,12 @@ void MainWindow::enableControls(bool enabled)
 
 void MainWindow::onConnectionRestored()
 {
+    // Reset battery decision state on new connection
+    m_batt50Resolved = false;
+    cancelBatt50Flow();
+    stopHomeDecisionReminder();
+    m_homeOrbitActive = false;
+
     m_rightPanel->setConnected(true);
     enableControls(true);
 
@@ -512,6 +518,14 @@ void MainWindow::setHomePosition(double lat, double lon)
     updateLeftClickMode();
     statusBar()->showMessage(QStringLiteral("Дом: %1, %2")
                               .arg(lat, 0, 'f', 6).arg(lon, 0, 'f', 6));
+
+    // Cancel no-home flow if home was set during it
+    if (m_noHomeFlowActive) {
+        SPDLOG_INFO("[MainWindow] Home set during no-home flow — cancelling no-home warnings");
+        m_noHomeWarningTimer->stop();
+        m_noHomeFlowActive = false;
+        m_noHomeWarningCount = 0;
+    }
 }
 
 void MainWindow::setHomeFromDrone(double lat, double lon)
@@ -1363,31 +1377,64 @@ void MainWindow::setupBatteryMonitor()
 {
     auto* nm = m_rightPanel->notificationManager();
 
-    // 25% / 50% consumed — informational warnings
+    // ── Batt-50 timer (single-shot, re-armed in onBatt50Timeout) ──
+    m_batt50Timer = new QTimer(this);
+    m_batt50Timer->setSingleShot(true);
+    connect(m_batt50Timer, &QTimer::timeout, this, &MainWindow::onBatt50Timeout);
+
+    // ── No-home warning timer ──
+    m_noHomeWarningTimer = new QTimer(this);
+    m_noHomeWarningTimer->setSingleShot(true);
+    connect(m_noHomeWarningTimer, &QTimer::timeout, this, &MainWindow::onNoHomeWarningTimeout);
+
+    // ── Home decision reminder (repeating) ──
+    m_homeDecisionTimer = new QTimer(this);
+    m_homeDecisionTimer->setSingleShot(false);
+    connect(m_homeDecisionTimer, &QTimer::timeout, this, &MainWindow::onHomeDecisionReminderTick);
+
+    // 25% / 50% / 75% consumed
     connect(&m_batteryMonitor, &BatteryMonitor::batteryWarning,
             this, [this, nm](const QString& title, const QString& message, const QString& tag) {
         SPDLOG_INFO("[MainWindow] battery warning: {} ({})", title.toStdString(), tag.toStdString());
 
-        if (tag == QStringLiteral("batt-75")) {
-            // 75% consumed — suggest return home
-            Notification n;
-            n.level = NotificationLevel::Warning;
-            n.title = title;
-            n.message = message;
-            n.durationSec = 0;  // infinite until dismissed
-            if (m_config.system.action_on_limit != "notify") {
-                n.actions.push_back({QStringLiteral("Возврат домой"), [this]{
-                    SPDLOG_WARN("[MainWindow] battery 75%: user chose RTH");
-                    m_rightPanel->setHomeActive(true);
-                    onHomeToggle(true);
-                }});
+        if (tag == QStringLiteral("batt-50")) {
+            // 50% consumed — start decision flow (if not already active/resolved)
+            if (!m_batt50FlowActive && !m_batt50Resolved) {
+                startBatt50DecisionFlow();
             }
-            nm->pushOrReplace(std::move(n), tag);
+        } else if (tag == QStringLiteral("batt-75")) {
+            if (m_batt50Resolved) {
+                // Pilot chose "continue" at 50% — downgrade: info-only, no buttons
+                nm->pushOrReplace(Notification{
+                    NotificationLevel::Warning, title,
+                    message + QStringLiteral("\nПилот продолжает маршрут"),
+                    -1, {}, {}
+                }, tag);
+            } else {
+                // Normal 75% behavior — suggest return home
+                Notification n;
+                n.level = NotificationLevel::Warning;
+                n.title = title;
+                n.message = message;
+                if (m_config.system.action_on_limit != "notify") {
+                    n.durationSec = 0;  // infinite — pilot must decide
+                    n.actions = {
+                        {QStringLiteral("Возврат домой"), [this]{
+                            SPDLOG_WARN("[MainWindow] battery 75%: user chose RTH");
+                            m_rightPanel->setHomeActive(true);
+                            onHomeToggle(true);
+                        }},
+                        {QStringLiteral("Остаться"), []{}},
+                    };
+                } else {
+                    n.durationSec = -1;  // auto (7s) — no action available
+                }
+                nm->pushOrReplace(std::move(n), tag);
+            }
         } else {
-            // 25% / 50% — just notify
+            // batt-25 — just notify
             nm->pushOrReplace(Notification{
-                tag == QStringLiteral("batt-25") ? NotificationLevel::Info : NotificationLevel::Warning,
-                title, message, -1, {}, {}
+                NotificationLevel::Info, title, message, -1, {}, {}
             }, tag);
         }
     });
@@ -1396,33 +1443,46 @@ void MainWindow::setupBatteryMonitor()
     connect(&m_batteryMonitor, &BatteryMonitor::batteryLimit,
             this, [this, nm](const QString& title, const QString& message) {
         const auto& action = m_config.system.action_on_limit;
-        SPDLOG_WARN("[MainWindow] battery limit reached, action={}", action);
+        SPDLOG_WARN("[MainWindow] battery limit reached, action={}, resolved={}",
+                    action, m_batt50Resolved);
+
+        if (m_batt50Resolved) {
+            // Pilot chose "continue" at 50% — downgrade: critical info-only, no auto-action
+            nm->pushOrReplace(Notification{
+                NotificationLevel::Critical, title,
+                message + QStringLiteral("\nПилот продолжает маршрут"),
+                -1, {}, {}  // auto 10s — informational, pilot consciously chose to continue
+            }, QStringLiteral("batt-limit"));
+            return;
+        }
 
         if (action == "auto_rtl") {
             m_autopilot.activateRtl();
             nm->pushOrReplace(Notification{
                 NotificationLevel::Critical, title,
                 message + QStringLiteral("\nRTL активирован автоматически"),
-                0, {}, {}
+                -1, {}, {}  // auto 10s — RTL already active, informational
             }, QStringLiteral("batt-limit"));
         } else {
             Notification n;
             n.level = NotificationLevel::Critical;
             n.title = title;
             n.message = message;
-            n.durationSec = 0;
             if (action == "suggest_rth") {
+                n.durationSec = 0;  // infinite — pilot must decide
                 n.actions.push_back({QStringLiteral("Возврат домой"), [this]{
                     SPDLOG_WARN("[MainWindow] battery limit: user chose RTH");
                     m_rightPanel->setHomeActive(true);
                     onHomeToggle(true);
                 }});
+            } else {
+                n.durationSec = -1;  // auto 10s — "notify" mode, no action
             }
             nm->pushOrReplace(std::move(n), QStringLiteral("batt-limit"));
         }
     });
 
-    // Critical voltage — thrust loss risk
+    // Critical voltage — thrust loss risk — ALWAYS show RTL button (safety override)
     connect(&m_batteryMonitor, &BatteryMonitor::batteryCritical,
             this, [this, nm](const QString& title, const QString& message) {
         const auto& action = m_config.system.action_on_critical;
@@ -1433,9 +1493,10 @@ void MainWindow::setupBatteryMonitor()
             nm->pushOrReplace(Notification{
                 NotificationLevel::Critical, title,
                 message + QStringLiteral("\nRTL активирован автоматически!"),
-                0, {}, {}
+                -1, {}, {}  // auto 10s — RTL already active, informational
             }, QStringLiteral("batt-critical"));
         } else {
+            // ALWAYS show RTL button at critical — regardless of m_batt50Resolved
             Notification n;
             n.level = NotificationLevel::Critical;
             n.title = title;
@@ -1458,6 +1519,219 @@ void MainWindow::setupBatteryMonitor()
     });
 
     SPDLOG_INFO("[MainWindow] battery monitor initialized");
+}
+
+// ─── Battery 50% decision flow ──────────────────────────────────────────
+
+void MainWindow::startBatt50DecisionFlow()
+{
+    if (m_batt50FlowActive) return;
+
+    m_batt50FlowActive = true;
+    m_batt50NotifCount = 0;
+    SPDLOG_WARN("[MainWindow] Starting batt-50 decision flow");
+
+    // Show first notification immediately
+    onBatt50Timeout();
+}
+
+void MainWindow::onBatt50Timeout()
+{
+    if (!m_batt50FlowActive) return;
+
+    m_batt50NotifCount++;
+    int maxNotif = m_config.system.batt50_max_notifications;
+
+    SPDLOG_WARN("[MainWindow] batt-50 notification {}/{}", m_batt50NotifCount, maxNotif);
+
+    if (m_batt50NotifCount > maxNotif) {
+        // All notifications exhausted — auto-action
+        SPDLOG_WARN("[MainWindow] batt-50: max notifications reached — executing auto-action");
+        m_batt50FlowActive = false;
+        executeBatt50AutoAction();
+        return;
+    }
+
+    // Show decision notification
+    auto* nm = m_rightPanel->notificationManager();
+    Notification n;
+    n.level = NotificationLevel::Warning;
+    n.title = QStringLiteral("50%% заряда израсходовано (%1/%2)")
+                  .arg(m_batt50NotifCount).arg(maxNotif);
+    n.message = QStringLiteral("Рекомендуется вернуться домой. Продолжить маршрут?");
+    n.durationSec = m_config.system.batt50_timeout_sec;  // countdown matches timer
+    n.actions = {
+        {QStringLiteral("Продолжить маршрут"), [this]{
+            SPDLOG_INFO("[MainWindow] batt-50: pilot chose CONTINUE");
+            m_batt50Resolved = true;
+            cancelBatt50Flow();
+        }},
+        {QStringLiteral("Вернуться домой"), [this]{
+            SPDLOG_WARN("[MainWindow] batt-50: pilot chose RETURN HOME");
+            cancelBatt50Flow();
+            executeBatt50AutoAction();
+        }},
+    };
+    nm->pushOrReplace(std::move(n), QStringLiteral("batt-50-decision"));
+
+    // Schedule next timeout
+    m_batt50Timer->start(m_config.system.batt50_timeout_sec * 1000);
+}
+
+void MainWindow::executeBatt50AutoAction()
+{
+    SPDLOG_WARN("[MainWindow] executeBatt50AutoAction: home={}",
+                m_homePosition.has_value());
+
+    if (m_homePosition.has_value()) {
+        // Home exists — engage home mode
+        m_rightPanel->setHomeActive(true);
+        onHomeToggle(true);
+    } else {
+        // No home — fly to WP[0]
+        flyToWp0WithoutHome();
+    }
+}
+
+void MainWindow::flyToWp0WithoutHome()
+{
+    auto* route = m_routePlanner.getRoute();
+    if (!route || route->waypoints.empty()) {
+        SPDLOG_ERROR("[MainWindow] flyToWp0WithoutHome: no route/waypoints!");
+        m_rightPanel->notificationManager()->pushOrReplace(Notification{
+            NotificationLevel::Critical,
+            QStringLiteral("Нет маршрута!"),
+            QStringLiteral("Нет точки дома и нет маршрута — невозможно вернуться"),
+            0, {{QStringLiteral("Принял"), []{}}}, {}
+        }, QStringLiteral("no-home-no-route"));
+        return;
+    }
+
+    SPDLOG_WARN("[MainWindow] No home — flying to WP[0] and starting no-home flow");
+    m_routePlanner.setActiveWaypoint(0);
+    if (!m_autopilot.engageNav()) {
+        SPDLOG_ERROR("[MainWindow] Failed to engage nav for WP[0]");
+    }
+
+    // Start no-home warning flow
+    m_noHomeFlowActive = true;
+    m_noHomeWarningCount = 0;
+    onNoHomeWarningTimeout();  // first warning immediately
+}
+
+void MainWindow::onNoHomeWarningTimeout()
+{
+    if (!m_noHomeFlowActive) return;
+
+    m_noHomeWarningCount++;
+    int maxWarnings = m_config.system.no_home_max_warnings;
+
+    SPDLOG_WARN("[MainWindow] no-home warning {}/{}", m_noHomeWarningCount, maxWarnings);
+
+    auto* nm = m_rightPanel->notificationManager();
+
+    if (m_noHomeWarningCount > maxWarnings) {
+        // All warnings exhausted — orbit at WP[0]
+        m_noHomeFlowActive = false;
+        SPDLOG_WARN("[MainWindow] no-home: max warnings reached — orbiting at WP[0]");
+        nm->pushOrReplace(Notification{
+            NotificationLevel::Critical,
+            QStringLiteral("Нет точки дома!"),
+            QStringLiteral("Кружение над первой точкой маршрута. Установите дом!"),
+            0, {{QStringLiteral("Принял"), []{}}}, {}
+        }, QStringLiteral("no-home"));
+        return;
+    }
+
+    nm->pushOrReplace(Notification{
+        NotificationLevel::Warning,
+        QStringLiteral("Точка дома не задана! (%1/%2)")
+            .arg(m_noHomeWarningCount).arg(maxWarnings),
+        QStringLiteral("Летим к WP1. Установите точку дома!"),
+        m_config.system.batt50_timeout_sec,
+        {{QStringLiteral("Принял"), []{}}},
+        {}
+    }, QStringLiteral("no-home"));
+
+    // Schedule next warning
+    m_noHomeWarningTimer->start(m_config.system.batt50_timeout_sec * 1000);
+}
+
+void MainWindow::cancelBatt50Flow()
+{
+    if (m_batt50Timer) m_batt50Timer->stop();
+    if (m_noHomeWarningTimer) m_noHomeWarningTimer->stop();
+    m_batt50FlowActive = false;
+    m_batt50NotifCount = 0;
+    m_noHomeFlowActive = false;
+    m_noHomeWarningCount = 0;
+}
+
+// ─── Home decision reminder ─────────────────────────────────────────────
+
+void MainWindow::startHomeDecisionReminder()
+{
+    int sec = m_config.system.home_decision_reminder_sec;
+    SPDLOG_INFO("[MainWindow] Starting home decision reminder every {}s", sec);
+    m_homeDecisionTimer->start(sec * 1000);
+}
+
+void MainWindow::stopHomeDecisionReminder()
+{
+    if (m_homeDecisionTimer && m_homeDecisionTimer->isActive()) {
+        m_homeDecisionTimer->stop();
+        SPDLOG_INFO("[MainWindow] Home decision reminder stopped");
+    }
+}
+
+void MainWindow::onHomeDecisionReminderTick()
+{
+    if (!m_homeOrbitActive) {
+        stopHomeDecisionReminder();
+        return;
+    }
+
+    auto* tel = m_connection.telemetry();
+    double voltage = tel->batteryVoltage();
+    double urgencyThreshold = m_config.system.v_operational_zero + 2.0;
+    bool gpsOk = tel->gpsFix() >= 2 && tel->satellites() > 10;
+
+    NotificationLevel level = (voltage <= urgencyThreshold)
+        ? NotificationLevel::Critical
+        : NotificationLevel::Warning;
+
+    QString msg = QStringLiteral("Самолёт кружит над домом. Напряжение: %1В, GPS: %2 спутников.")
+                      .arg(voltage, 0, 'f', 1)
+                      .arg(tel->satellites());
+
+    if (voltage <= urgencyThreshold) {
+        msg += QStringLiteral("\nНапряжение приближается к лимиту — решение необходимо!");
+    }
+
+    Notification n;
+    n.level = level;
+    n.title = QStringLiteral("Ожидание решения");
+    n.message = msg;
+    n.durationSec = 0;
+    if (gpsOk) {
+        n.actions = {
+            {QStringLiteral("Включить RTL"), [this] {
+                SPDLOG_INFO("[MainWindow] Home reminder: user chose RTL");
+                stopHomeDecisionReminder();
+                m_homeOrbitActive = false;
+                m_autopilot.activateRtl();
+            }},
+            {QStringLiteral("Продолжить ожидание"), []{}},
+        };
+    } else {
+        n.actions = {
+            {QStringLiteral("Принял"), []{}},
+        };
+    }
+
+    m_rightPanel->notificationManager()->pushOrReplace(std::move(n), QStringLiteral("home-orbit"));
+    SPDLOG_INFO("[MainWindow] Home decision reminder: V={:.1f}, level={}",
+                voltage, level == NotificationLevel::Critical ? "CRITICAL" : "WARNING");
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -1512,6 +1786,10 @@ void MainWindow::onAutopilotEngaged(const QString& mode)
 
 void MainWindow::onAutopilotDisengaged(const QString& /*prevMode*/, const QString& reason)
 {
+    cancelBatt50Flow();
+    stopHomeDecisionReminder();
+    m_homeOrbitActive = false;
+
     m_rightPanel->setNavActive(false);
     m_rightPanel->setHomeActive(false);
     m_rightPanel->setResumeRouteVisible(false);
@@ -1554,15 +1832,52 @@ void MainWindow::onHomeOrbitEstablished()
 {
     auto* tel = m_connection.telemetry();
     bool gpsOk = tel->gpsFix() >= 2 && tel->satellites() > 10;
+    const auto& orbitAction = m_config.system.home_orbit_action;
 
-    SPDLOG_INFO("[MainWindow] HOME ORBIT NOTIFICATION: gps_ok={}, fix={}, satellites={}",
-                gpsOk, tel->gpsFix(), tel->satellites());
+    SPDLOG_INFO("[MainWindow] HOME ORBIT: gps_ok={}, fix={}, sats={}, action={}",
+                gpsOk, tel->gpsFix(), tel->satellites(), orbitAction);
 
+    m_homeOrbitActive = true;
+
+    // ── Auto-RTL modes ──
+    if (orbitAction == "auto_rtl") {
+        SPDLOG_INFO("[MainWindow] auto_rtl — activating RTL immediately");
+        m_autopilot.activateRtl();
+        m_rightPanel->notificationManager()->pushOrReplace(Notification{
+            NotificationLevel::Warning,
+            QStringLiteral("Самолёт над домом"),
+            QStringLiteral("RTL активирован автоматически"),
+            -1, {}, {}
+        }, QStringLiteral("home-orbit"));
+        statusBar()->showMessage(QStringLiteral("Дом — авто-RTL"));
+        return;
+    }
+
+    if (orbitAction == "auto_rtl_gps") {
+        if (gpsOk) {
+            SPDLOG_INFO("[MainWindow] auto_rtl_gps — GPS OK, activating RTL");
+            m_autopilot.activateRtl();
+            m_rightPanel->notificationManager()->pushOrReplace(Notification{
+                NotificationLevel::Warning,
+                QStringLiteral("Самолёт над домом"),
+                QStringLiteral("GPS: %1 спутников — RTL активирован автоматически")
+                    .arg(tel->satellites()),
+                -1, {}, {}
+            }, QStringLiteral("home-orbit"));
+            statusBar()->showMessage(QStringLiteral("Дом — авто-RTL (GPS ОК)"));
+            return;
+        }
+        SPDLOG_WARN("[MainWindow] auto_rtl_gps — GPS insufficient (sats={}), fallback to wait",
+                    tel->satellites());
+        // Fall through to "wait" behavior
+    }
+
+    // ── Wait mode (default) — operator decides ──
     Notification n;
     n.level = NotificationLevel::Warning;
     n.title = QStringLiteral("Самолёт над домом");
     n.tag = QStringLiteral("home-orbit");
-    n.durationSec = 0;  // infinite — operator must decide
+    n.durationSec = 0;
 
     if (gpsOk) {
         n.message = QStringLiteral(
@@ -1573,6 +1888,8 @@ void MainWindow::onHomeOrbitEstablished()
         n.actions = {
             {QStringLiteral("Включить RTL"), [this] {
                 SPDLOG_INFO("[MainWindow] USER ACTIVATED RTL from notification");
+                stopHomeDecisionReminder();
+                m_homeOrbitActive = false;
                 m_autopilot.activateRtl();
             }},
             {QStringLiteral("Продолжить ожидание"), [this] {
@@ -1595,6 +1912,9 @@ void MainWindow::onHomeOrbitEstablished()
 
     m_rightPanel->notificationManager()->pushOrReplace(std::move(n), QStringLiteral("home-orbit"));
     statusBar()->showMessage(QStringLiteral("Самолёт в круге над домом — ожидаем решение"));
+
+    // Start periodic reminder
+    startHomeDecisionReminder();
 }
 
 void MainWindow::onOrbitRadiusChanged(int r)

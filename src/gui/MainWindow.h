@@ -119,6 +119,19 @@ private:
     // ── Battery monitor ──
     void setupBatteryMonitor();
 
+    // ── Battery 50% decision flow ──
+    void startBatt50DecisionFlow();
+    void onBatt50Timeout();
+    void executeBatt50AutoAction();
+    void flyToWp0WithoutHome();
+    void onNoHomeWarningTimeout();
+    void cancelBatt50Flow();
+
+    // ── Home decision reminder ──
+    void startHomeDecisionReminder();
+    void stopHomeDecisionReminder();
+    void onHomeDecisionReminderTick();
+
     // ── Display loop ──
     void updateDisplay();
     void checkRouteConflicts();
@@ -165,6 +178,21 @@ private:
     LatLon m_lastDroneHome;       // дедупликация (<10м)
     LatLon m_pendingDroneHome;    // последняя позиция от subscribe_home (до арма)
     bool m_prevArmed = false;
+
+    // ── Battery 50% decision flow state ──
+    QTimer* m_batt50Timer         = nullptr;
+    int     m_batt50NotifCount    = 0;
+    bool    m_batt50FlowActive    = false;
+    bool    m_batt50Resolved      = false;   // pilot chose "continue" — downgrade subsequent warnings
+
+    // ── No-home flow state ──
+    QTimer* m_noHomeWarningTimer  = nullptr;
+    int     m_noHomeWarningCount  = 0;
+    bool    m_noHomeFlowActive    = false;
+
+    // ── Home decision reminder ──
+    QTimer* m_homeDecisionTimer   = nullptr;
+    bool    m_homeOrbitActive     = false;
 
     // ── Performance logger ──
     PerfLogger m_perf{"updateDisplay", 50};  // log every 50 ticks (~5 sec)

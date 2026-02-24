@@ -72,6 +72,15 @@ struct SystemConfig {
     std::string action_on_limit    = "notify";
     // Actions: "notify" | "auto_rtl"
     std::string action_on_critical = "notify";
+
+    // 50% decision flow
+    int batt50_max_notifications    = 3;       // Notifications before auto-action
+    int batt50_timeout_sec          = 15;      // Interval between notifications (sec)
+    int no_home_max_warnings        = 3;       // "No home" warnings before orbit
+
+    // Home orbit behavior: "wait" | "auto_rtl" | "auto_rtl_gps"
+    std::string home_orbit_action   = "wait";
+    int home_decision_reminder_sec  = 30;      // Reminder interval while orbiting (sec)
 };
 
 struct NavigationConfig {

@@ -789,11 +789,16 @@ void RightPanel::rebuildAutopilotContent(bool navActive)
         "font-family: \"%3\"; font-size: 15px; font-weight: 700; }"
         "QSpinBox:disabled { color: %4; }")
         .arg(C::CARD, C::TXT, C::MONO, C::TXT_D);
-    QString btnStyle = QString(
+    QString btnStyleBlue = QString(
         "QPushButton { background-color: %1; border: none; border-radius: 6px; }"
         "QPushButton:hover { background-color: #5aa0ff; }"
         "QPushButton:disabled { background-color: %2; }")
         .arg(C::BLUE, C::BD);
+    QString btnStyleGreen = QString(
+        "QPushButton { background-color: %1; border: none; border-radius: 6px; }"
+        "QPushButton:hover { background-color: #00ffb3; }"
+        "QPushButton:disabled { background-color: %2; }")
+        .arg(C::GREEN, C::BD);
     auto checkIco = makeCheckIcon(18, QColor("#ffffff"));
 
     auto* qpGrid = new QHBoxLayout;
@@ -846,7 +851,7 @@ void RightPanel::rebuildAutopilotContent(bool navActive)
         (*d.btn)->setFixedSize(28, 28);
         (*d.btn)->setEnabled(false);
         (*d.btn)->setCursor(Qt::PointingHandCursor);
-        (*d.btn)->setStyleSheet(btnStyle);
+        (*d.btn)->setStyleSheet(btnStyleBlue);
         il->addWidget(*d.btn);
 
         qpGrid->addWidget(item, 1);
@@ -858,16 +863,24 @@ void RightPanel::rebuildAutopilotContent(bool navActive)
     m_apContentLay->addWidget(qpWrapper);
 
     // Connect spinbox buttons
-    connect(m_btnSetAlt, &QPushButton::clicked, this, [this] {
+    auto greenStyle = QString(
+        "QPushButton { background-color: %1; border: none; border-radius: 6px; }"
+        "QPushButton:hover { background-color: #00ffb3; }"
+        "QPushButton:disabled { background-color: %2; }")
+        .arg(C::GREEN, C::BD);
+    connect(m_btnSetAlt, &QPushButton::clicked, this, [this, greenStyle] {
         m_manualAlt = true;
+        m_btnSetAlt->setStyleSheet(greenStyle);
         emit targetAltitudeChanged(m_spinAlt->value());
     });
-    connect(m_btnSetRadius, &QPushButton::clicked, this, [this] {
+    connect(m_btnSetRadius, &QPushButton::clicked, this, [this, greenStyle] {
         m_manualRadius = true;
+        m_btnSetRadius->setStyleSheet(greenStyle);
         emit orbitRadiusChanged(m_spinRadius->value());
     });
-    connect(m_btnSetSpeed, &QPushButton::clicked, this, [this] {
+    connect(m_btnSetSpeed, &QPushButton::clicked, this, [this, greenStyle] {
         m_manualSpeed = true;
+        m_btnSetSpeed->setStyleSheet(greenStyle);
         emit targetAirspeedChanged(m_spinSpeed->value());
     });
 }
@@ -1514,13 +1527,13 @@ QWidget* RightPanel::buildCommandArea()
     m_btnNav->setFixedHeight(38);
     m_btnNav->setFocusPolicy(Qt::NoFocus);
     m_btnNav->setStyleSheet(QString(
-        "QPushButton { background-color: %1; color: #000; border: none; "
+        "QPushButton { background-color: %1; color: #fff; border: none; "
         "border-radius: 10px; font-family: \"%2\"; font-size: 13px; font-weight: 700; }"
-        "QPushButton:hover { background-color: #00ffb3; }"
-        "QPushButton:checked { background-color: %3; color: #fff; }"
-        "QPushButton:checked:hover { background-color: %3; }"
+        "QPushButton:hover { background-color: #5aa0ff; }"
+        "QPushButton:checked { background-color: %3; color: #000; }"
+        "QPushButton:checked:hover { background-color: #00ffb3; }"
         "QPushButton:disabled { background-color: %4; color: %5; }")
-        .arg(C::GREEN, C::SANS, C::BLUE, C::INPUT, C::TXT_D));
+        .arg(C::BLUE, C::SANS, C::GREEN, C::INPUT, C::TXT_D));
     actRow->addWidget(m_btnNav, 1);
 
     m_btnResumeRoute = new QPushButton(QStringLiteral("Продолжить маршрут"));
@@ -1756,6 +1769,25 @@ void RightPanel::updateTelemetry(const TelemetryState& state)
         m_gps->setColor(C::RED);
     }
 
+    // Motors (servo output): ch5–ch8 = M1–M4, ch3 = throttle
+    {
+        const auto& srv = state.servoOutput();
+        // Map: M1=srv[4], M2=srv[5], M3=srv[6], M4=srv[7], Thrust=srv[2]
+        const int motorChannels[5] = {4, 5, 6, 7, 2};
+        for (int i = 0; i < 5; ++i) {
+            if (!m_motorVals[i]) continue;
+            uint16_t val = srv[motorChannels[i]];
+            if (val > 0 && val != 1500) {
+                int pct = qBound(0, static_cast<int>((val - 1000) * 100.0 / 1000.0), 100);
+                m_motorVals[i]->setText(QString("%1%").arg(pct));
+            } else if (val == 0) {
+                m_motorVals[i]->setText(QStringLiteral("---"));
+            } else {
+                m_motorVals[i]->setText(QStringLiteral("0%"));
+            }
+        }
+    }
+
     // System tab — battery update
     const double v = state.batteryVoltage();
     if (m_battVoltLabel)
@@ -1824,6 +1856,13 @@ void RightPanel::updateAutopilot(const QString& mode, const AutopilotStatus& sta
         if (navActive && m_spinAlt) {
             for (auto* w : {m_spinAlt, m_spinRadius, m_spinSpeed}) w->setEnabled(true);
             for (auto* w : {m_btnSetAlt, m_btnSetRadius, m_btnSetSpeed}) w->setEnabled(true);
+            // Reset to blue (unlocked) style
+            QString blueStyle = QString(
+                "QPushButton { background-color: %1; border: none; border-radius: 6px; }"
+                "QPushButton:hover { background-color: #5aa0ff; }"
+                "QPushButton:disabled { background-color: %2; }")
+                .arg(C::BLUE, C::BD);
+            for (auto* w : {m_btnSetAlt, m_btnSetRadius, m_btnSetSpeed}) w->setStyleSheet(blueStyle);
         }
     }
 

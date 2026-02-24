@@ -73,6 +73,7 @@ public:
     LatLon position() const { return m_position; }
     const std::array<int, 8>& rcChannels()    const { return m_rcChannels; }
     const std::array<int, 8>& rcChannelsRaw() const { return m_rcChannelsRaw; }
+    const std::array<uint16_t, 8>& servoOutput() const { return m_servoOutput; }
 
     // --- Setters (called from MavlinkConnection) ---
     void setTimestamp(double v)      { if (m_timestamp != v) { m_timestamp = v; emit timestampChanged(); } }
@@ -96,6 +97,7 @@ public:
     void setMode(const QString& v)   { if (m_mode != v) { m_mode = v; emit modeChanged(); } }
     void setRcChannels(const std::array<int, 8>& ch)    { m_rcChannels = ch; emit rcChannelsChanged(); }
     void setRcChannelsRaw(const std::array<int, 8>& ch) { m_rcChannelsRaw = ch; emit rcChannelsChanged(); }
+    void setServoOutput(const std::array<uint16_t, 8>& s) { m_servoOutput = s; emit servoOutputChanged(); }
 
 signals:
     void timestampChanged();
@@ -115,6 +117,7 @@ signals:
     void armedChanged();
     void modeChanged();
     void rcChannelsChanged();
+    void servoOutputChanged();
 
 private:
     double  m_timestamp = 0.0;
@@ -138,6 +141,7 @@ private:
     QString m_mode;
     std::array<int, 8> m_rcChannels = {1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500};
     std::array<int, 8> m_rcChannelsRaw = {1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500};
+    std::array<uint16_t, 8> m_servoOutput = {};
 };
 
 } // namespace vtol

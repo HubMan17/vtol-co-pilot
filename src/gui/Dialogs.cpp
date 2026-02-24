@@ -7,6 +7,7 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
+#include <QScrollArea>
 #include <QMessageBox>
 #include <spdlog/spdlog.h>
 
@@ -752,8 +753,8 @@ QWidget* SettingsDialog::createNotificationsPage()
 
 QWidget* SettingsDialog::createSystemPage()
 {
-    auto* page = new QWidget;
-    auto* layout = new QVBoxLayout(page);
+    auto* content = new QWidget;
+    auto* layout = new QVBoxLayout(content);
     layout->setContentsMargins(20, 20, 20, 20);
     layout->setSpacing(12);
 
@@ -859,8 +860,75 @@ QWidget* SettingsDialog::createSystemPage()
     fl->addRow(QStringLiteral("При критическом заряде:"), m_comboActionCritical);
 
     layout->addWidget(actGroup);
+
+    // ── 50% decision flow ──
+    auto* decGroup = new QGroupBox(QStringLiteral("50% заряда — принятие решения"));
+    auto* dl = new QFormLayout(decGroup);
+    dl->setSpacing(8);
+
+    m_spinBatt50MaxNotif = new QSpinBox;
+    m_spinBatt50MaxNotif->setRange(1, 10);
+    m_spinBatt50MaxNotif->setValue(m_config.system.batt50_max_notifications);
+    dl->addRow(QStringLiteral("Уведомлений до авто-действия:"), m_spinBatt50MaxNotif);
+
+    m_spinBatt50Timeout = new QSpinBox;
+    m_spinBatt50Timeout->setRange(5, 120);
+    m_spinBatt50Timeout->setValue(m_config.system.batt50_timeout_sec);
+    m_spinBatt50Timeout->setSuffix(QStringLiteral(" сек"));
+    dl->addRow(QStringLiteral("Интервал между уведомлениями:"), m_spinBatt50Timeout);
+
+    m_spinNoHomeMaxWarnings = new QSpinBox;
+    m_spinNoHomeMaxWarnings->setRange(1, 10);
+    m_spinNoHomeMaxWarnings->setValue(m_config.system.no_home_max_warnings);
+    dl->addRow(QStringLiteral("Предупреждений «нет дома»:"), m_spinNoHomeMaxWarnings);
+
+    auto* lblDec = new QLabel(QStringLiteral(
+        "При 50% расходе заряда оператору предлагается выбор. "
+        "Если ответа нет — после указанного кол-ва уведомлений выполняется авто-возврат."));
+    lblDec->setWordWrap(true);
+    lblDec->setStyleSheet(QStringLiteral("color: %1; font-size: 11px;").arg(theme::TEXT_SECONDARY));
+    dl->addRow(lblDec);
+
+    layout->addWidget(decGroup);
+
+    // ── Home orbit behavior ──
+    auto* orbGroup = new QGroupBox(QStringLiteral("Поведение при достижении дома"));
+    auto* ol = new QFormLayout(orbGroup);
+    ol->setSpacing(8);
+
+    m_comboHomeOrbitAction = new QComboBox;
+    m_comboHomeOrbitAction->addItem(QStringLiteral("Ожидание решения оператора"), QStringLiteral("wait"));
+    m_comboHomeOrbitAction->addItem(QStringLiteral("Авто-RTL"),                   QStringLiteral("auto_rtl"));
+    m_comboHomeOrbitAction->addItem(QStringLiteral("Авто-RTL при хорошем GPS"),   QStringLiteral("auto_rtl_gps"));
+    {
+        int idx = m_comboHomeOrbitAction->findData(
+            QString::fromStdString(m_config.system.home_orbit_action));
+        if (idx >= 0) m_comboHomeOrbitAction->setCurrentIndex(idx);
+    }
+    ol->addRow(QStringLiteral("Действие:"), m_comboHomeOrbitAction);
+
+    m_spinHomeDecisionReminder = new QSpinBox;
+    m_spinHomeDecisionReminder->setRange(10, 300);
+    m_spinHomeDecisionReminder->setValue(m_config.system.home_decision_reminder_sec);
+    m_spinHomeDecisionReminder->setSuffix(QStringLiteral(" сек"));
+    ol->addRow(QStringLiteral("Напоминание при кружении:"), m_spinHomeDecisionReminder);
+
+    auto* lblOrb = new QLabel(QStringLiteral(
+        "«Ожидание» — самолёт кружит над домом, оператор решает вручную.\n"
+        "«Авто-RTL при хорошем GPS» — RTL только при достаточном кол-ве спутников."));
+    lblOrb->setWordWrap(true);
+    lblOrb->setStyleSheet(QStringLiteral("color: %1; font-size: 11px;").arg(theme::TEXT_SECONDARY));
+    ol->addRow(lblOrb);
+
+    layout->addWidget(orbGroup);
+
     layout->addStretch();
-    return page;
+
+    auto* scroll = new QScrollArea;
+    scroll->setWidget(content);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    return scroll;
 }
 
 void SettingsDialog::onSettlementModeChanged()
@@ -903,6 +971,13 @@ AppConfig SettingsDialog::getConfig() const
         m_comboActionLimit->currentData().toString().toStdString();
     cfg.system.action_on_critical =
         m_comboActionCritical->currentData().toString().toStdString();
+
+    cfg.system.batt50_max_notifications   = m_spinBatt50MaxNotif->value();
+    cfg.system.batt50_timeout_sec         = m_spinBatt50Timeout->value();
+    cfg.system.no_home_max_warnings       = m_spinNoHomeMaxWarnings->value();
+    cfg.system.home_orbit_action          =
+        m_comboHomeOrbitAction->currentData().toString().toStdString();
+    cfg.system.home_decision_reminder_sec = m_spinHomeDecisionReminder->value();
 
     return cfg;
 }
