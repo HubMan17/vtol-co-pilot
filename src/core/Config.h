@@ -8,6 +8,7 @@
 namespace vtol {
 
 struct MavlinkConfig {
+    std::string protocol = "tcp";   // "tcp" for SITL, "udp" for real hardware
     std::string sitl_host = "127.0.0.1";
     int sitl_port = 5762;
     int proxy_port = 14550;

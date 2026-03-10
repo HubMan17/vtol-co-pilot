@@ -109,6 +109,11 @@ void BatteryMonitor::update(double voltage, double current)
     while (static_cast<int>(m_voltageBuffer.size()) > m_cfg.rolling_avg_samples)
         m_voltageBuffer.pop_front();
 
+    // Voltage thresholds only active when autopilot is engaged.
+    // During VTOL takeoff/landing copter motors cause deep voltage sags
+    // that recover quickly — don't trigger false warnings.
+    if (!m_autopilotEngaged) return;
+
     const double avg = rollingAverage();
 
     // --- Voltage thresholds ---

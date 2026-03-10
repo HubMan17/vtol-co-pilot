@@ -38,13 +38,20 @@ MavlinkConnection::~MavlinkConnection()
 
 bool MavlinkConnection::connectToSitl()
 {
-    SPDLOG_INFO("Connecting to SITL at {}:{}...", m_config.sitl_host, m_config.sitl_port);
+    SPDLOG_INFO("Connecting (protocol={}) to {}:{}...",
+        m_config.protocol, m_config.sitl_host, m_config.sitl_port);
 
     mavsdk::Mavsdk::Configuration mavsdk_config{
         mavsdk::Mavsdk::Configuration{mavsdk::ComponentType::GroundStation}};
     m_mavsdk = std::make_unique<mavsdk::Mavsdk>(mavsdk_config);
 
-    auto connStr = std::format("tcp://{}:{}", m_config.sitl_host, m_config.sitl_port);
+    std::string connStr;
+    if (m_config.protocol == "udp") {
+        connStr = std::format("udpin://0.0.0.0:{}", m_config.sitl_port);
+    } else {
+        connStr = std::format("tcpout://{}:{}", m_config.sitl_host, m_config.sitl_port);
+    }
+    SPDLOG_INFO("Connection string: {}", connStr);
     auto result = m_mavsdk->add_any_connection(connStr);
     if (result != mavsdk::ConnectionResult::Success) {
         SPDLOG_ERROR("Connection failed: {}", static_cast<int>(result));

@@ -39,10 +39,11 @@
     "track_length": 9999
   },
   "mavlink": {
+    "protocol": "udp",
     "component_id": 0,
     "proxy_port": 14550,
-    "sitl_host": "127.0.0.1",
-    "sitl_port": 5762,
+    "sitl_host": "192.168.1.105",
+    "sitl_port": 1024,
     "system_id": 255
   },
   "navigation": {

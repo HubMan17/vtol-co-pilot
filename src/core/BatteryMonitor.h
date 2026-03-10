@@ -18,7 +18,10 @@ public:
     void update(double voltage, double current);
     void reset();
 
-    void setAutopilotEngaged(bool engaged) { m_autopilotEngaged = engaged; }
+    void setAutopilotEngaged(bool engaged) {
+        if (m_autopilotEngaged && !engaged) reset();  // clear thresholds & buffer on disengage
+        m_autopilotEngaged = engaged;
+    }
 
 signals:
     // Battery threshold notifications (25%, 50%, 75%)

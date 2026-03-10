@@ -47,6 +47,7 @@ AppConfig loadConfig(const std::string& path)
     // --- mavlink ---
     if (data.contains("mavlink")) {
         auto& m = data["mavlink"];
+        if (m.contains("protocol"))     m["protocol"].get_to(cfg.mavlink.protocol);
         if (m.contains("sitl_host"))    m["sitl_host"].get_to(cfg.mavlink.sitl_host);
         if (m.contains("sitl_port"))    m["sitl_port"].get_to(cfg.mavlink.sitl_port);
         if (m.contains("proxy_port"))   m["proxy_port"].get_to(cfg.mavlink.proxy_port);
@@ -173,6 +174,7 @@ void saveConfig(const AppConfig& cfg, const std::string& path)
     nlohmann::json data;
 
     data["mavlink"] = {
+        {"protocol",     cfg.mavlink.protocol},
         {"sitl_host",    cfg.mavlink.sitl_host},
         {"sitl_port",    cfg.mavlink.sitl_port},
         {"proxy_port",   cfg.mavlink.proxy_port},
