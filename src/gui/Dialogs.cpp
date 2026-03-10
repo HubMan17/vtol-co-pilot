@@ -393,6 +393,7 @@ void SettingsDialog::setupUi(Page initialPage)
     m_sidebar->addItem(QStringLiteral("Точка дома"));
     m_sidebar->addItem(QStringLiteral("Уведомления"));
     m_sidebar->addItem(QStringLiteral("Система"));
+    m_sidebar->addItem(QStringLiteral("Mesh модем"));
 
     m_stack = new QStackedWidget;
     m_stack->setStyleSheet(QStringLiteral(
@@ -403,6 +404,7 @@ void SettingsDialog::setupUi(Page initialPage)
     m_stack->addWidget(createHomePage());
     m_stack->addWidget(createNotificationsPage());
     m_stack->addWidget(createSystemPage());
+    m_stack->addWidget(createMeshPage());
 
     connect(m_sidebar, &QListWidget::currentRowChanged,
             m_stack, &QStackedWidget::setCurrentIndex);
@@ -931,6 +933,72 @@ QWidget* SettingsDialog::createSystemPage()
     return scroll;
 }
 
+QWidget* SettingsDialog::createMeshPage()
+{
+    auto* page = new QWidget;
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(20, 20, 20, 20);
+    layout->setSpacing(12);
+
+    // ── Enable ──
+    m_chkMeshEnabled = new QCheckBox(QStringLiteral("Включён"));
+    m_chkMeshEnabled->setChecked(m_config.mesh.enabled);
+    layout->addWidget(m_chkMeshEnabled);
+
+    // ── IP addresses ──
+    auto* ipGroup = new QGroupBox(QStringLiteral("Адреса модемов"));
+    auto* ipForm = new QFormLayout(ipGroup);
+    ipForm->setSpacing(8);
+
+    m_editGroundModemIp = new QLineEdit(QString::fromStdString(m_config.mesh.ground_modem_ip));
+    ipForm->addRow(QStringLiteral("Земля (IP):"), m_editGroundModemIp);
+
+    m_editAirModemIp = new QLineEdit(QString::fromStdString(m_config.mesh.air_modem_ip));
+    ipForm->addRow(QStringLiteral("Воздух (IP):"), m_editAirModemIp);
+
+    layout->addWidget(ipGroup);
+
+    // ── Parameters ──
+    auto* paramGroup = new QGroupBox(QStringLiteral("Параметры"));
+    auto* paramForm = new QFormLayout(paramGroup);
+    paramForm->setSpacing(8);
+
+    m_spinMeshPollInterval = new QSpinBox;
+    m_spinMeshPollInterval->setRange(100, 5000);
+    m_spinMeshPollInterval->setSingleStep(100);
+    m_spinMeshPollInterval->setValue(m_config.mesh.poll_interval_ms);
+    m_spinMeshPollInterval->setSuffix(QStringLiteral(" мс"));
+    paramForm->addRow(QStringLiteral("Интервал опроса:"), m_spinMeshPollInterval);
+
+    m_spinMeshWindowSize = new QSpinBox;
+    m_spinMeshWindowSize->setRange(1, 50);
+    m_spinMeshWindowSize->setValue(m_config.mesh.sliding_window_size);
+    paramForm->addRow(QStringLiteral("Размер окна:"), m_spinMeshWindowSize);
+
+    m_spinMeshDisplayDuration = new QSpinBox;
+    m_spinMeshDisplayDuration->setRange(1, 10);
+    m_spinMeshDisplayDuration->setValue(m_config.mesh.display_duration_sec);
+    m_spinMeshDisplayDuration->setSuffix(QStringLiteral(" сек"));
+    paramForm->addRow(QStringLiteral("Длительность кружка:"), m_spinMeshDisplayDuration);
+
+    m_spinMeshMinDistance = new QSpinBox;
+    m_spinMeshMinDistance->setRange(50, 500);
+    m_spinMeshMinDistance->setSingleStep(10);
+    m_spinMeshMinDistance->setValue(static_cast<int>(m_config.mesh.min_reliable_distance));
+    m_spinMeshMinDistance->setSuffix(QStringLiteral(" м"));
+    paramForm->addRow(QStringLiteral("Мин. дистанция:"), m_spinMeshMinDistance);
+
+    auto* lblMinDist = new QLabel(QStringLiteral(
+        "Ниже этой дистанции bearing ненадёжен — кружочки не рисуются."));
+    lblMinDist->setWordWrap(true);
+    lblMinDist->setStyleSheet(QStringLiteral("color: %1; font-size: 11px;").arg(theme::TEXT_SECONDARY));
+    paramForm->addRow(lblMinDist);
+
+    layout->addWidget(paramGroup);
+    layout->addStretch();
+    return page;
+}
+
 void SettingsDialog::onSettlementModeChanged()
 {
     bool isAlt = m_comboSettlementMode->currentData().toString() == "below_altitude";
@@ -978,6 +1046,14 @@ AppConfig SettingsDialog::getConfig() const
     cfg.system.home_orbit_action          =
         m_comboHomeOrbitAction->currentData().toString().toStdString();
     cfg.system.home_decision_reminder_sec = m_spinHomeDecisionReminder->value();
+
+    cfg.mesh.enabled              = m_chkMeshEnabled->isChecked();
+    cfg.mesh.ground_modem_ip      = m_editGroundModemIp->text().trimmed().toStdString();
+    cfg.mesh.air_modem_ip         = m_editAirModemIp->text().trimmed().toStdString();
+    cfg.mesh.poll_interval_ms     = m_spinMeshPollInterval->value();
+    cfg.mesh.sliding_window_size  = m_spinMeshWindowSize->value();
+    cfg.mesh.display_duration_sec = m_spinMeshDisplayDuration->value();
+    cfg.mesh.min_reliable_distance = m_spinMeshMinDistance->value();
 
     return cfg;
 }

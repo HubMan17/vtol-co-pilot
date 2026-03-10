@@ -58,6 +58,19 @@ MainWindow::MainWindow(AppConfig config, QWidget* parent)
     m_batteryMonitor.configure(m_config.system);
     setupBatteryMonitor();
 
+    // ── Mesh navigator ──
+    m_meshNavigator.configure(m_config.mesh);
+    connect(&m_meshNavigator, &MeshNavigator::correctedPosition, this, [this](double lat, double lon, double dist) {
+        int durationMs = m_config.mesh.display_duration_sec * 1000;
+        m_mapWidget->backend()->addMeshPoint(lat, lon, durationMs);
+        SPDLOG_DEBUG("[Mesh] corrected pos: {:.6f}, {:.6f}, dist={:.1f}m", lat, lon, dist);
+    });
+    connect(&m_meshNavigator, &MeshNavigator::meshError, this, [](const QString& msg) {
+        SPDLOG_WARN("[Mesh] error: {}", msg.toStdString());
+    });
+    if (m_config.mesh.enabled)
+        m_meshNavigator.start();
+
     // Deferred zone loading — let the event loop process UI first
     QTimer::singleShot(0, this, &MainWindow::loadZones);
 
@@ -512,6 +525,7 @@ void MainWindow::setHomePosition(double lat, double lon)
     m_homePosition = LatLon{lat, lon};
     m_homeSource = HomeSource::Manual;
     m_autopilot.setHomePosition(m_homePosition);
+    m_meshNavigator.setHomePosition(lat, lon);
     m_mapWidget->backend()->setHome(lat, lon);
     m_setHomeMode = false;
     m_rightPanel->setHomePlacementMode(false);
@@ -534,6 +548,7 @@ void MainWindow::setHomeFromDrone(double lat, double lon)
     m_homeSource = HomeSource::Drone;
     m_lastDroneHome = LatLon{lat, lon};
     m_autopilot.setHomePosition(m_homePosition);
+    m_meshNavigator.setHomePosition(lat, lon);
     m_mapWidget->backend()->setHome(lat, lon);
     SPDLOG_INFO("[Home] Set from drone: {:.6f}, {:.6f}", lat, lon);
 }
@@ -1366,6 +1381,12 @@ void MainWindow::onSettings()
     // Apply system / battery monitor settings
     m_batteryMonitor.configure(m_config.system);
 
+    // Apply mesh navigator settings
+    m_meshNavigator.stop();
+    m_meshNavigator.configure(m_config.mesh);
+    if (m_config.mesh.enabled)
+        m_meshNavigator.start();
+
     statusBar()->showMessage(QStringLiteral("Настройки сохранены"));
 }
 
@@ -1968,6 +1989,7 @@ void MainWindow::updateDisplay()
     if (pos.lat != 0.0 || pos.lon != 0.0) {
         { PerfScope s(m_perf, "update_aircraft");
             m_mapWidget->backend()->updateAircraft(pos.lat, pos.lon, tel->heading());
+            m_meshNavigator.setAircraftPosition(pos.lat, pos.lon);
             m_sbAcVal->setText(QStringLiteral("%1 , %2")
                                 .arg(pos.lat, 0, 'f', 6).arg(pos.lon, 0, 'f', 6));
         }

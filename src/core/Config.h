@@ -84,6 +84,16 @@ struct SystemConfig {
     int home_decision_reminder_sec  = 30;      // Reminder interval while orbiting (sec)
 };
 
+struct MeshConfig {
+    bool enabled = false;
+    std::string ground_modem_ip = "192.168.1.100";
+    std::string air_modem_ip = "192.168.1.101";
+    int poll_interval_ms = 500;
+    int sliding_window_size = 10;
+    int display_duration_sec = 4;
+    double min_reliable_distance = 200.0;  // ниже — bearing ненадёжен
+};
+
 struct NavigationConfig {
     double waypoint_radius = 150.0;
 };
@@ -107,6 +117,7 @@ struct AppConfig {
     HomeConfig home;
     NotificationConfig notifications;
     SystemConfig system;
+    MeshConfig mesh;
 };
 
 // Load config from JSON file. Returns default config if file doesn't exist.

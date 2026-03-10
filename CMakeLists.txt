@@ -51,6 +51,7 @@ set(SOURCES
     src/navigation/RoutePlanner.cpp
     src/navigation/ZoneManager.cpp
     src/navigation/ZoneChecker.cpp
+    src/navigation/MeshNavigator.cpp
     src/navigation/PathPlanner.cpp
     src/autopilot/AutopilotManager.cpp
     src/gui/Theme.cpp

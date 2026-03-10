@@ -18,6 +18,7 @@
 #include "mavlink/MavlinkConnection.h"
 #include "mavlink/MavlinkProxy.h"
 #include "navigation/RoutePlanner.h"
+#include "navigation/MeshNavigator.h"
 #include "navigation/ZoneManager.h"
 #include "navigation/ZoneChecker.h"
 #include "navigation/PathPlanner.h"
@@ -156,6 +157,7 @@ private:
     PathPlanner m_pathPlanner;
     AutopilotManager m_autopilot;
     BatteryMonitor   m_batteryMonitor;
+    MeshNavigator    m_meshNavigator;
 
     // ── GUI components ──
     MapWidget*   m_mapWidget   = nullptr;

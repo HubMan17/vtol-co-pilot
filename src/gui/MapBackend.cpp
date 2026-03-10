@@ -1,6 +1,7 @@
 #include "MapBackend.h"
 #include <QJsonDocument>
 #include <QJsonArray>
+#include <QDateTime>
 #include <QElapsedTimer>
 #include <cmath>
 #include <algorithm>
@@ -99,6 +100,39 @@ void MapBackend::setReturningHome(bool v)
         SPDLOG_INFO("[MapBackend] returningHome = {}", v);
         emit returningHomeChanged();
     }
+}
+
+// ═══════════════════════ Mesh Points ═══════════════════════
+
+void MapBackend::addMeshPoint(double lat, double lon, int durationMs)
+{
+    qint64 now = QDateTime::currentMSecsSinceEpoch();
+    m_meshPoints.append({lat, lon, now + durationMs});
+    emit meshPointsChanged();
+
+    if (!m_meshCleanupTimer) {
+        m_meshCleanupTimer = new QTimer(this);
+        m_meshCleanupTimer->setInterval(500);
+        connect(m_meshCleanupTimer, &QTimer::timeout, this, &MapBackend::cleanupMeshPoints);
+    }
+    if (!m_meshCleanupTimer->isActive())
+        m_meshCleanupTimer->start();
+}
+
+void MapBackend::cleanupMeshPoints()
+{
+    qint64 now = QDateTime::currentMSecsSinceEpoch();
+    int before = m_meshPoints.size();
+    m_meshPoints.erase(
+        std::remove_if(m_meshPoints.begin(), m_meshPoints.end(),
+                        [now](const MeshPoint& p) { return now >= p.expireMs; }),
+        m_meshPoints.end());
+
+    if (m_meshPoints.size() != before)
+        emit meshPointsChanged();
+
+    if (m_meshPoints.isEmpty())
+        m_meshCleanupTimer->stop();
 }
 
 // ═══════════════════════ Operational Waypoint ═══════════════════════

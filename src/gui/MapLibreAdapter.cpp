@@ -47,6 +47,7 @@ MapLibreAdapter::MapLibreAdapter(QMapLibre::Map* map, MapBackend* backend, QObje
     updateOperationalWpSource();
     updateAvoidanceSource();
     updateDirectPathSource();
+    updateMeshSource();
     updateDrawingSource();
     updateEditingSources();
 
@@ -169,6 +170,7 @@ void MapLibreAdapter::addAllSources()
     addGeoJsonSource("edit-midpoints");
     addGeoJsonSource("nav-line");
     addGeoJsonSource("operational-wp");
+    addGeoJsonSource("mesh-points");
     addGeoJsonSource("stl-polys");
     addGeoJsonSource("stl-circles");
 }
@@ -332,6 +334,10 @@ void MapLibreAdapter::addAllLayers()
     // --- Editing ---
     addCircle("edit-vertex", "edit-vertices", "#00AAFF", 6.0, "#FFFFFF", 2.0);
     addCircle("edit-midpoint", "edit-midpoints", "#00AAFF", 4.0, "#FFFFFF", 1.0);
+
+    // --- Mesh corrected positions (orange circles) ---
+    addCircle("mesh-circle", "mesh-points", "#FF8C00", 8.0, "#FF6600", 2.0);
+    m_map->setPaintProperty("mesh-circle", "circle-opacity", 0.7);
 
     // --- Home ---
     addSymbol("home-icon", "home");
@@ -565,6 +571,9 @@ void MapLibreAdapter::connectSignals()
     // Avoidance / direct path
     connect(m_backend, &MapBackend::avoidancePathChanged, this, &MapLibreAdapter::updateAvoidanceSource);
     connect(m_backend, &MapBackend::plannedDirectPathChanged, this, &MapLibreAdapter::updateDirectPathSource);
+
+    // Mesh
+    connect(m_backend, &MapBackend::meshPointsChanged, this, &MapLibreAdapter::updateMeshSource);
 
     // Drawing
     connect(m_backend, &MapBackend::drawingPathChanged, this, &MapLibreAdapter::updateDrawingSource);
@@ -1126,6 +1135,28 @@ void MapLibreAdapter::onShowZonesChanged()
 void MapLibreAdapter::onShowSettlementsChanged()
 {
     setLayerVisibility("stl-", m_backend->showSettlements());
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Mesh corrected positions
+// ═══════════════════════════════════════════════════════════
+
+void MapLibreAdapter::updateMeshSource()
+{
+    const auto& pts = m_backend->meshPoints();
+    if (pts.isEmpty()) {
+        setSourceGeoJson("mesh-points", emptyFeatureCollection());
+        return;
+    }
+
+    QJsonArray features;
+    for (const auto& p : pts)
+        features.append(makePointFeature(p.lat, p.lon));
+
+    QJsonObject fc;
+    fc["type"] = "FeatureCollection";
+    fc["features"] = features;
+    setSourceGeoJson("mesh-points", fc);
 }
 
 } // namespace vtol

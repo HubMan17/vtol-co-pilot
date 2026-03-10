@@ -158,6 +158,18 @@ AppConfig loadConfig(const std::string& path)
             cfg.system.v_critical, cfg.system.hysteresis_margin);
     }
 
+    // --- mesh ---
+    if (data.contains("mesh")) {
+        auto& m = data["mesh"];
+        if (m.contains("enabled"))              m["enabled"].get_to(cfg.mesh.enabled);
+        if (m.contains("ground_modem_ip"))      m["ground_modem_ip"].get_to(cfg.mesh.ground_modem_ip);
+        if (m.contains("air_modem_ip"))          m["air_modem_ip"].get_to(cfg.mesh.air_modem_ip);
+        if (m.contains("poll_interval_ms"))      m["poll_interval_ms"].get_to(cfg.mesh.poll_interval_ms);
+        if (m.contains("sliding_window_size"))   m["sliding_window_size"].get_to(cfg.mesh.sliding_window_size);
+        if (m.contains("display_duration_sec"))  m["display_duration_sec"].get_to(cfg.mesh.display_duration_sec);
+        if (m.contains("min_reliable_distance")) m["min_reliable_distance"].get_to(cfg.mesh.min_reliable_distance);
+    }
+
     SPDLOG_DEBUG("Config loaded: SITL={}:{}, proxy_port={}, track_length={}",
         cfg.mavlink.sitl_host, cfg.mavlink.sitl_port, cfg.mavlink.proxy_port, cfg.gui.track_length);
 
@@ -250,6 +262,16 @@ void saveConfig(const AppConfig& cfg, const std::string& path)
         {"no_home_max_warnings",       cfg.system.no_home_max_warnings},
         {"home_orbit_action",          cfg.system.home_orbit_action},
         {"home_decision_reminder_sec", cfg.system.home_decision_reminder_sec}
+    };
+
+    data["mesh"] = {
+        {"enabled",              cfg.mesh.enabled},
+        {"ground_modem_ip",      cfg.mesh.ground_modem_ip},
+        {"air_modem_ip",         cfg.mesh.air_modem_ip},
+        {"poll_interval_ms",     cfg.mesh.poll_interval_ms},
+        {"sliding_window_size",  cfg.mesh.sliding_window_size},
+        {"display_duration_sec", cfg.mesh.display_duration_sec},
+        {"min_reliable_distance", cfg.mesh.min_reliable_distance}
     };
 
     std::ofstream file(path);

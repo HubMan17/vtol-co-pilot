@@ -34,6 +34,7 @@ private slots:
     void updateSettlementSources();
     void updateConflictSources();
     void updateEditingSources();
+    void updateMeshSource();
 
     // --- Viewport culling ---
     void onViewportChanged(double south, double west, double north, double east);

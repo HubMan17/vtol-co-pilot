@@ -78,6 +78,8 @@ class MapBackend : public QObject {
     Q_PROPERTY(QObject* editingMidpointModel READ editingMidpointModel CONSTANT)
     Q_PROPERTY(QObject* obstacleWarningModel READ obstacleWarningModel CONSTANT)
 
+    struct MeshPoint { double lat, lon; qint64 expireMs; };
+
     /// Lightweight info for hover tooltip and hit-test
     struct WpInfo {
         double lat = 0, lon = 0, altitude = 0;
@@ -173,6 +175,10 @@ public:
     void setPlannedDirectPath(const QVariantList& points);
     void setConflictPoints(const QVariantList& points);
 
+    // Mesh corrected positions
+    void addMeshPoint(double lat, double lon, int durationMs);
+    const QVector<MeshPoint>& meshPoints() const { return m_meshPoints; }
+
     // Operational waypoint
     void setOperationalWp(double lat, double lon, const QString& mode);
     void clearOperationalWp();
@@ -243,6 +249,7 @@ signals:
     void drawingPathChanged();
     void leftClickModeChanged();
     void operationalWpChanged();
+    void meshPointsChanged();
     void avoidancePathChanged();
     void plannedDirectPathChanged();
     void zonesChanged();
@@ -363,6 +370,11 @@ private:
     SimpleVertexModel m_editingVertexModel{this};
     SimpleVertexModel m_editingMidpointModel{this};
     ObstacleWarningModel m_obstacleWarningModel{this};
+
+    // Mesh points
+    QVector<MeshPoint> m_meshPoints;
+    QTimer* m_meshCleanupTimer = nullptr;
+    void cleanupMeshPoints();
 
     // Zone details for obstacle warning tooltip generation
     QVariantList m_zoneDetails;  // raw zone maps with altitude/mode/buffer

@@ -106,7 +106,7 @@ private:
 class SettingsDialog : public QDialog {
     Q_OBJECT
 public:
-    enum Page { PageMap = 0, PageZones = 1, PageData = 2, PageHome = 3, PageNotifications = 4, PageSystem = 5 };
+    enum Page { PageMap = 0, PageZones = 1, PageData = 2, PageHome = 3, PageNotifications = 4, PageSystem = 5, PageMesh = 6 };
 
     explicit SettingsDialog(const AppConfig& config,
                             Page initialPage = PageMap,
@@ -127,6 +127,7 @@ private:
     QWidget* createHomePage();
     QWidget* createNotificationsPage();
     QWidget* createSystemPage();
+    QWidget* createMeshPage();
     void onSettlementModeChanged();
 
     AppConfig m_config;
@@ -175,6 +176,15 @@ private:
     // Home orbit behavior
     QComboBox*      m_comboHomeOrbitAction    = nullptr;
     QSpinBox*       m_spinHomeDecisionReminder = nullptr;
+
+    // Mesh page
+    QCheckBox*      m_chkMeshEnabled          = nullptr;
+    QLineEdit*      m_editGroundModemIp       = nullptr;
+    QLineEdit*      m_editAirModemIp          = nullptr;
+    QSpinBox*       m_spinMeshPollInterval    = nullptr;
+    QSpinBox*       m_spinMeshWindowSize      = nullptr;
+    QSpinBox*       m_spinMeshDisplayDuration = nullptr;
+    QSpinBox*       m_spinMeshMinDistance     = nullptr;
 };
 
 } // namespace vtol
